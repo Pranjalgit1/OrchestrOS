@@ -55,6 +55,7 @@ test(
         const createJobResponse = await postJson(baseUrl, "/jobs", {
           name: `${prefix}-cancel-job`,
           workloadType: WorkloadType.SORTING,
+          workloadSize: 25_000,
           cpuRequiredMillicores: 500,
           memoryRequiredMiB: 256,
           estimatedDurationSeconds: 5,

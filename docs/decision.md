@@ -336,3 +336,125 @@ Affected Components:
 - `backend/prisma/schema.prisma`
 - `backend/prisma/migrations/20260921151000_enforce_allocation_integrity/migration.sql`
 - `backend/src/modules/jobs/job.integration.test.ts`
+## Decision: Version deterministic workload generation and persist reusable batches
+
+Date:
+2026-09-21
+
+Status:
+Accepted
+
+Context:
+Fair scheduling and autoscaling experiments require the same controlled workload to be recreated, while generator algorithms and profiles may evolve over time.
+
+Decision:
+Implement pure generator version `v1` with a local Mulberry32 PRNG. Persist seed, canonical pattern, count, normalized parameters, start time, and version in `WorkloadBatch`. Persist ordered job specifications with batch sequence and arrival offset. Reuse clones stored specifications into a new batch instead of rerunning the generator. Batch and jobs are inserted in one database transaction.
+
+Alternatives Considered:
+- Use `Math.random()` without a seed
+- Add a random-number package
+- Regenerate old workloads using whichever generator version is current
+- Reset and reuse completed job rows
+
+Reasoning:
+A small local PRNG is reproducible and adds no dependency. Versioning prevents silent behavior changes. Cloning immutable specifications preserves exact experiment inputs while giving each run independent job lifecycle records.
+
+Consequences:
+Database IDs and default start timestamps differ across batches, but ordered workload fields and offsets are reproducible. Any future algorithm/profile change must use a new generator version. Reuse adds source-batch lineage and requires source batches to be retained.
+
+Affected Components:
+- `backend/src/modules/workloads/`
+- `backend/prisma/schema.prisma`
+- `backend/prisma/migrations/20260921153000_workload_batches/migration.sql`
+
+## Decision: Use conservative documented workload-pattern profiles
+
+Date:
+2026-09-21
+
+Status:
+Accepted
+
+Context:
+The project requires Light, Medium, Heavy, Constant, Burst, Increasing, Decreasing, Periodic, and Custom inputs but did not define exact distributions. Generated workloads must remain safe on local logical workers and explainable in experiments.
+
+Decision:
+Use fixed v1 resource pools and documented arrival rules. Light uses 100–500 millicores, 64–512 MiB, and 1–10 second estimates. Medium uses 500–2000 millicores, 256–2048 MiB, and 10–45 seconds. Heavy uses 2000–4000 millicores, 2048–4096 MiB, and 30–90 seconds. Constant uses 10-second gaps; Burst uses five-job groups 30 seconds apart; Increasing/Decreasing vary both resource profile and gap direction; Periodic uses `[2,2,2,20]` gaps. `SUDDEN_BURST` aliases canonical `BURST`. Custom accepts only controlled types, bounded integer ranges, and exact nondecreasing offsets.
+
+Alternatives Considered:
+- Random values across the entire API maximum range
+- User-defined formulas or scripts
+- Arbitrary commands/images as custom workloads
+
+Reasoning:
+Conservative pools fit existing medium/large logical workers, produce variation, and are simple to explain. Strict custom ranges preserve safety and reproducibility.
+
+Consequences:
+These profiles are an experimental contract rather than measured host capacity. Future tuning must be versioned and documented. Planned arrival is stored as metadata until scheduling exists.
+
+Affected Components:
+- `backend/src/modules/workloads/workload.generator.ts`
+- `backend/src/modules/workloads/workload.schemas.ts`
+- `docs/architecture.md`
+- `Readme.md`
+
+## Decision: Sample each generated job independently and derive workload size
+
+Date:
+2026-09-21
+
+Status:
+Accepted
+
+Context:
+The first generator draft spent randomness only on per-batch pool rotations, so specifications repeated every few jobs and unrelated seeds could produce identical batches for patterns with fixed arrival offsets. Workload size was also drawn independently of estimated duration, so the recorded estimate did not describe the recorded work.
+
+Decision:
+Sample workload type, CPU, memory, estimated duration, and priority per job from the pattern's pools. Derive `workloadSize` for predefined patterns from the sampled duration and CPU using documented per-type factors, with `SLEEP` size equal to its duration. Keep caller-supplied size ranges for custom batches. Pin `v1` output with golden-vector tests and a PRNG reference vector.
+
+Alternatives Considered:
+- Keep cyclic pool rotation and accept repetition and seed collisions
+- Derive estimated duration from an independently sampled size instead
+- Leave size and duration unrelated and document the caveat
+
+Reasoning:
+Per-job sampling satisfies the requirement that generated jobs vary across all attributes and makes distinct seeds produce distinct workloads for every pattern. Deriving size from duration preserves the documented duration bands while making the two fields coherent for later scheduling and execution. Golden vectors turn the version contract into an enforced check.
+
+Consequences:
+Batches of 10 may omit one workload type, while batches of 25 or more cover all five. Changing pools, factors, or draw order now fails the golden-vector tests and requires a new generator version. `workloadSize` cannot be requested directly for predefined patterns.
+
+Affected Components:
+- `backend/src/modules/workloads/workload.generator.ts`
+- `backend/src/modules/workloads/workload.test.ts`
+- `docs/architecture.md`
+- `Readme.md`
+
+## Decision: Keep manual job workload size optional and align SQL bounds
+
+Date:
+2026-09-21
+
+Status:
+Accepted
+
+Context:
+Adding `workloadSize` initially made it required on `POST /api/jobs`, which would reject existing manual clients. The first workload migration also added only upper-bound resource checks, and the job listing order gained a batch-sequence tiebreak that the new index did not cover.
+
+Decision:
+Default `workloadSize` to `1` on manual job creation, matching the column default. Add a follow-up migration that recreates the queue index including `batchSequence`, adds SQL lower bounds for CPU and memory, and backfills pre-existing jobs' `arrivalAt` from their `createdAt`.
+
+Alternatives Considered:
+- Keep the required field and accept a breaking API change
+- Rely on application validation alone for lower bounds
+- Edit the already-applied migration instead of adding a new one
+
+Reasoning:
+An optional field with the column default keeps the endpoint backward compatible. Matching SQL bounds protects direct database writes. Editing an applied migration would break Prisma checksums, so a forward migration is the safe path.
+
+Consequences:
+Manual jobs omitting a size record `1`. Existing out-of-range rows would block the new constraints, and legacy arrival timestamps now reflect original creation time.
+
+Affected Components:
+- `backend/src/modules/jobs/job.schemas.ts`
+- `backend/prisma/migrations/20260921160000_workload_arrival_index_bounds/migration.sql`
+- `backend/prisma/schema.prisma`

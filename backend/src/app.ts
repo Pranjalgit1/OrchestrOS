@@ -6,6 +6,7 @@ import { env } from "./config/env.js";
 import { AppError } from "./errors/app-error.js";
 import { healthRouter } from "./modules/health/health.routes.js";
 import { jobRouter } from "./modules/jobs/job.routes.js";
+import { workloadRouter } from "./modules/workloads/workload.routes.js";
 import { workerRouter } from "./modules/workers/worker.routes.js";
 
 export const app = express();
@@ -21,12 +22,13 @@ app.use(express.json({ limit: "16kb" }));
 app.get("/api", (_request, response) => {
   response.json({
     name: "OrchestrOS API",
-    phase: 1,
-    status: "data-layer-ready",
+    phase: 2,
+    status: "workload-generation-ready",
   });
 });
 app.use("/api/health", healthRouter);
 app.use("/api/jobs", jobRouter);
+app.use("/api/workloads", workloadRouter);
 app.use("/api/workers", workerRouter);
 
 app.use((_request, response) => {

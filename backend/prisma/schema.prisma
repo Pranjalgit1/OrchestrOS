@@ -15,6 +15,18 @@ enum WorkloadType {
   SLEEP
 }
 
+enum WorkloadPattern {
+  LIGHT
+  MEDIUM
+  HEAVY
+  CONSTANT
+  BURST
+  INCREASING
+  DECREASING
+  PERIODIC
+  CUSTOM
+}
+
 enum JobStatus {
   CREATED
   QUEUED
@@ -51,15 +63,39 @@ enum ExecutionStatus {
   CANCELLED
 }
 
+model WorkloadBatch {
+  id               String            @id @default(uuid()) @db.Uuid
+  seed             Int
+  jobCount         Int
+  pattern          WorkloadPattern
+  generatorVersion String            @db.VarChar(16)
+  parameters       Json
+  startsAt         DateTime
+  sourceBatchId    String?           @db.Uuid
+  createdAt        DateTime          @default(now())
+  sourceBatch      WorkloadBatch?    @relation("BatchReuse", fields: [sourceBatchId], references: [id], onDelete: Restrict)
+  reusedBatches    WorkloadBatch[]   @relation("BatchReuse")
+  jobs             Job[]
+
+  @@index([sourceBatchId])
+  @@index([createdAt])
+  @@map("workload_batches")
+}
+
 model Job {
   id                       String             @id @default(uuid()) @db.Uuid
   name                     String             @db.VarChar(100)
   workloadType             WorkloadType
+  workloadSize             Int                @default(1)
   status                   JobStatus          @default(QUEUED)
   cpuRequiredMillicores    Int
   memoryRequiredMiB        Int
   estimatedDurationSeconds Int
   priority                 Int                @default(5)
+  workloadBatchId          String?            @db.Uuid
+  batchSequence            Int?
+  arrivalOffsetSeconds     Int                @default(0)
+  arrivalAt                DateTime           @default(now())
   createdAt                DateTime           @default(now())
   updatedAt                DateTime           @updatedAt
   startedAt                DateTime?
@@ -69,11 +105,14 @@ model Job {
   containerId              String?            @unique @db.VarChar(128)
   result                   Json?
   failureReason            String?
+  workloadBatch            WorkloadBatch?     @relation(fields: [workloadBatchId], references: [id], onDelete: Restrict)
   assignedWorker           Worker?            @relation("AssignedJobs", fields: [assignedWorkerId], references: [id], onDelete: SetNull)
   allocations              ResourceAllocation[]
   executions               JobExecution[]
 
-  @@index([status, createdAt, id])
+  @@unique([workloadBatchId, batchSequence])
+  @@index([status, arrivalAt, createdAt, batchSequence, id])
+  @@index([workloadBatchId])
   @@index([assignedWorkerId])
   @@map("jobs")
 }

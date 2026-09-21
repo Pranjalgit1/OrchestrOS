@@ -20,6 +20,7 @@ export async function getHealthStatus(): Promise<HealthStatus> {
       prisma.worker.count(),
       prisma.resourceAllocation.count(),
       prisma.jobExecution.count(),
+      prisma.workloadBatch.count(),
     ]);
     database = "up";
   } catch {

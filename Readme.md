@@ -2,131 +2,141 @@
 
 **Intelligent Container Orchestration with Resource-Aware Scheduling & Autoscaling**
 
-OrchestrOS is a Kubernetes-inspired local container orchestration prototype that will schedule controlled computational workloads, perform resource-aware placement across logical workers, execute workloads with Docker, protect allocation with PostgreSQL transactions and row locks, monitor system state, recover interrupted jobs, and use ML-assisted demand forecasting for proactive autoscaling.
+OrchestrOS is a Kubernetes-inspired local container orchestration prototype for controlled computational workloads. It runs on one physical development machine with logical workers, PostgreSQL-backed state, and a modular TypeScript backend.
 
-> **Current implementation:** Phase 1 — Database and Job Management. PostgreSQL migrations, job/worker persistence, controlled lifecycle rules, queued-job cancellation, initial logical workers, REST APIs, schema-aware health, and focused tests work. Workload generation, scheduling, placement, resource reservation, workload containers, monitoring, autoscaling, recovery, experiments, and ML are not implemented yet.
+> **Current implementation:** deterministic workload batches, persistent jobs/workers, controlled lifecycle management, exact batch reuse, database migrations, health checks, and tests work. Scheduling, placement, transactional reservation, workload containers, monitoring, autoscaling, recovery, experiments, and ML do not run yet.
 
 ## System boundary
 
-The MVP runs on **one physical development machine**. Logical workers are database records representing orchestration CPU and memory capacity; they are not separate computers, VMs, cloud nodes, or Docker hosts.
+Logical workers are resource-capacity records on one machine—not physical nodes, VMs, cloud hosts, or separate computers. OrchestrOS is not Kubernetes, a cloud platform, an ML-only project, or a basic scheduling simulator.
 
-OrchestrOS is not Kubernetes, a cloud platform, an ML-only system, a generic Docker dashboard, or a basic CPU scheduling simulator.
-
-## Current architecture
+## Current flow
 
 ```text
-React/Vite frontend
-        |
-        v
-Express REST API
-        |
-        +--> Job service --> Job repository -----+
-        |                                         |
-        +--> Worker service --> Worker repository +--> Prisma --> PostgreSQL
+Generate or reuse controlled workload
+              |
+              v
+WorkloadBatch + QUEUED Jobs
+              |
+              v
+           PostgreSQL
 ```
 
 Target orchestration remains:
 
 ```text
-Workload Generator -> Persistent Queue -> Scheduler -> Placement
-  -> Transactional Reservation -> Docker Execution -> Monitoring -> Release
+Generator -> Queue -> Scheduler -> Placement -> Transactional Reservation
+  -> Docker Execution -> Monitoring -> Resource Release
 ```
 
-See [`docs/architecture.md`](docs/architecture.md) for stable intended architecture and [`docs/flow.md`](docs/flow.md) for actual execution paths.
+## Implemented capabilities
 
-## Phase 1 capabilities
-
-- Four-model Prisma schema: jobs, workers, resource allocations, and job executions
-- Initial SQL migration with foreign keys, indexes, enums, and resource `CHECK` constraints
-- All required job states and centralized valid transitions
-- Strict predefined workload types: CPU intensive, matrix multiplication, sorting, data processing, and sleep
-- Job create/list/get and queued-job cancellation APIs
-- Logical-worker create/list/get APIs
-- Atomic conditional cancellation and idempotent cancellation retries
+- React/Vite status dashboard and modular Express API
+- PostgreSQL/Prisma migrations and startup migration gate
+- Job and logical-worker create/read APIs
+- All required job states and controlled queued cancellation
 - Three idempotently seeded logical workers
-- Compose migration/seed gate before backend startup
-- Structured 400/404/409/413/500 errors
-- Schema-aware database health check across all four Phase 1 models
-- Thirteen focused unit, HTTP-boundary, and opt-in PostgreSQL integration tests
+- Deterministic generator version `v1` with no random-number dependency
+- Exact counts: 10, 25, 50, or 100 jobs
+- Patterns: `LIGHT`, `MEDIUM`, `HEAVY`, `CONSTANT`, `BURST`, `INCREASING`, `DECREASING`, `PERIODIC`, and `CUSTOM`
+- `SUDDEN_BURST` input alias normalized to `BURST`
+- Controlled CPU, matrix, sorting, data-processing, and sleep workloads
+- Atomic batch/job persistence and exact persisted-batch reuse
+- Planned arrival offsets/timestamps for future scheduling
+- Structured validation/errors and five-model readiness
+- Unit, HTTP-boundary, and PostgreSQL integration tests
 
-Allocation and execution tables are foundations only; production Phase 1 code does not create those records. Database integration tests verify their identity and uniqueness constraints with temporary records that are removed afterward.
+Generated jobs remain `QUEUED`. Arrival times are metadata only until the scheduler is implemented.
 
-## Resource units and initial workers
+## Deterministic pattern contract
 
-CPU is stored as integer **millicores** (`1000` = one logical CPU core). Memory is stored as integer **MiB** (`1024` = one GiB).
+| Pattern | Behavior |
+| --- | --- |
+| `LIGHT` | Low resources; seeded 20–40 second gaps |
+| `MEDIUM` | Medium resources; seeded 8–16 second gaps |
+| `HEAVY` | High local resources; seeded 2–6 second gaps |
+| `CONSTANT` | Varied medium resources; fixed 10 second gaps |
+| `BURST` | Five jobs per shared offset; groups 30 seconds apart |
+| `INCREASING` | Light→heavy resources and decreasing gaps |
+| `DECREASING` | Heavy→light resources and increasing gaps |
+| `PERIODIC` | Repeating profiles and `[2,2,2,20]` gaps |
+| `CUSTOM` | Bounded ranges/types plus exact nondecreasing offsets |
 
-| Worker | CPU capacity | Memory capacity | Initial state |
-| --- | ---: | ---: | --- |
-| `worker-1` | 2000 millicores | 2048 MiB | `IDLE` |
-| `worker-2` | 4000 millicores | 4096 MiB | `IDLE` |
-| `worker-3` | 6000 millicores | 8192 MiB | `IDLE` |
+For the same generator version, seed, count, canonical pattern, and custom configuration, ordered job specifications and offsets are identical. IDs and default start times are not deterministic. Golden-vector tests pin `v1` output, so changing the algorithm or pools requires a new generator version.
 
-The seed creates missing workers but never resets an existing worker's state or allocated counters.
+Each job samples its own type, CPU, memory, duration, and priority. For predefined patterns, `workloadSize` is derived from duration and CPU so the recorded size matches the estimated work; `SLEEP` size equals its duration.
 
-## REST API
+## Workload APIs
 
 | Method | Endpoint | Behavior |
 | --- | --- | --- |
-| `GET` | `/api` | API phase/status metadata |
-| `GET` | `/api/health` | Database and Phase 1 table readiness |
-| `POST` | `/api/jobs` | Create a controlled job as `QUEUED` |
-| `GET` | `/api/jobs` | List jobs in persistent arrival order |
-| `GET` | `/api/jobs?status=QUEUED&limit=25` | Filter and bound job listing |
-| `GET` | `/api/jobs/:id` | Read one job |
-| `POST` | `/api/jobs/:id/cancel` | Atomically cancel a queued job |
-| `POST` | `/api/workers` | Create an idle logical worker |
-| `GET` | `/api/workers` | List logical workers by name |
-| `GET` | `/api/workers/:id` | Read one logical worker |
+| `POST` | `/api/workloads/generate` | Generate and atomically persist a batch |
+| `GET` | `/api/workloads/:id` | Retrieve batch and jobs in sequence order |
+| `POST` | `/api/workloads/:id/reuse` | Clone exact persisted specs into new queued jobs |
 
-Example job request:
+Generate a burst:
 
 ```json
 {
-  "name": "matrix-demo",
-  "workloadType": "MATRIX_MULTIPLICATION",
-  "cpuRequiredMillicores": 2000,
-  "memoryRequiredMiB": 1024,
-  "estimatedDurationSeconds": 30,
-  "priority": 7
+  "seed": 12345,
+  "count": 50,
+  "pattern": "BURST",
+  "startAt": "2026-09-21T12:00:00.000Z"
 }
 ```
 
-Clients cannot submit status, assignments, commands, Docker images, container IDs, results, failure details, or allocated worker counters. Runtime cancellation intentionally remains unavailable until container and resource cleanup exist.
+`startAt` is optional. Omit it to use the request time.
 
-## Repository structure
+Custom generation additionally requires:
 
-```text
-backend/
-├── prisma/
-│   ├── migrations/
-│   ├── schema.prisma
-│   └── seed.ts
-└── src/
-    ├── errors/
-    ├── modules/health/
-    ├── modules/jobs/
-    ├── modules/workers/
-    ├── app.ts
-    └── server.ts
-frontend/
-docs/
-├── architecture.md
-├── decision.md
-├── flow.md
-└── image.png
+```json
+{
+  "seed": 42,
+  "count": 10,
+  "pattern": "CUSTOM",
+  "custom": {
+    "workloadTypes": ["SORTING", "DATA_PROCESSING"],
+    "workloadSize": { "min": 1000, "max": 5000 },
+    "cpuRequiredMillicores": { "min": 500, "max": 2000 },
+    "memoryRequiredMiB": { "min": 256, "max": 1024 },
+    "estimatedDurationSeconds": { "min": 5, "max": 30 },
+    "priority": { "min": 1, "max": 10 },
+    "arrivalOffsetsSeconds": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+  }
+}
 ```
 
-## Prerequisites
+No command, script, arbitrary image, formula, or unbounded resource value is accepted.
 
-- Node.js 22.12 or newer
-- npm 10 or newer
-- Docker Desktop with Docker Compose
+## Other APIs
 
-Validated locally with Node.js 24.13.0, npm 11.6.2, Docker 29.7.2, and Docker Compose 5.5.1.
+```text
+GET  /api
+GET  /api/health
+POST /api/jobs
+GET  /api/jobs
+GET  /api/jobs/:id
+POST /api/jobs/:id/cancel
+POST /api/workers
+GET  /api/workers
+GET  /api/workers/:id
+```
 
-## Run the complete stack
+Manual job creation accepts an optional `workloadSize` (default `1`) alongside controlled type, CPU, memory, estimated duration, and priority.
 
-From PowerShell in the repository root:
+## Resource units and initial workers
+
+CPU uses millicores (`1000` = one logical core); memory uses MiB (`1024` = one GiB).
+
+| Worker | CPU | Memory | State |
+| --- | ---: | ---: | --- |
+| `worker-1` | 2000 | 2048 MiB | `IDLE` |
+| `worker-2` | 4000 | 4096 MiB | `IDLE` |
+| `worker-3` | 6000 | 8192 MiB | `IDLE` |
+
+## Run locally
+
+Prerequisites: Node.js 22.12+, npm 10+, and Docker Desktop with Compose.
 
 ```powershell
 Copy-Item .env.example .env
@@ -134,62 +144,34 @@ npm install
 npm run docker:up
 ```
 
-Compose automatically applies pending migrations and idempotently seeds workers before starting the backend.
-
 Open:
 
 - Dashboard: <http://localhost:5173>
 - API: <http://localhost:4000/api>
 - Health: <http://localhost:4000/api/health>
-- Jobs: <http://localhost:4000/api/jobs>
-- Workers: <http://localhost:4000/api/workers>
 
-Stop the stack from another terminal:
+Stop without deleting database data:
 
 ```powershell
 npm run docker:down
 ```
 
-The named PostgreSQL volume is retained. `docker compose down --volumes` deletes local database data and should be used only when a clean database is intended.
-
-## Run in development mode
+For direct development:
 
 ```powershell
-Copy-Item .env.example .env
-npm install
-npm run prisma:generate
 docker compose up -d postgres
 npm run db:setup
-```
-
-Then run these in separate terminals:
-
-```powershell
 npm run dev:backend
 ```
 
-```powershell
-npm run dev:frontend
-```
+Run `npm run dev:frontend` in a second terminal.
 
-## Database commands
-
-```powershell
-npm run prisma:validate
-npm run prisma:generate
-npm run db:deploy
-npm run db:seed
-npm run db:setup
-```
-
-`db:deploy` applies committed migrations. `db:seed` ensures the initial workers exist. `db:setup` performs both.
-
-## Validation commands
+## Validation
 
 ```powershell
 npm test
 
-# Run the same suite with PostgreSQL integration coverage after db:setup
+# Include real PostgreSQL integration tests after db:setup
 $env:RUN_DATABASE_TESTS = "true"
 npm test
 
@@ -200,56 +182,32 @@ npm audit
 docker compose config
 ```
 
-## Configuration
+## Safety and consistency
 
-Copy `.env.example` to `.env`. `.env` is ignored and must not be committed. Compose publishes services only on `127.0.0.1`.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `POSTGRES_USER` | `orchestr_os` | Local PostgreSQL user |
-| `POSTGRES_PASSWORD` | `orchestr_os` | Local development password |
-| `POSTGRES_DB` | `orchestr_os` | Local database name |
-| `POSTGRES_PORT` | `5432` | Loopback PostgreSQL port |
-| `DATABASE_URL` | local PostgreSQL URL | Prisma URL for host development |
-| `DATABASE_URL_DOCKER` | Compose PostgreSQL URL | Prisma URL inside Docker |
-| `HOST` | `127.0.0.1` | Backend host-development bind address |
-| `PORT` | `4000` | Loopback backend port |
-| `CORS_ORIGIN` | `http://localhost:5173` | Allowed browser origin |
-| `FRONTEND_PORT` | `5173` | Loopback frontend port |
-| `NODE_ENV` | `development` | Backend runtime mode |
-
-If credentials change, update PostgreSQL variables and both database URLs together. Percent-encode reserved credential characters in URLs. Existing volumes retain initialization credentials.
-
-## Safety and consistency rules
-
-- Only predefined workload types and bounded resource values are accepted.
-- Arbitrary commands and Docker images are rejected by strict request schemas.
+- PostgreSQL is authoritative; no Redis or Kafka is used.
+- Batch metadata and all jobs commit or roll back together.
+- Stored batch reuse copies exact specifications into independent lifecycle records.
+- Job/resource/batch bounds are enforced by Zod and SQL constraints.
+- One active reservation per job and execution/allocation identity remain database-enforced.
 - The frontend never receives Docker daemon access.
-- PostgreSQL is authoritative; Redis and Kafka are not used.
-- Jobs are retained when cancelled rather than deleted.
-- Scheduler and placement remain separate future components.
-- Resource reservation will recheck capacity under a PostgreSQL row lock in Phase 5.
+- Published ports bind to `127.0.0.1`.
 
-## Remaining phases
+## Remaining work
 
-2. Seeded automated workload generation
-3. FCFS, SJF, Priority, and Round Robin scheduling
-4. First Fit, Least Loaded, and Resource-Aware placement
-5. Transaction-safe reservation/release and concurrency demonstration
-6. Controlled Docker workload execution
-7. Monitoring and dashboard features
-8. Reactive threshold autoscaling
-9. Heartbeat failure detection and recovery
-10. Historical ML data pipeline
-11. ML-assisted proactive autoscaling
-12. Reproducible experiments and metrics
-13. Final testing, documentation, and demo polish
+1. FCFS, SJF, Priority, and Round Robin scheduling
+2. First Fit, Least Loaded, and Resource-Aware placement
+3. Transaction-safe reservation/release and concurrency demonstration
+4. Controlled Docker execution
+5. Monitoring and dashboard pages
+6. Reactive autoscaling
+7. Heartbeat failure recovery
+8. Historical ML data and proactive scaling
+9. Reproducible policy experiments and graphs
 
 ## Engineering memory
 
-- [`docs/architecture.md`](docs/architecture.md): intended stable architecture
-- [`docs/flow.md`](docs/flow.md): actual executable code paths
-- [`docs/decision.md`](docs/decision.md): meaningful decisions and trade-offs
-- [`docs/image.png`](docs/image.png): retained proposal architecture visual
+- [`docs/architecture.md`](docs/architecture.md): stable intended architecture
+- [`docs/flow.md`](docs/flow.md): actual execution paths
+- [`docs/decision.md`](docs/decision.md): decisions and trade-offs
 
 Academic proposal assets remain under `docs/07a74a187970d58871c4261b7922ca06/`.

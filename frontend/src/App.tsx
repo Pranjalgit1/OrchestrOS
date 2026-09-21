@@ -6,10 +6,11 @@ const currentCapabilities = [
   "PostgreSQL-backed job records",
   "Controlled job lifecycle",
   "Logical worker registry",
+  "Deterministic workload batches",
+  "Exact workload reuse",
 ];
 
 const futureCapabilities = [
-  "Automated workload generation",
   "Policy-based scheduling",
   "Resource-aware placement",
   "Docker workload execution",
@@ -23,7 +24,6 @@ export function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-
     fetchHealthStatus(controller.signal)
       .then((status) => {
         setHealth(status);
@@ -34,7 +34,6 @@ export function App() {
           setError(reason instanceof Error ? reason.message : "Health check failed");
         }
       });
-
     return () => controller.abort();
   }, []);
 
@@ -51,15 +50,15 @@ export function App() {
   return (
     <main className="shell">
       <header className="hero">
-        <p className="eyebrow">Phase 1 · Data Layer</p>
+        <p className="eyebrow">Phase 2 · Workload Generation</p>
         <h1>OrchestrOS</h1>
         <p className="subtitle">
-          A Kubernetes-inspired local container orchestration prototype with resource-aware
-          scheduling, safe allocation, monitoring, recovery, and ML-assisted scaling.
+          A Kubernetes-inspired local container orchestration prototype with reproducible
+          workloads, resource-aware scheduling, safe allocation, recovery, and assisted scaling.
         </p>
       </header>
 
-      <section className="status-grid" aria-label="Phase 1 service status">
+      <section className="status-grid" aria-label="Phase 2 service status">
         <article className="status-card">
           <span>Frontend</span>
           <strong className="healthy">Online</strong>
@@ -84,11 +83,10 @@ export function App() {
       <section className="foundation-panel">
         <div>
           <p className="eyebrow">Implemented now</p>
-          <h2>Persistent orchestration state</h2>
+          <h2>Reproducible workload batches</h2>
           <p>
-            Jobs and logical workers are validated by the API and stored in PostgreSQL. Logical
-            workers represent tracked capacity on this one physical machine; they are not separate
-            computers.
+            Seeded workload profiles create controlled queued jobs with persisted resource and
+            planned-arrival metadata. A stored batch can be cloned exactly for fair experiments.
           </p>
           <ul>
             {currentCapabilities.map((capability) => (
