@@ -4,7 +4,7 @@
 
 OrchestrOS is a Kubernetes-inspired local container orchestration prototype for controlled computational workloads. It runs on one physical development machine with logical workers, PostgreSQL-backed state, and a modular TypeScript backend.
 
-> **Current implementation:** deterministic workload batches, persistent jobs/workers, controlled lifecycle management, exact batch reuse, database migrations, health checks, and tests work. Scheduling, placement, transactional reservation, workload containers, monitoring, autoscaling, recovery, experiments, and ML do not run yet.
+> **Current implementation:** deterministic workload batches, persistent jobs/workers, controlled lifecycle management, exact batch reuse, policy-based scheduling (FCFS, SJF, Priority, Round Robin), database migrations, health checks, and tests work. Worker placement, transactional reservation, workload containers, monitoring, autoscaling, recovery, experiments, and ML do not run yet.
 
 ## System boundary
 
@@ -16,10 +16,13 @@ Logical workers are resource-capacity records on one machine—not physical node
 Generate or reuse controlled workload
               |
               v
-WorkloadBatch + QUEUED Jobs
+WorkloadBatch + QUEUED Jobs  ->  PostgreSQL
               |
               v
-           PostgreSQL
+Scheduler (FCFS / SJF / Priority / Round Robin)
+              |
+              v
+      SCHEDULED Jobs
 ```
 
 Target orchestration remains:
@@ -42,11 +45,46 @@ Generator -> Queue -> Scheduler -> Placement -> Transactional Reservation
 - `SUDDEN_BURST` input alias normalized to `BURST`
 - Controlled CPU, matrix, sorting, data-processing, and sleep workloads
 - Atomic batch/job persistence and exact persisted-batch reuse
-- Planned arrival offsets/timestamps for future scheduling
+- Planned arrival offsets/timestamps that gate scheduling eligibility
+- FCFS, SJF, Priority (with aging), and Round Robin scheduling
+- Concurrency-safe job claiming that cannot double-schedule
+- Persisted scheduling decisions: policy, timestamp, quantum, and round count
 - Structured validation/errors and five-model readiness
 - Unit, HTTP-boundary, and PostgreSQL integration tests
 
-Generated jobs remain `QUEUED`. Arrival times are metadata only until the scheduler is implemented.
+Scheduling selects **which job runs next** and moves it from `QUEUED` to `SCHEDULED`. It does not choose a worker, reserve resources, or start a container.
+
+## Scheduling policies
+
+| Policy | Ordering |
+| --- | --- |
+| `FCFS` | Planned arrival order |
+| `SJF` | Shortest estimated duration first |
+| `PRIORITY` | Highest priority first, with aging to prevent starvation |
+| `ROUND_ROBIN` | Fewest scheduling rounds first, with a recorded time quantum |
+
+Priority uses higher numbers as more urgent (1–10). A queued job gains one effective priority level per full 60 seconds waited, capped at 10. Round Robin defaults to a 10-second quantum and accepts 1–3600.
+
+Only jobs that are `QUEUED` with a planned arrival in the past are eligible.
+
+### Scheduler APIs
+
+| Method | Endpoint | Behavior |
+| --- | --- | --- |
+| `GET` | `/api/scheduler/preview?policy=SJF&limit=20` | Show policy ordering without changing state |
+| `POST` | `/api/scheduler/dispatch` | Schedule up to `count` jobs by policy |
+
+Dispatch a batch under Round Robin:
+
+```json
+{
+  "policy": "ROUND_ROBIN",
+  "count": 5,
+  "timeQuantumSeconds": 15
+}
+```
+
+A `timeQuantumSeconds` value is rejected for any policy other than `ROUND_ROBIN`.
 
 ## Deterministic pattern contract
 
@@ -194,15 +232,14 @@ docker compose config
 
 ## Remaining work
 
-1. FCFS, SJF, Priority, and Round Robin scheduling
-2. First Fit, Least Loaded, and Resource-Aware placement
-3. Transaction-safe reservation/release and concurrency demonstration
-4. Controlled Docker execution
-5. Monitoring and dashboard pages
-6. Reactive autoscaling
-7. Heartbeat failure recovery
-8. Historical ML data and proactive scaling
-9. Reproducible policy experiments and graphs
+1. First Fit, Least Loaded, and Resource-Aware placement
+2. Transaction-safe reservation/release and concurrency demonstration
+3. Controlled Docker execution and quantum-based preemption
+4. Monitoring and dashboard pages
+5. Reactive autoscaling
+6. Heartbeat failure recovery
+7. Historical ML data and proactive scaling
+8. Reproducible policy experiments and graphs
 
 ## Engineering memory
 

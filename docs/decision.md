@@ -458,3 +458,35 @@ Affected Components:
 - `backend/src/modules/jobs/job.schemas.ts`
 - `backend/prisma/migrations/20260921160000_workload_arrival_index_bounds/migration.sql`
 - `backend/prisma/schema.prisma`
+
+## Decision: Define scheduling policy semantics and a conditional claim
+
+Date:
+2026-09-21
+
+Status:
+Accepted
+
+Context:
+The project requires FCFS, SJF, Priority, and Round Robin scheduling, but the repository did not define the priority direction, a starvation strategy, Round Robin behaviour without preemption, or how concurrent schedulers avoid selecting the same job.
+
+Decision:
+Treat higher priority numbers as more urgent and prevent starvation by aging: one effective priority level per full 60 seconds waited since arrival, capped at 10. Implement Round Robin by ordering on a persisted `schedulingRounds` counter, recording a configurable time quantum (default 10 seconds) on each scheduled job. Gate all policies on `QUEUED` status and elapsed planned arrival. Claim jobs with a single conditional update matching the ID and `QUEUED` status, validated through the shared job transition policy. Accept the policy per request instead of storing global scheduler state.
+
+Alternatives Considered:
+- Lower numbers as higher priority
+- No starvation handling
+- Round Robin as a rotating in-memory cursor
+- Selecting with `SELECT ... FOR UPDATE` now
+- A persisted global scheduler configuration
+
+Reasoning:
+Aging is simple to explain and keeps the policy a pure function of job and time. A persisted round counter gives real rotation once preemption requeues work, and degrades gracefully to arrival order today. The conditional update provides the needed safety without introducing row locking, which belongs to the resource-reservation increment. Per-request policy lets the same seeded workload be replayed under different policies for fair comparison.
+
+Consequences:
+Priority ordering depends on wall-clock wait time, so tests must inject the current time. Round Robin behaves like FCFS until preemption exists. A losing concurrent claim is a normal outcome rather than an error, so dispatch can schedule fewer jobs than requested. Scheduler-wide fairness across the whole queue means integration tests must scope their own candidates to stay deterministic.
+
+Affected Components:
+- `backend/src/modules/scheduler/`
+- `backend/prisma/migrations/20260921170000_job_scheduling/migration.sql`
+- `backend/prisma/schema.prisma`

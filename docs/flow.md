@@ -1,6 +1,6 @@
 # OrchestrOS Actual Execution Flow
 
-This document describes code that currently executes. The current implementation includes deterministic workload generation and persistent batch reuse; scheduling and execution do not run.
+This document describes code that currently executes. The current implementation includes deterministic workload generation, persistent batch reuse, and policy-based scheduling; worker placement and workload execution do not run.
 
 ## Flow: Startup and readiness
 
@@ -85,7 +85,7 @@ On `SIGINT` or `SIGTERM`, the backend prevents duplicate shutdown, drains HTTP c
 
 | Required flow | Planned increment |
 | --- | --- |
-| Concurrent job claim and FCFS/SJF/Priority/Round Robin scheduling | Next |
+| Preemption that returns a running job to the queue after its quantum | Later |
 | First Fit, Least Loaded, and Resource-Aware placement | Later |
 | Transactional reservation, row locking, rollback, and release | Later |
 | Controlled Docker workload execution and cleanup | Later |
@@ -96,3 +96,51 @@ On `SIGINT` or `SIGTERM`, the backend prevents duplicate shutdown, drains HTTP c
 | Experiment execution/comparison | Later |
 
 The allocation/execution tables exist, but production code does not write them. Generated arrival metadata does not make jobs run or change state automatically.
+
+## Flow: Preview scheduling order
+
+Entry Point:
+`GET /api/scheduler/preview?policy=<policy>&limit=<optional>`
+
+Sequence:
+
+1. `backend/src/modules/scheduler/scheduler.routes.ts`
+2. `previewQuerySchema` in `scheduler.schemas.ts`
+3. `SchedulerService.preview()` in `scheduler.service.ts`
+4. `prismaSchedulerRepository.findEligible()` in `scheduler.repository.ts`
+5. `orderByPolicy()` in `scheduler.policies.ts`
+
+Detailed Flow:
+
+1. The route requires one of `FCFS`, `SJF`, `PRIORITY`, or `ROUND_ROBIN`, plus an optional limit from 1–100 (default 20).
+2. The service captures the current time once.
+3. The repository reads up to 500 jobs that are `QUEUED` with `arrivalAt <= now`.
+4. The pure policy function orders those candidates.
+5. The route returns the policy, eligible count, and the limited ordered jobs.
+6. No job state changes. This endpoint exists to demonstrate and compare policy ordering.
+
+## Flow: Dispatch jobs by policy
+
+Entry Point:
+`POST /api/scheduler/dispatch`
+
+Sequence:
+
+1. `scheduler.routes.ts`
+2. `dispatchSchema` in `scheduler.schemas.ts`
+3. `SchedulerService.dispatch()`
+4. `orderByPolicy()`
+5. `assertJobTransition()` in `../jobs/job.transitions.ts`
+6. `prismaSchedulerRepository.claim()`
+7. PostgreSQL `jobs`
+
+Detailed Flow:
+
+1. Strict validation accepts a policy, an optional count from 1–100 (default 1), and an optional time quantum from 1–3600 seconds.
+2. A time quantum is rejected with HTTP 400 for any policy other than `ROUND_ROBIN`; `ROUND_ROBIN` defaults to 10 seconds.
+3. The service captures one timestamp, loads eligible candidates, and orders them by policy.
+4. For each candidate up to the requested count, the shared transition policy validates `QUEUED -> SCHEDULED`.
+5. The repository runs one conditional `updateMany` matching the job ID and `QUEUED` status, setting `SCHEDULED`, the policy, `scheduledAt`, the quantum, and incrementing `schedulingRounds`.
+6. If the update matched zero rows, another dispatch already claimed that job; the service skips it and continues. The round counter is not incremented for a lost claim.
+7. The route returns the policy, quantum, requested count, eligible count, scheduled count, and the scheduled jobs.
+8. Scheduling assigns no worker, reserves no resources, and starts no container.

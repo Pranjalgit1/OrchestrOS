@@ -21,7 +21,7 @@ The current implementation includes foundation startup, job/worker management, a
 | Job manager/queue | Persist controlled jobs and enforce create/read/cancel lifecycle | Implemented management; claiming pending |
 | Worker manager | Persist logical capacity and initial workers | Implemented management |
 | Workload generator | Produce and persist deterministic controlled workload batches | Implemented |
-| Scheduler | Select FCFS, SJF, Priority, or Round Robin job | Pending |
+| Scheduler | Select FCFS, SJF, Priority, or Round Robin job | Implemented |
 | Placement | Select First Fit, Least Loaded, or Balanced worker | Pending |
 | Resource manager | Transactional CPU/memory reservation and release | Pending |
 | Container manager | Run predefined workloads under Docker limits | Pending |
@@ -89,7 +89,32 @@ Future resource reservation must begin a transaction, lock the worker row, reche
 
 ## 8. Scheduler and placement separation
 
-The future scheduler answers **which job runs next** using FCFS, SJF, Priority, or Round Robin. It must consider only jobs whose `arrivalAt <= now`. Placement separately answers **which eligible worker runs it** using First Fit, Least Loaded, or explainable Balanced scoring. Neither responsibility is implemented by workload generation.
+The scheduler answers only **which job runs next**. It never chooses a worker, reserves resources, or starts containers. Placement, reservation, and execution remain separate future components.
+
+`scheduler.policies.ts` is pure: it takes candidate jobs, a policy, and the current time, and returns an ordering. Persistence and claiming live in the repository and service.
+
+### Eligibility
+
+A job is a candidate only when its status is `QUEUED` and its planned `arrivalAt` has passed. Generated arrival metadata therefore gates scheduling rather than being decorative.
+
+### Policies
+
+| Policy | Ordering |
+| --- | --- |
+| `FCFS` | Planned arrival, then creation time, batch sequence, and ID |
+| `SJF` | Shortest `estimatedDurationSeconds` first, then arrival order |
+| `PRIORITY` | Highest effective priority first, then arrival order |
+| `ROUND_ROBIN` | Fewest completed scheduling rounds first, then arrival order |
+
+Priority uses **higher numbers as more urgent** (1 lowest, 10 highest). Starvation prevention is implemented as aging: a queued job gains one effective priority level for each full 60 seconds it has waited since arrival, capped at 10. Aging is computed from the passed-in time, so it stays a pure function.
+
+Round Robin records a configurable time quantum (default 10 seconds, range 1–3600) on the scheduled job and increments `schedulingRounds`. Because a job that later returns to `QUEUED` carries a higher round count, it rotates behind fresher work instead of monopolising the scheduler. With no preemption yet, a first pass over never-scheduled jobs follows arrival order.
+
+### Concurrency safety
+
+Claiming uses a single conditional update that matches the job ID **and** `QUEUED` status. Two parallel dispatches therefore cannot schedule the same job: the loser observes zero updated rows, does not increment the round counter, and skips to the next candidate. Every transition is validated through the shared job transition policy.
+
+Policy is supplied per request rather than stored as global state, so the same workload can be replayed under different policies for comparison.
 
 ## 9. Docker, monitoring, scaling, failure, and ML
 
@@ -102,6 +127,11 @@ Express enforces a 16 KB body limit, strict Zod schemas, structured errors, one 
 - `POST /api/workloads/generate`
 - `GET /api/workloads/:id`
 - `POST /api/workloads/:id/reuse`
+
+Implemented scheduler endpoints are:
+
+- `GET /api/scheduler/preview`
+- `POST /api/scheduler/dispatch`
 
 Job and worker management endpoints remain available. The browser and clients never receive Docker daemon access.
 

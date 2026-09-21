@@ -27,6 +27,13 @@ enum WorkloadPattern {
   CUSTOM
 }
 
+enum SchedulingPolicy {
+  FCFS
+  SJF
+  PRIORITY
+  ROUND_ROBIN
+}
+
 enum JobStatus {
   CREATED
   QUEUED
@@ -96,6 +103,10 @@ model Job {
   batchSequence            Int?
   arrivalOffsetSeconds     Int                @default(0)
   arrivalAt                DateTime           @default(now())
+  schedulingPolicy         SchedulingPolicy?
+  scheduledAt              DateTime?
+  timeQuantumSeconds       Int?
+  schedulingRounds         Int                @default(0)
   createdAt                DateTime           @default(now())
   updatedAt                DateTime           @updatedAt
   startedAt                DateTime?
@@ -112,6 +123,9 @@ model Job {
 
   @@unique([workloadBatchId, batchSequence])
   @@index([status, arrivalAt, createdAt, batchSequence, id])
+  @@index([status, estimatedDurationSeconds, arrivalAt, id])
+  @@index([status, priority, arrivalAt, id])
+  @@index([status, schedulingRounds, arrivalAt, id])
   @@index([workloadBatchId])
   @@index([assignedWorkerId])
   @@map("jobs")
