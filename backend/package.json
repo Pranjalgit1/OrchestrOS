@@ -1,0 +1,38 @@
+{
+  "name": "@orchestr-os/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prisma:generate": "dotenv -e ../.env.example -- prisma generate",
+    "prisma:validate": "dotenv -e ../.env.example -- prisma validate",
+    "db:migrate:dev": "dotenv -e ../.env -- prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:setup": "prisma migrate deploy && tsx prisma/seed.ts",
+    "test": "tsx --test src/*.test.ts src/modules/jobs/*.test.ts src/modules/workers/*.test.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.12.0",
+    "cors": "2.8.6",
+    "dotenv": "17.2.3",
+    "express": "5.2.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/cors": "2.8.19",
+    "@types/express": "5.0.6",
+    "@types/node": "24.10.1",
+    "dotenv-cli": "11.0.0",
+    "prisma": "6.12.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}
