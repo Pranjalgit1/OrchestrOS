@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WorkloadType {
+  CPU_INTENSIVE
+  MATRIX_MULTIPLICATION
+  SORTING
+  DATA_PROCESSING
+  SLEEP
+}
+
+enum JobStatus {
+  CREATED
+  QUEUED
+  WAITING
+  SCHEDULED
+  RUNNING
+  COMPLETED
+  FAILED
+  INTERRUPTED
+  CANCELLED
+}
+
+enum WorkerStatus {
+  STARTING
+  ACTIVE
+  IDLE
+  BUSY
+  STOPPING
+  FAILED
+}
+
+enum AllocationStatus {
+  RESERVED
+  RELEASED
+  ROLLED_BACK
+}
+
+enum ExecutionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  INTERRUPTED
+  CANCELLED
+}
+
+model Job {
+  id                       String             @id @default(uuid()) @db.Uuid
+  name                     String             @db.VarChar(100)
+  workloadType             WorkloadType
+  status                   JobStatus          @default(QUEUED)
+  cpuRequiredMillicores    Int
+  memoryRequiredMiB        Int
+  estimatedDurationSeconds Int
+  priority                 Int                @default(5)
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  startedAt                DateTime?
+  completedAt              DateTime?
+  cancelledAt              DateTime?
+  assignedWorkerId         String?            @db.Uuid
+  containerId              String?            @unique @db.VarChar(128)
+  result                   Json?
+  failureReason            String?
+  assignedWorker           Worker?            @relation("AssignedJobs", fields: [assignedWorkerId], references: [id], onDelete: SetNull)
+  allocations              ResourceAllocation[]
+  executions               JobExecution[]
+
+  @@index([status, createdAt, id])
+  @@index([assignedWorkerId])
+  @@map("jobs")
+}
+
+model Worker {
+  id                      String               @id @default(uuid()) @db.Uuid
+  name                    String               @unique @db.VarChar(64)
+  cpuCapacityMillicores   Int
+  memoryCapacityMiB       Int
+  cpuAllocatedMillicores  Int                  @default(0)
+  memoryAllocatedMiB      Int                  @default(0)
+  status                  WorkerStatus         @default(IDLE)
+  lastHeartbeat           DateTime?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  assignedJobs            Job[]                @relation("AssignedJobs")
+  allocations             ResourceAllocation[]
+  executions              JobExecution[]
+
+  @@index([status])
+  @@map("workers")
+}
+
+model ResourceAllocation {
+  id              String           @id @default(uuid()) @db.Uuid
+  jobId           String           @db.Uuid
+  workerId        String           @db.Uuid
+  cpuMillicores   Int
+  memoryMiB       Int
+  status          AllocationStatus @default(RESERVED)
+  reservedAt      DateTime         @default(now())
+  releasedAt      DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  job             Job              @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  worker          Worker           @relation(fields: [workerId], references: [id], onDelete: Restrict)
+  execution       JobExecution?
+
+  // Supports a composite execution foreign key that guarantees job/worker identity.
+  @@unique([id, jobId, workerId])
+  @@index([jobId, status])
+  @@index([workerId, status])
+  @@map("resource_allocations")
+}
+
+model JobExecution {
+  id            String             @id @default(uuid()) @db.Uuid
+  jobId         String             @db.Uuid
+  workerId      String             @db.Uuid
+  allocationId  String             @unique @db.Uuid
+  attempt       Int
+  status        ExecutionStatus    @default(PENDING)
+  containerId   String?            @unique @db.VarChar(128)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  exitCode      Int?
+  stdout        String?
+  stderr        String?
+  failureReason String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  job           Job                @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  worker        Worker             @relation(fields: [workerId], references: [id], onDelete: Restrict)
+  allocation    ResourceAllocation @relation(fields: [allocationId, jobId, workerId], references: [id, jobId, workerId], onDelete: Restrict)
+
+  @@unique([jobId, attempt])
+  @@unique([allocationId, jobId, workerId])
+  @@index([jobId])
+  @@index([workerId])
+  @@map("job_executions")
+}

@@ -1,0 +1,161 @@
+:root {
+  color: #e9f1ff;
+  background: #07111f;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 15% 0%, rgba(27, 116, 228, 0.22), transparent 34rem),
+    #07111f;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.shell {
+  width: min(1120px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 72px 0;
+}
+
+.hero {
+  max-width: 820px;
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: #69a9ff;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 18px;
+  font-size: clamp(3.5rem, 10vw, 7rem);
+  line-height: 0.92;
+  letter-spacing: -0.07em;
+}
+
+h2 {
+  margin-bottom: 16px;
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  letter-spacing: -0.035em;
+}
+
+.subtitle {
+  color: #aabbd2;
+  font-size: clamp(1rem, 2vw, 1.22rem);
+  line-height: 1.7;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin: 48px 0 24px;
+}
+
+.status-card,
+.foundation-panel {
+  border: 1px solid rgba(137, 176, 226, 0.16);
+  background: rgba(13, 29, 50, 0.78);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(12px);
+}
+
+.status-card {
+  display: flex;
+  min-height: 170px;
+  padding: 24px;
+  border-radius: 18px;
+  flex-direction: column;
+}
+
+.status-card span,
+.status-card small {
+  color: #8195af;
+}
+
+.status-card strong {
+  margin: auto 0 8px;
+  font-size: 1.45rem;
+}
+
+.healthy {
+  color: #56d7a1;
+}
+
+.pending {
+  color: #f3b85b;
+}
+
+.error-banner {
+  margin: 0 0 24px;
+  padding: 14px 18px;
+  border: 1px solid rgba(255, 131, 131, 0.34);
+  border-radius: 12px;
+  color: #ffadad;
+  background: rgba(113, 26, 38, 0.22);
+}
+
+.foundation-panel {
+  display: grid;
+  grid-template-columns: 1.25fr 0.75fr;
+  gap: 54px;
+  margin-top: 24px;
+  padding: 38px;
+  border-radius: 22px;
+}
+
+.foundation-panel p,
+.foundation-panel li {
+  color: #9db0c7;
+  line-height: 1.65;
+}
+
+.foundation-panel ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.foundation-panel li + li {
+  margin-top: 8px;
+}
+
+@media (max-width: 760px) {
+  .shell {
+    width: min(100% - 28px, 1120px);
+    padding: 44px 0;
+  }
+
+  .status-grid,
+  .foundation-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .foundation-panel {
+    gap: 28px;
+    padding: 28px;
+  }
+}

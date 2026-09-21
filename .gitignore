@@ -1,3 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build, test, and tool output
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+*.log
+npm-debug.log*
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local database files and bind-mounted data
+*.db
+*.db-journal
+postgres-data/
+
 # LaTeX build artifacts
 *.aux
 *.bbl
@@ -15,5 +36,6 @@
 
 # Editor and operating system files
 .vscode/
+.idea/
 .DS_Store
 Thumbs.db

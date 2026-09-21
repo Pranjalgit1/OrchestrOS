@@ -1,0 +1,31 @@
+{
+  "name": "orchestr-os",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kubernetes-inspired local container orchestration prototype",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=22.12.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:backend": "npm run dev --workspace backend",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "start:backend": "npm run start --workspace backend",
+    "preview:frontend": "npm run preview --workspace frontend",
+    "prisma:generate": "npm run prisma:generate --workspace backend",
+    "prisma:validate": "npm run prisma:validate --workspace backend",
+    "db:migrate:dev": "npm run db:migrate:dev --workspace backend",
+    "db:deploy": "npm run db:deploy --workspace backend",
+    "db:seed": "npm run db:seed --workspace backend",
+    "db:setup": "npm run db:setup --workspace backend",
+    "test": "npm run test --workspace backend",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  }
+}
