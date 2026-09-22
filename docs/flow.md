@@ -1,6 +1,6 @@
 # OrchestrOS Actual Execution Flow
 
-This document describes code that currently executes. The current implementation includes deterministic workload generation, persistent batch reuse, and policy-based scheduling; worker placement and workload execution do not run.
+This document describes code that currently executes. The current implementation includes deterministic workload generation, persistent batch reuse, policy-based scheduling, and resource-aware placement decisions; resource reservation and workload execution do not run.
 
 ## Flow: Startup and readiness
 
@@ -86,7 +86,7 @@ On `SIGINT` or `SIGTERM`, the backend prevents duplicate shutdown, drains HTTP c
 | Required flow | Planned increment |
 | --- | --- |
 | Preemption that returns a running job to the queue after its quantum | Later |
-| First Fit, Least Loaded, and Resource-Aware placement | Later |
+| Worker counter updates and allocation records from a placement decision | Later |
 | Transactional reservation, row locking, rollback, and release | Later |
 | Controlled Docker workload execution and cleanup | Later |
 | Runtime metric collection and dashboard data | Later |
@@ -144,3 +144,60 @@ Detailed Flow:
 6. If the update matched zero rows, another dispatch already claimed that job; the service skips it and continues. The round counter is not incremented for a lost claim.
 7. The route returns the policy, quantum, requested count, eligible count, scheduled count, and the scheduled jobs.
 8. Scheduling assigns no worker, reserves no resources, and starts no container.
+
+## Flow: Read worker capacity
+
+Entry Point:
+`GET /api/placement/capacity`
+
+Sequence:
+
+1. `backend/src/modules/placement/placement.routes.ts`
+2. `PlacementService.capacity()` in `placement.service.ts`
+3. `prismaPlacementRepository.listWorkers()` and `assignedLoadByWorker()`
+4. `buildSnapshot()` in `placement.accounting.ts`
+
+Detailed Flow:
+
+1. The repository reads all workers ordered by name.
+2. A Prisma `groupBy` sums CPU and memory requirements of jobs whose `assignedWorkerId` is set and whose status is `SCHEDULED` or `RUNNING`.
+3. Each snapshot reports capacity, persisted reservations, advisory assigned load, remaining availability, CPU and memory utilization, and whether the worker can accept work.
+4. No state changes.
+
+## Flow: Preview placement
+
+Entry Point:
+`GET /api/placement/preview?jobId=<uuid>&strategy=<strategy>`
+
+1. The route requires a UUID and one of `FIRST_FIT`, `LEAST_LOADED`, or `RESOURCE_AWARE`.
+2. The service loads the job, returning HTTP 404 when it does not exist.
+3. It builds capacity snapshots and calls the pure `evaluatePlacement()`.
+4. The response lists every candidate with eligibility, human-readable reasons for rejection, and a score, plus the selected worker.
+5. `selected` is `null` when no worker has enough free CPU and memory.
+6. No state changes, so this endpoint can be used to compare strategies.
+
+## Flow: Assign placement
+
+Entry Point:
+`POST /api/placement/assign`
+
+Sequence:
+
+1. `placement.routes.ts`
+2. `assignPlacementSchema` in `placement.schemas.ts`
+3. `PlacementService.assign()`
+4. `evaluatePlacement()`
+5. `prismaPlacementRepository.assign()`
+6. PostgreSQL `jobs`
+
+Detailed Flow:
+
+1. Strict validation accepts only a job UUID and a strategy.
+2. A job that does not exist returns HTTP 404.
+3. A job that is not `SCHEDULED` returns HTTP 409 `JOB_NOT_PLACEABLE`; an already placed job returns HTTP 409 `JOB_ALREADY_PLACED`.
+4. The service builds capacity snapshots and evaluates the strategy.
+5. When no worker is eligible it returns HTTP 409 `INSUFFICIENT_RESOURCES` and the job remains unplaced.
+6. Otherwise one conditional `updateMany` matching the job ID, `SCHEDULED` status, and a null worker sets `assignedWorkerId`, `placementStrategy`, and `placedAt`.
+7. A zero-row update means a concurrent placement won, returning HTTP 409 `PLACEMENT_CONFLICT`.
+8. The response returns the full evaluation plus the updated job.
+9. Job status stays `SCHEDULED`: placement is not a lifecycle transition. Worker counters are untouched and no allocation row is created, so the decision is advisory until reservation re-verifies it under a row lock.

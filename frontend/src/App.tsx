@@ -8,10 +8,11 @@ const currentCapabilities = [
   "Logical worker registry",
   "Deterministic workload batches",
   "FCFS, SJF, Priority, Round Robin scheduling",
+  "Resource-aware worker placement",
 ];
 
 const futureCapabilities = [
-  "Resource-aware placement",
+  "Transactional resource reservation",
   "Docker workload execution",
   "Monitoring and autoscaling",
   "Failure recovery",
@@ -49,7 +50,7 @@ export function App() {
   return (
     <main className="shell">
       <header className="hero">
-        <p className="eyebrow">Phase 3 · Scheduling</p>
+        <p className="eyebrow">Phase 4 · Placement</p>
         <h1>OrchestrOS</h1>
         <p className="subtitle">
           A Kubernetes-inspired local container orchestration prototype with reproducible
@@ -82,11 +83,11 @@ export function App() {
       <section className="foundation-panel">
         <div>
           <p className="eyebrow">Implemented now</p>
-          <h2>Reproducible workloads, scheduled by policy</h2>
+          <h2>Scheduled by policy, placed by resources</h2>
           <p>
-            Seeded workload profiles create controlled queued jobs with planned-arrival metadata,
-            and the scheduler selects the next job by policy using a concurrency-safe claim. It
-            decides ordering only; choosing a worker and running containers come later.
+            Seeded workloads become queued jobs, the scheduler picks the next job by policy, and
+            placement chooses a logical worker with enough free CPU and memory. Placement records
+            the decision only; reserving capacity and running containers come later.
           </p>
           <ul>
             {currentCapabilities.map((capability) => (

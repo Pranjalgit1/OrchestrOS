@@ -27,6 +27,12 @@ enum WorkloadPattern {
   CUSTOM
 }
 
+enum PlacementStrategy {
+  FIRST_FIT
+  LEAST_LOADED
+  RESOURCE_AWARE
+}
+
 enum SchedulingPolicy {
   FCFS
   SJF
@@ -107,6 +113,8 @@ model Job {
   scheduledAt              DateTime?
   timeQuantumSeconds       Int?
   schedulingRounds         Int                @default(0)
+  placementStrategy        PlacementStrategy?
+  placedAt                 DateTime?
   createdAt                DateTime           @default(now())
   updatedAt                DateTime           @updatedAt
   startedAt                DateTime?

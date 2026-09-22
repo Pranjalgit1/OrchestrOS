@@ -17,7 +17,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:setup": "prisma migrate deploy && tsx prisma/seed.ts",
-    "test": "tsx --test src/*.test.ts src/modules/jobs/*.test.ts src/modules/workers/*.test.ts src/modules/workloads/*.test.ts src/modules/scheduler/*.test.ts"
+    "test": "tsx --test src/*.test.ts src/modules/jobs/*.test.ts src/modules/workers/*.test.ts src/modules/workloads/*.test.ts src/modules/scheduler/*.test.ts src/modules/placement/*.test.ts"
   },
   "dependencies": {
     "@prisma/client": "6.12.0",

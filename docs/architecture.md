@@ -22,7 +22,7 @@ The current implementation includes foundation startup, job/worker management, a
 | Worker manager | Persist logical capacity and initial workers | Implemented management |
 | Workload generator | Produce and persist deterministic controlled workload batches | Implemented |
 | Scheduler | Select FCFS, SJF, Priority, or Round Robin job | Implemented |
-| Placement | Select First Fit, Least Loaded, or Balanced worker | Pending |
+| Placement | Select First Fit, Least Loaded, or Resource-Aware worker | Implemented (advisory) |
 | Resource manager | Transactional CPU/memory reservation and release | Pending |
 | Container manager | Run predefined workloads under Docker limits | Pending |
 | Monitoring/autoscaling/failure/ML/experiments | Control and evaluation loops | Pending |
@@ -116,11 +116,57 @@ Claiming uses a single conditional update that matches the job ID **and** `QUEUE
 
 Policy is supplied per request rather than stored as global state, so the same workload can be replayed under different policies for comparison.
 
-## 9. Docker, monitoring, scaling, failure, and ML
+## 9. Resource-aware placement
+
+Placement answers only **which worker runs an already-scheduled job**. It never selects the job, changes job lifecycle state, or starts a container.
+
+`placement.accounting.ts` is pure: it turns workers and their current load into capacity snapshots, evaluates eligibility, scores candidates, and selects one.
+
+### Advisory decisions
+
+Placement persists `assignedWorkerId`, `placementStrategy`, and `placedAt` on the job. It deliberately does **not** mutate worker allocation counters or create `ResourceAllocation` rows, because all real reservation must be transaction-safe and that belongs to the reservation increment. A placement decision is therefore a plan that reservation must re-verify while holding a row lock.
+
+### Resource accounting
+
+For each worker:
+
+```text
+used      = persistedReserved + advisoryAssigned
+available = capacity - used
+```
+
+`persistedReserved` comes from the worker's allocation counters, written only by transactional reservation. `advisoryAssigned` sums the CPU and memory requirements of jobs already placed on that worker in `SCHEDULED` or `RUNNING` state. Including the advisory part stops repeated placements from overcommitting the same worker in the plan and keeps load-sensitive strategies meaningful before reservation exists.
+
+### Eligibility
+
+A worker is eligible only when both hold:
+
+- its status is `IDLE`, `ACTIVE`, or `BUSY` (`STARTING`, `STOPPING`, and `FAILED` cannot accept work)
+- `availableCpu >= job.cpuRequiredMillicores` **and** `availableMemory >= job.memoryRequiredMiB`
+
+Ineligible candidates are returned with explicit reasons. When no worker is eligible, placement is refused with `INSUFFICIENT_RESOURCES` and the job stays unplaced. A job that exactly fits is eligible.
+
+### Strategies
+
+Lower scores win; ties break on worker name for determinism.
+
+| Strategy | Selection |
+| --- | --- |
+| `FIRST_FIT` | First eligible worker in stable name order |
+| `LEAST_LOADED` | Lowest current peak utilization, `max(cpuUtil, memUtil)` |
+| `RESOURCE_AWARE` | Lowest `0.7 × peakUtilAfter + 0.3 × |cpuUtilAfter − memUtilAfter|` |
+
+`RESOURCE_AWARE` scores the worker **after** hypothetically placing the job, so it prefers placements that stay far from saturation and keep CPU and memory balanced. This can differ from `LEAST_LOADED`: a currently idle but small worker may be a worse fit than a busier worker with room to absorb the job evenly. The formula is intentionally small and explainable rather than an opaque model.
+
+### Concurrency safety
+
+Assignment uses one conditional update matching the job ID, `SCHEDULED` status, and a null worker. Parallel placements of the same job therefore assign it exactly once; losers receive `PLACEMENT_CONFLICT`.
+
+## 10. Docker, monitoring, scaling, failure, and ML
 
 Only a future backend container manager may access Docker, and it will run predefined workloads with CPU/memory limits. Monitoring will collect only required operational/experiment metrics. Reactive scaling will precede ML-assisted forecasting. Heartbeat failure handling will reconcile resources and requeue recoverable work. These flows are not implemented yet.
 
-## 10. API boundary
+## 11. API boundary
 
 Express enforces a 16 KB body limit, strict Zod schemas, structured errors, one configured CORS origin, and generic internal errors. Implemented workload endpoints are:
 
@@ -133,9 +179,15 @@ Implemented scheduler endpoints are:
 - `GET /api/scheduler/preview`
 - `POST /api/scheduler/dispatch`
 
+Implemented placement endpoints are:
+
+- `GET /api/placement/capacity`
+- `GET /api/placement/preview`
+- `POST /api/placement/assign`
+
 Job and worker management endpoints remain available. The browser and clients never receive Docker daemon access.
 
-## 11. Target data flow
+## 12. Target data flow
 
 ```text
 Workload Generator -> PostgreSQL-backed Queue -> Scheduler -> Placement

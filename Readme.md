@@ -4,7 +4,7 @@
 
 OrchestrOS is a Kubernetes-inspired local container orchestration prototype for controlled computational workloads. It runs on one physical development machine with logical workers, PostgreSQL-backed state, and a modular TypeScript backend.
 
-> **Current implementation:** deterministic workload batches, persistent jobs/workers, controlled lifecycle management, exact batch reuse, policy-based scheduling (FCFS, SJF, Priority, Round Robin), database migrations, health checks, and tests work. Worker placement, transactional reservation, workload containers, monitoring, autoscaling, recovery, experiments, and ML do not run yet.
+> **Current implementation:** deterministic workload batches, persistent jobs/workers, controlled lifecycle management, exact batch reuse, policy-based scheduling (FCFS, SJF, Priority, Round Robin), resource-aware placement decisions (First Fit, Least Loaded, Resource-Aware), database migrations, health checks, and tests work. Transactional reservation, workload containers, monitoring, autoscaling, recovery, experiments, and ML do not run yet.
 
 ## System boundary
 
@@ -23,6 +23,12 @@ Scheduler (FCFS / SJF / Priority / Round Robin)
               |
               v
       SCHEDULED Jobs
+              |
+              v
+Placement (First Fit / Least Loaded / Resource-Aware)
+              |
+              v
+   Job assigned to a logical worker
 ```
 
 Target orchestration remains:
@@ -49,6 +55,8 @@ Generator -> Queue -> Scheduler -> Placement -> Transactional Reservation
 - FCFS, SJF, Priority (with aging), and Round Robin scheduling
 - Concurrency-safe job claiming that cannot double-schedule
 - Persisted scheduling decisions: policy, timestamp, quantum, and round count
+- First Fit, Least Loaded, and Resource-Aware placement with CPU/memory accounting
+- Eligibility that blocks placement when resources are insufficient
 - Structured validation/errors and five-model readiness
 - Unit, HTTP-boundary, and PostgreSQL integration tests
 
@@ -66,6 +74,37 @@ Scheduling selects **which job runs next** and moves it from `QUEUED` to `SCHEDU
 Priority uses higher numbers as more urgent (1–10). A queued job gains one effective priority level per full 60 seconds waited, capped at 10. Round Robin defaults to a 10-second quantum and accepts 1–3600.
 
 Only jobs that are `QUEUED` with a planned arrival in the past are eligible.
+
+## Placement strategies
+
+Placement chooses **which worker** runs an already-scheduled job.
+
+| Strategy | Selection |
+| --- | --- |
+| `FIRST_FIT` | First eligible worker in stable name order |
+| `LEAST_LOADED` | Lowest current peak utilization |
+| `RESOURCE_AWARE` | Best post-placement fit: `0.7 × peak + 0.3 × imbalance` |
+
+A worker is eligible only when its status is `IDLE`, `ACTIVE`, or `BUSY` **and** it has enough free CPU and memory. Availability is capacity minus persisted reservations minus the requirements of jobs already placed there. When nothing fits, placement is refused with `INSUFFICIENT_RESOURCES` and the job stays unplaced.
+
+Placement is **advisory**: it records the chosen worker on the job but does not reserve capacity or create allocation records. Transactional reservation will re-verify availability under a row lock.
+
+### Placement APIs
+
+| Method | Endpoint | Behavior |
+| --- | --- | --- |
+| `GET` | `/api/placement/capacity` | Per-worker capacity, load, and availability |
+| `GET` | `/api/placement/preview?jobId=<uuid>&strategy=LEAST_LOADED` | Candidates, rejection reasons, and the selection |
+| `POST` | `/api/placement/assign` | Persist the placement decision |
+
+Assign a worker:
+
+```json
+{
+  "jobId": "00000000-0000-0000-0000-000000000000",
+  "strategy": "RESOURCE_AWARE"
+}
+```
 
 ### Scheduler APIs
 
@@ -232,8 +271,7 @@ docker compose config
 
 ## Remaining work
 
-1. First Fit, Least Loaded, and Resource-Aware placement
-2. Transaction-safe reservation/release and concurrency demonstration
+1. Transaction-safe reservation/release and concurrency demonstration
 3. Controlled Docker execution and quantum-based preemption
 4. Monitoring and dashboard pages
 5. Reactive autoscaling

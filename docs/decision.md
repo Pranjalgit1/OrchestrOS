@@ -490,3 +490,64 @@ Affected Components:
 - `backend/src/modules/scheduler/`
 - `backend/prisma/migrations/20260921170000_job_scheduling/migration.sql`
 - `backend/prisma/schema.prisma`
+
+## Decision: Make placement an advisory decision with projected load accounting
+
+Date:
+2026-09-21
+
+Status:
+Accepted
+
+Context:
+Placement must choose a worker using CPU and memory accounting, but the project requires that every real reservation be transaction-safe with an in-transaction capacity recheck. Implementing counter updates now would either duplicate or pre-empt that work unsafely. Without any load accounting, however, `LEAST_LOADED` and `RESOURCE_AWARE` would see identical idle workers and pile every job onto the same one.
+
+Decision:
+Persist placement as an advisory decision on the job (`assignedWorkerId`, `placementStrategy`, `placedAt`) and leave worker counters and allocation records untouched. Compute availability as capacity minus persisted reservations minus the summed requirements of jobs already placed on that worker in `SCHEDULED` or `RUNNING` state. Treat worker statuses `IDLE`, `ACTIVE`, and `BUSY` as able to accept work. Refuse placement with `INSUFFICIENT_RESOURCES` when no worker fits, and guard assignment with a conditional update on job ID, `SCHEDULED` status, and a null worker.
+
+Alternatives Considered:
+- Update worker allocation counters during placement
+- Create `ResourceAllocation` rows during placement
+- Ignore already-placed jobs and use only persisted counters
+- Add a dedicated placement state to the job lifecycle
+
+Reasoning:
+Advisory placement keeps the reservation rule intact while still producing a real, persisted, testable decision. Projected load makes the strategies behave differently and prevents a plan that overcommits one worker. Excluding `STARTING`, `STOPPING`, and `FAILED` matches their meaning. The conditional update reuses the proven claim pattern without introducing row locking early.
+
+Consequences:
+A placed job holds no reserved capacity, so reservation must re-verify availability under a row lock and may reject a stale decision. Placement does not change job status, so `SCHEDULED` covers both pre- and post-placement jobs and the worker field distinguishes them. Because placement considers every worker, integration tests scope their own workers to stay deterministic.
+
+Affected Components:
+- `backend/src/modules/placement/`
+- `backend/prisma/migrations/20260921180000_job_placement/migration.sql`
+- `backend/prisma/schema.prisma`
+
+## Decision: Score RESOURCE_AWARE on post-placement fit
+
+Date:
+2026-09-21
+
+Status:
+Accepted
+
+Context:
+The required Resource-Aware strategy had to consider CPU fit, memory fit, and current utilization while remaining simple and explainable rather than an opaque formula.
+
+Decision:
+Score each eligible worker as `0.7 × peakUtilAfter + 0.3 × |cpuUtilAfter − memUtilAfter|`, where the utilizations are computed after hypothetically adding the job. Lower scores win, ties break on worker name.
+
+Alternatives Considered:
+- Average utilization instead of peak
+- Bin-packing that maximizes utilization
+- Weighting estimated duration into the score
+- A learned or multi-factor opaque score
+
+Reasoning:
+Peak utilization is what saturates a worker first, and the imbalance term discourages leaving one dimension nearly full while the other is idle. Two weights are easy to explain in a report and easy to test. Duration-aware placement would need execution data that does not exist yet.
+
+Consequences:
+The strategy can pick a busier worker over an idle one when the idle worker is a poor shape fit, which is intended and covered by tests. The weights are a documented experimental contract; changing them changes placement outcomes and must be recorded.
+
+Affected Components:
+- `backend/src/modules/placement/placement.accounting.ts`
+- `backend/src/modules/placement/placement.test.ts`

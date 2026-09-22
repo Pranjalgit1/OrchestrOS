@@ -46,6 +46,8 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     scheduledAt: null,
     timeQuantumSeconds: null,
     schedulingRounds: 0,
+    placementStrategy: null,
+    placedAt: null,
     createdAt: created,
     updatedAt: created,
     startedAt: null,

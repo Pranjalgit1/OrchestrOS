@@ -88,6 +88,8 @@ class InMemoryWorkloadRepository implements WorkloadRepository {
       scheduledAt: null,
       timeQuantumSeconds: null,
       schedulingRounds: 0,
+      placementStrategy: null,
+      placedAt: null,
       createdAt,
       updatedAt: createdAt,
       startedAt: null,
