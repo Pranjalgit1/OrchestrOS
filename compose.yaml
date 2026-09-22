@@ -40,8 +40,17 @@ services:
       PORT: 4000
       CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-5173}
       DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://orchestr_os:orchestr_os@postgres:5432/orchestr_os?schema=public}
+      DOCKER_SOCKET_PATH: /var/run/docker.sock
+      EXECUTION_TIMEOUT_SECONDS: ${EXECUTION_TIMEOUT_SECONDS:-300}
+      EXECUTION_LOG_LIMIT_BYTES: ${EXECUTION_LOG_LIMIT_BYTES:-8192}
     ports:
       - "127.0.0.1:${PORT:-4000}:4000"
+    volumes:
+      # Required to run workload containers. This grants the backend container
+      # full control of the host Docker daemon, which is root-equivalent on the
+      # host. Accepted deliberately for a local single-machine prototype and
+      # recorded in docs/decision.md; the frontend never receives this access.
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       database-setup:
         condition: service_completed_successfully

@@ -551,3 +551,275 @@ The strategy can pick a busier worker over an idle one when the idle worker is a
 Affected Components:
 - `backend/src/modules/placement/placement.accounting.ts`
 - `backend/src/modules/placement/placement.test.ts`
+
+## Decision: Reserve capacity with a worker row lock and an in-transaction recheck
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+Placement produces an advisory plan, but concurrent reservations for the same worker could still over-allocate it. Prisma has no first-class `SELECT ... FOR UPDATE`, so the locking strategy had to be chosen explicitly.
+
+Decision:
+Perform reservation inside a Prisma interactive transaction that first acquires a row lock on the worker with a parameterized raw `SELECT ... FOR UPDATE`, then re-reads capacity and allocated counters and re-verifies them before inserting a `RESERVED` allocation, incrementing the worker counters, and setting the worker `BUSY`. Reserve exactly the job's own requirements; clients cannot supply an amount or a worker. Refuse with `INSUFFICIENT_RESOURCES` without writing when the recheck fails.
+
+Alternatives Considered:
+- Optimistic concurrency with a version column and retries
+- A conditional `UPDATE ... WHERE allocated + request <= capacity`
+- Serializable isolation for the whole transaction
+- Trusting the placement decision
+
+Reasoning:
+Pessimistic row locking is the clearest demonstration of the DBMS concepts this project must show, and it makes the read-then-write sequence obviously correct. A conditional update would work for counters alone but would not let the allocation insert, counter update, and status change share one verified decision. Serializable isolation would add retry handling without improving safety for a single-row hot spot.
+
+Consequences:
+Reservations on the same worker serialise, which is intended and measured through `lockWaitMs`. Because lock waits are legitimate, the transaction uses a widened 15s start window and 20s timeout instead of Prisma's tighter defaults; the first concurrency test failed until this was corrected. Raw SQL is used only for locking and stays parameterized. The in-transaction duplicate check runs before the capacity recheck: a live smoke test showed that a job re-reserving on a saturated worker was told `INSUFFICIENT_RESOURCES`, because its own reservation is part of the worker's allocated total. Ordering the duplicate check first reports the real cause; the partial unique index remains the backstop for concurrent duplicates.
+
+Affected Components:
+- `backend/src/modules/resources/resource.repository.ts`
+- `backend/src/modules/resources/resource.integration.test.ts`
+
+## Decision: Keep job status unchanged during reservation and make release idempotent
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+The reservation sequence calls for updating job state alongside the allocation, but nothing executes a workload yet. Marking a job `RUNNING` at reservation time would claim behavior that does not exist. Release also needs to be safe to retry, since later failure recovery will call it during reconciliation.
+
+Decision:
+Leave the job in `SCHEDULED` during reservation and treat the `RESERVED` allocation row as the authoritative record that capacity is held; execution will own the transition to `RUNNING`. Make release idempotent: releasing an already released job returns the existing record with `alreadyReleased: true` and does not decrement counters again, while a job that never reserved returns `NO_ACTIVE_ALLOCATION`. Derive worker status from accounting, setting `BUSY` while any reservation exists and `IDLE` when the last is released.
+
+Alternatives Considered:
+- Transition the job to `RUNNING` during reservation
+- Add a dedicated `RESERVED` job state
+- Return an error when releasing twice
+- Manage worker status only from execution or monitoring
+
+Reasoning:
+Not faking `RUNNING` keeps documented behavior honest and leaves the lifecycle for execution to drive. The allocation table already distinguishes reserved from released, so an extra job state would duplicate it. Idempotent release is safer for recovery paths that may retry after a crash.
+
+Consequences:
+A `SCHEDULED` job may or may not hold a reservation, so the allocation record must be consulted to tell the difference. Adding a `RESERVED` job state later would require a migration and a transition-policy change. `ROLLED_BACK` remains unused for now and is reserved for recovery reconciliation.
+
+Affected Components:
+- `backend/src/modules/resources/resource.service.ts`
+- `backend/src/modules/resources/resource.repository.ts`
+- `docs/flow.md`
+
+## Decision: Grant the backend container access to the host Docker socket
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+Execution has to create real containers, and the backend runs inside a container of its own. Reaching the daemon requires mounting the host Docker socket into the backend service. That mount is root-equivalent on the host: anything able to create containers can mount the host filesystem into a new one.
+
+Decision:
+Mount `/var/run/docker.sock` into the backend service only, and compensate in code rather than by restricting the socket. The image is a constant, not configuration. The container specification is built entirely by the backend: limits equal to the reservation, no network, read-only root filesystem, no bind mounts, all capabilities dropped, no privilege escalation, a PID ceiling, no restart policy, and no entrypoint override. Request bodies cannot carry an image, command, environment, or timeout. Document the exposure instead of implying it does not exist.
+
+Alternatives Considered:
+- A Docker socket proxy restricting the reachable API surface
+- Running the backend on the host and leaving the containerised stack unable to execute
+- Shelling out to the `docker` CLI from inside the container
+- Rootless Docker or a dedicated container runtime
+
+Reasoning:
+A socket proxy sounds safer but is not: execution needs `POST /containers/create`, which is by itself enough to mount the host filesystem into a new container, so the proxy would add a service and its configuration while blocking nothing that matters. Keeping the backend on the host would break the single-command stack that every other phase relies on. Rootless Docker would genuinely reduce the blast radius but changes the developer's whole Docker installation, which is out of scope for a prototype on one machine. Given that, the honest position is to accept the exposure for a local single-machine prototype, keep the frontend well away from it, and make the container itself as inert as possible.
+
+Consequences:
+The backend container is a privileged component in practice, and the decision would have to be revisited before anything resembling multi-tenancy or a shared host. The frontend never receives Docker access. `DOCKER_SOCKET_PATH` defaults per platform so the same code works on the Windows host and in the Linux container.
+
+Affected Components:
+- `compose.yaml`
+- `backend/src/config/env.ts`
+- `backend/src/modules/executions/execution.runtime.ts`
+
+## Decision: Talk to the Docker Engine API directly instead of adding a client library
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+Execution needs seven daemon operations: version, image inspect, container create, start, wait, logs, and remove. The usual choice is `dockerode`.
+
+Decision:
+Write a small adapter over `node:http` with `socketPath`, in `docker.client.ts`, exposing only those operations. Negotiate the API version from the daemon's `/version` response, clamped to what the adapter was written against and checked against the daemon's minimum. Demultiplex Docker's framed log stream directly and cap each stream while reading it.
+
+Alternatives Considered:
+- `dockerode`
+- Shelling out to the `docker` CLI
+- Pinning a fixed API version with no negotiation
+
+Reasoning:
+`dockerode` 5.0.1 pulls in gRPC and protobuf for features this project does not use, which is a lot of dependency surface for seven calls and works against the project's minimal-dependency posture. Node's `socketPath` handles both a unix socket and a Windows named pipe, so one adapter covers the host and the container. Writing it also makes the reachable API surface explicit, which is the point: the file is the complete list of what OrchestrOS can ask the daemon to do. Shelling out to the CLI would mean string-building commands, exactly the injection surface the project avoids elsewhere. Version negotiation is cheap insurance: Docker 29 already raised its minimum API version, and a hard-coded version would eventually break silently.
+
+Consequences:
+No new npm dependency and `npm audit` stays clean. The log demultiplexer and version negotiation are ours to maintain and are unit-tested directly. Adding an eighth operation means writing it rather than calling it.
+
+Affected Components:
+- `backend/src/modules/executions/docker.client.ts`
+- `backend/src/modules/executions/execution.test.ts`
+
+## Decision: Ship a purpose-built workload runner image with self-imposed work ceilings
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+The workload types are fixed by the domain, and no arbitrary command or image may run. A generic base image plus a command would violate that. Separately, `workloadSize` is a generated number with no calibration against real runtime: a derived matrix size of 200,000 would mean a 200,000-cubed multiplication.
+
+Decision:
+Build one image, `orchestros/workload-runner:v1`, from `workload-runner/`, whose entrypoint is a single dependency-free program implementing the five workload types. Its only inputs are four validated environment variables. The runner applies a per-type ceiling on work and an allocation budget derived from the container's memory limit, then reports the size it actually used as `effectiveSize`. Invalid input exits `64` before any work starts.
+
+Alternatives Considered:
+- A stock image plus a command string per workload type
+- Trusting `workloadSize` literally
+- Refusing jobs whose memory reservation is small
+- Calibrating sizes so runtime matches `estimatedDurationSeconds`
+
+Reasoning:
+Owning the image is what makes "no arbitrary commands" true rather than aspirational, and it lets the runner validate its own inputs as a second line of defence. Trusting the size literally would produce containers that run for hours or get OOM-killed, and reporting a size that was not used would make recorded results dishonest. Sizing allocations from the memory limit is better than refusing small reservations, because a `LIGHT` generated job legitimately reserves 64 MiB. Calibrating runtime against the estimate is a research problem in itself and is not needed for comparing policies.
+
+Consequences:
+`effectiveSize` is frequently below the requested size, most visibly for `MATRIX_MULTIPLICATION`, and recorded runtimes are measured rather than predicted. For `SLEEP` the size is read as seconds, so a `CUSTOM` batch that samples a large size asks for a long sleep, bounded by the runner's 120 second ceiling and the execution timeout. Changing a workload implementation changes its checksums, so the runner is versioned and the version is part of the checksum input.
+
+Affected Components:
+- `workload-runner/run.js`
+- `workload-runner/Dockerfile`
+- `backend/src/modules/executions/execution.contract.ts`
+
+## Decision: Derive the workload seed from the job name
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+A run has to be reproducible: the same workload executed twice should produce the same result. That needs a deterministic seed per job, and jobs created manually have no batch to inherit one from.
+
+Decision:
+Derive a 32-bit seed by hashing the job name, in `deriveWorkloadSeed`. Generated names already encode the batch seed and sequence, so reusing a batch reproduces the same names, seeds, and checksums.
+
+Alternatives Considered:
+- A new `executionSeed` column on `Job`
+- Seeding from the batch seed plus `batchSequence`, with a fallback for manual jobs
+- Seeding from the job id
+- Not seeding at all
+
+Reasoning:
+Hashing the name needs no migration and makes reproducibility follow from the thing that is already reproducible. Seeding from the batch would need a separate rule for manual jobs. Seeding from the job id would be stable per job but would not reproduce across a regenerated batch, which is the case that matters for experiments. This was verified live: reusing a batch reproduced byte-identical checksums for all ten jobs across four workload types, on different workers and in different containers.
+
+Consequences:
+Two jobs with the same name get the same seed, which is intended for batch reuse and harmless otherwise. Renaming a job changes its seed and therefore its checksum.
+
+Affected Components:
+- `backend/src/modules/executions/execution.contract.ts`
+- `backend/src/modules/executions/execution.service.ts`
+
+## Decision: Start executions asynchronously and settle them idempotently
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+`estimatedDurationSeconds` allows up to 24 hours, and even generated jobs reach 90 seconds, so an endpoint that blocks until the container exits is not viable. Something still has to record the outcome and release the reservation.
+
+Decision:
+`POST /api/executions/start` claims the job, launches the container, and returns HTTP 202 immediately. A background task awaits the exit and settles the run. `POST /api/executions/:id/settle` performs the same finalisation on demand and is idempotent, so it doubles as the recovery path. Finalisation is guarded by the execution's current status, so the two paths cannot both release capacity.
+
+Alternatives Considered:
+- A synchronous run endpoint
+- Polling containers on a timer
+- A separate worker process or job queue
+- Requiring a manual settle for every run
+
+Reasoning:
+Returning immediately keeps the API usable and matches how the orchestration chain is driven today, one explicit call per stage. Awaiting the daemon's `wait` endpoint is cheaper and more accurate than polling. A separate worker process would be the right answer for a system that must survive restarts, but it is a larger change than this increment needs and the recovery path already exists. Requiring a manual settle would make normal completion depend on a human.
+
+Consequences:
+If the backend process dies mid-execution, the execution stays `RUNNING` and its reservation stays held until someone settles it; that gap is documented rather than hidden, and automatic reconciliation belongs to the failure-recovery increment. Graceful shutdown waits for in-flight settlements. Tests expose `awaitPendingSettlements()` so they can assert on completed runs deterministically.
+
+Affected Components:
+- `backend/src/modules/executions/execution.service.ts`
+- `backend/src/modules/executions/execution.routes.ts`
+- `backend/src/server.ts`
+
+## Decision: Record a timeout as an interruption and never invent a result
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+A container can exit cleanly, exit non-zero, be killed for exceeding its memory limit, run past the orchestrator's time limit, exit zero while printing nothing useful, or disappear before it was recorded. Each needs a defensible mapping onto the execution and job states.
+
+Decision:
+Classify outcomes explicitly. A timeout becomes `INTERRUPTED` on both the execution and the job, because the workload did not misbehave, the orchestrator stopped it, and `INTERRUPTED` keeps the job eligible for a later requeue. Every other non-success becomes `FAILED` with a specific reason, including a distinct message for an OOM kill. A zero exit whose stdout does not match the runner contract is `FAILED`, not a success. An execution whose container has vanished is `FAILED` with a null exit code. Capacity is released on every path.
+
+Alternatives Considered:
+- Treating a timeout as `FAILED`
+- Treating an unparseable result as a success because the exit code was zero
+- Inferring an exit code when the container is gone
+- Leaving a lost container's execution open
+
+Reasoning:
+Collapsing every bad ending into `FAILED` would throw away the distinction that matters for later preemption and recovery work. Trusting a zero exit with no valid result line would let a silently broken runner look like a completed experiment. Inventing an exit code for a container nobody can inspect would put a fabricated number in the audit trail; a null with an explicit reason is the honest record. Leaving the execution open would strand capacity indefinitely.
+
+Consequences:
+An interrupted job is distinguishable from a failed one, which the requeue path will rely on. `INTERRUPTED` executions carry the exit code the daemon reported after the stop, commonly 137, alongside the timeout reason, so the reason rather than the code explains the outcome. Verified live: a `SLEEP` job against a ten second limit ran for just over fifteen seconds including the stop grace, then recorded `INTERRUPTED`, a null result, a released allocation, and an idle worker.
+
+Affected Components:
+- `backend/src/modules/executions/execution.service.ts`
+- `backend/src/modules/executions/execution.contract.ts`
+
+## Decision: Lock the job row when claiming an execution
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+Two concurrent start requests for one job must not both launch a container. A conditional `SCHEDULED -> RUNNING` update alone guarantees that, but the loser's refusal then depends on interleaving: it could be told the job is "not runnable" when the truth is that another request just started it. An integration test caught exactly that.
+
+Decision:
+Lock the job row with `SELECT ... FOR UPDATE` at the start of the claim transaction, then decide. A `RUNNING` job that owns a live `PENDING` or `RUNNING` execution reports `EXECUTION_ALREADY_STARTED`; a `RUNNING` job with no live execution is an orphan and reports `JOB_NOT_EXECUTABLE`. The conditional update stays as a second guard.
+
+Alternatives Considered:
+- Relying on the conditional update alone
+- Relying on the unique indexes and mapping every collision to "already started"
+- Accepting a timing-dependent error code
+
+Reasoning:
+This mirrors the locking already used for reservation, so the codebase has one concurrency idiom rather than two. The unique indexes do prevent duplicate rows, but mapping their collisions would not distinguish a concurrent start from an orphaned job left behind by a crash, and that distinction is what recovery will need. A timing-dependent error code is a bad API contract even when every outcome is individually correct.
+
+Consequences:
+Claims for the same job serialise, which is intended. The orphan case now has a defined answer and stays refused until reconciliation exists. Verified live and in an integration test: concurrent claims produce exactly one execution and one `EXECUTION_ALREADY_STARTED`.
+
+Affected Components:
+- `backend/src/modules/executions/execution.repository.ts`
+- `backend/src/modules/executions/execution.integration.test.ts`

@@ -9,13 +9,15 @@ const currentCapabilities = [
   "Deterministic workload batches",
   "FCFS, SJF, Priority, Round Robin scheduling",
   "Resource-aware worker placement",
+  "Transaction-safe CPU and memory reservation",
+  "Controlled Docker workload execution",
+  "Reproducible result checksums",
 ];
 
 const futureCapabilities = [
-  "Transactional resource reservation",
-  "Docker workload execution",
   "Monitoring and autoscaling",
   "Failure recovery",
+  "Preemption and runtime cancellation",
 ];
 
 export function App() {
@@ -50,7 +52,7 @@ export function App() {
   return (
     <main className="shell">
       <header className="hero">
-        <p className="eyebrow">Phase 4 · Placement</p>
+        <p className="eyebrow">Phase 6 · Controlled Execution</p>
         <h1>OrchestrOS</h1>
         <p className="subtitle">
           A Kubernetes-inspired local container orchestration prototype with reproducible
@@ -58,7 +60,7 @@ export function App() {
         </p>
       </header>
 
-      <section className="status-grid" aria-label="Phase 2 service status">
+      <section className="status-grid" aria-label="Service status">
         <article className="status-card">
           <span>Frontend</span>
           <strong className="healthy">Online</strong>
@@ -83,11 +85,13 @@ export function App() {
       <section className="foundation-panel">
         <div>
           <p className="eyebrow">Implemented now</p>
-          <h2>Scheduled by policy, placed by resources</h2>
+          <h2>Scheduled, reserved, and actually executed</h2>
           <p>
             Seeded workloads become queued jobs, the scheduler picks the next job by policy, and
-            placement chooses a logical worker with enough free CPU and memory. Placement records
-            the decision only; reserving capacity and running containers come later.
+            placement chooses a logical worker. Reservation commits capacity inside a PostgreSQL
+            transaction that locks the worker row, so concurrent jobs can never over-allocate it.
+            The job then runs as one locked-down container limited to exactly that reservation,
+            and recording its result releases the capacity in a single transaction.
           </p>
           <ul>
             {currentCapabilities.map((capability) => (

@@ -204,5 +204,6 @@ model JobExecution {
   @@unique([allocationId, jobId, workerId])
   @@index([jobId])
   @@index([workerId])
+  @@index([status, createdAt])
   @@map("job_executions")
 }

@@ -25,7 +25,8 @@
     "db:seed": "npm run db:seed --workspace backend",
     "db:setup": "npm run db:setup --workspace backend",
     "test": "npm run test --workspace backend",
-    "docker:up": "docker compose up --build",
+    "docker:images": "docker build -t orchestros/workload-runner:v1 workload-runner",
+    "docker:up": "npm run docker:images && docker compose up --build",
     "docker:down": "docker compose down"
   }
 }

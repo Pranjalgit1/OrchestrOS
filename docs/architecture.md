@@ -10,7 +10,7 @@ Logical workers are database-backed capacity records, not physical computers, VM
 
 The system is an npm-workspace monorepo with a React/Vite frontend, modular Express backend, Prisma persistence adapter, and local PostgreSQL supplied by Compose. Backend features use route, service, repository, and pure-domain boundaries inside one process.
 
-The current implementation includes foundation startup, job/worker management, and deterministic workload generation. Scheduling, placement, resource reservation, controlled Docker workloads, monitoring, autoscaling, failure recovery, experiments, and ML remain future increments unless `docs/flow.md` says otherwise.
+The current implementation includes foundation startup, job/worker management, deterministic workload generation, scheduling, placement, transactional resource reservation, and controlled Docker execution. Monitoring, autoscaling, failure recovery, experiments, and ML remain future increments unless `docs/flow.md` says otherwise.
 
 ## 3. Components
 
@@ -18,20 +18,21 @@ The current implementation includes foundation startup, job/worker management, a
 | --- | --- | --- |
 | Frontend | Show service state and implemented/planned capabilities | Status shell implemented |
 | Backend API | Validate requests and expose modular operations | Implemented |
-| Job manager/queue | Persist controlled jobs and enforce create/read/cancel lifecycle | Implemented management; claiming pending |
+| Job manager/queue | Persist controlled jobs and enforce the create/read/cancel lifecycle | Implemented; claiming is done by the scheduler and by execution |
 | Worker manager | Persist logical capacity and initial workers | Implemented management |
 | Workload generator | Produce and persist deterministic controlled workload batches | Implemented |
 | Scheduler | Select FCFS, SJF, Priority, or Round Robin job | Implemented |
 | Placement | Select First Fit, Least Loaded, or Resource-Aware worker | Implemented (advisory) |
-| Resource manager | Transactional CPU/memory reservation and release | Pending |
-| Container manager | Run predefined workloads under Docker limits | Pending |
+| Resource manager | Transactional CPU/memory reservation and release | Implemented |
+| Container manager | Run predefined workloads under Docker limits | Implemented |
+| Workload runner image | Execute one of five fixed programs and print a checksum | Implemented |
 | Monitoring/autoscaling/failure/ML/experiments | Control and evaluation loops | Pending |
 
 ## 4. Job lifecycle and queue
 
-Required job states are `CREATED`, `QUEUED`, `WAITING`, `SCHEDULED`, `RUNNING`, `COMPLETED`, `FAILED`, `INTERRUPTED`, and `CANCELLED`. Valid edges are centralized in `job.transitions.ts`. Manual and generated jobs enter PostgreSQL as `QUEUED`. Only queued cancellation is active; runtime cancellation waits for container and resource cleanup.
+Required job states are `CREATED`, `QUEUED`, `WAITING`, `SCHEDULED`, `RUNNING`, `COMPLETED`, `FAILED`, `INTERRUPTED`, and `CANCELLED`. Valid edges are centralized in `job.transitions.ts`. Manual and generated jobs enter PostgreSQL as `QUEUED`. Execution drives `SCHEDULED -> RUNNING` and then `RUNNING -> COMPLETED`, `FAILED`, or `INTERRUPTED`. Only queued cancellation is active; cancelling a running job waits for a later increment.
 
-PostgreSQL is the only queue source of truth. There is no in-memory queue or Redis. `arrivalAt` and `arrivalOffsetSeconds` are planned eligibility metadata; no timer releases jobs and no scheduler claims them yet.
+PostgreSQL is the only queue source of truth. There is no in-memory queue or Redis. `arrivalAt` and `arrivalOffsetSeconds` gate eligibility: the scheduler only considers queued jobs whose planned arrival has passed. No timer releases jobs on its own; every stage of the chain is driven by an explicit request.
 
 ## 5. Deterministic workload generation
 
@@ -81,15 +82,15 @@ Worker states are `STARTING`, `ACTIVE`, `IDLE`, `BUSY`, `STOPPING`, and `FAILED`
 
 ## 7. Database and consistency
 
-PostgreSQL contains `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, and `JobExecution`. SQL constraints enforce resource bounds, valid batch sizes/offsets, complete batch identity, unique sequence, one active reservation per job, and matching execution/allocation job-worker identity. Allocation and execution records remain future runtime foundations.
+PostgreSQL contains `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, and `JobExecution`. All five are written by running code. SQL constraints enforce resource bounds, valid batch sizes/offsets, complete batch identity, unique sequence, one active reservation per job, matching execution/allocation job-worker identity, one execution per allocation, one execution per job attempt, bounded captured output, byte-range exit codes, hex container ids, and the rule that a terminal execution records when it completed.
 
 Compose runs deployment migrations and the worker seed before backend startup. Readiness queries all five models. Published ports are loopback-only.
 
-Future resource reservation must begin a transaction, lock the worker row, recheck CPU/memory inside the transaction, update allocation/worker/job atomically, and commit before container startup.
+Resource reservation is implemented and detailed in section 10: it begins a transaction, locks the worker row, rechecks CPU and memory inside the transaction, updates the allocation and worker counters atomically, and commits before any container could start.
 
 ## 8. Scheduler and placement separation
 
-The scheduler answers only **which job runs next**. It never chooses a worker, reserves resources, or starts containers. Placement, reservation, and execution remain separate future components.
+The scheduler answers only **which job runs next**. It never chooses a worker, reserves resources, or starts containers. Placement, reservation, and execution are separate components with their own endpoints, described in sections 9, 10, and 11.
 
 `scheduler.policies.ts` is pure: it takes candidate jobs, a policy, and the current time, and returns an ordering. Persistence and claiming live in the repository and service.
 
@@ -124,7 +125,7 @@ Placement answers only **which worker runs an already-scheduled job**. It never 
 
 ### Advisory decisions
 
-Placement persists `assignedWorkerId`, `placementStrategy`, and `placedAt` on the job. It deliberately does **not** mutate worker allocation counters or create `ResourceAllocation` rows, because all real reservation must be transaction-safe and that belongs to the reservation increment. A placement decision is therefore a plan that reservation must re-verify while holding a row lock.
+Placement persists `assignedWorkerId`, `placementStrategy`, and `placedAt` on the job. It deliberately does **not** mutate worker allocation counters or create `ResourceAllocation` rows, because all real reservation is transaction-safe and owned by the resource manager. A placement decision is therefore a plan that reservation re-verifies while holding a row lock, and it may be refused if capacity was taken in the meantime.
 
 ### Resource accounting
 
@@ -162,11 +163,142 @@ Lower scores win; ties break on worker name for determinism.
 
 Assignment uses one conditional update matching the job ID, `SCHEDULED` status, and a null worker. Parallel placements of the same job therefore assign it exactly once; losers receive `PLACEMENT_CONFLICT`.
 
-## 10. Docker, monitoring, scaling, failure, and ML
+## 10. Transaction-safe resource management
 
-Only a future backend container manager may access Docker, and it will run predefined workloads with CPU/memory limits. Monitoring will collect only required operational/experiment metrics. Reactive scaling will precede ML-assisted forecasting. Heartbeat failure handling will reconcile resources and requeue recoverable work. These flows are not implemented yet.
+Reservation is the point where an advisory plan becomes a committed claim on capacity. It is the project's core DBMS demonstration.
 
-## 11. API boundary
+### Reservation sequence
+
+```text
+BEGIN
+  SELECT ... FROM workers WHERE id = $1 FOR UPDATE   -- row-level lock
+  IF the job already holds a RESERVED allocation THEN
+      refuse with ALREADY_RESERVED
+  re-read capacity and allocated counters
+  IF capacity - allocated >= request THEN
+      INSERT resource_allocations (status = RESERVED)
+      UPDATE workers SET allocated = allocated + request, status = BUSY
+  ELSE
+      refuse without writing
+COMMIT
+```
+
+The recheck happens **inside** the transaction while the lock is held. A placement decision made earlier is advisory and may be stale, so reservation never trusts it. Concurrent reservations for the same worker serialise on the lock: the first commits, the second re-reads the updated counters and is refused with `INSUFFICIENT_RESOURCES`.
+
+The duplicate check deliberately precedes the capacity check. A job that already holds a reservation is itself counted in the worker's allocated total, so checking capacity first would report a shortfall that does not exist and hide the real cause. The partial unique index still guards the insert, so a concurrent duplicate that passes the check is mapped to the same `ALREADY_RESERVED` outcome.
+
+The amount reserved is always the job's own `cpuRequiredMillicores` and `memoryRequiredMiB`. Clients cannot choose an amount or a worker.
+
+### Release sequence
+
+```text
+BEGIN
+  find the RESERVED allocation for the job
+  SELECT ... FROM workers WHERE id = $1 FOR UPDATE
+  UPDATE resource_allocations SET status = RELEASED, releasedAt = now()
+  UPDATE workers SET allocated = allocated - reserved
+  IF allocated is now zero THEN status = IDLE
+COMMIT
+```
+
+Release is idempotent: releasing an already released job returns the existing record without decrementing again. A job that never reserved returns `NO_ACTIVE_ALLOCATION`.
+
+### Layered safety
+
+Three independent mechanisms prevent over-allocation:
+
+1. **Row lock plus in-transaction recheck** serialises competing reservations.
+2. **A partial unique index** allows only one `RESERVED` allocation per job.
+3. **A SQL `CHECK` constraint** (`allocated <= capacity`) is the last line of defence if application logic is ever wrong.
+
+Atomicity means a failure at any step rolls back the allocation row, the counter update, and the worker status together, so no capacity is ever half-claimed.
+
+Because reservations legitimately block on a row lock, the transaction uses a widened `maxWait` of 15s and `timeout` of 20s rather than Prisma's tighter defaults. `lockWaitMs` is measured and returned to make contention observable.
+
+### Boundary
+
+Reservation does not start a container and does not move the job to `RUNNING`; execution owns that transition. The allocation row is the authoritative record that capacity is held. Worker status becomes `BUSY` while any reservation exists and returns to `IDLE` when the last one is released.
+
+## 11. Controlled Docker execution
+
+Execution is the only component that talks to Docker. It runs a reserved job as one container, records what happened, and returns the reservation.
+
+### The controlled workload image
+
+`workload-runner/` builds a single image, `orchestros/workload-runner:v1`, whose entrypoint is one fixed program. The image name is a constant in `execution.contract.ts`, not configuration, so there is no code path that can run any other image. The program accepts no command, script, or formula; its entire input is four environment variables the backend constructs itself:
+
+| Variable | Meaning |
+| --- | --- |
+| `ORCHESTROS_WORKLOAD_TYPE` | One of the five `WorkloadType` values |
+| `ORCHESTROS_WORKLOAD_SIZE` | The job's persisted nominal size |
+| `ORCHESTROS_SEED` | Derived from the job name |
+| `ORCHESTROS_MEMORY_LIMIT_MIB` | The container's memory limit |
+
+The runner validates all four before doing any work and exits `64` if any is missing, malformed, or out of range. On success it prints exactly one JSON line and exits `0`; a workload that throws exits `70`.
+
+### Work ceilings and honest sizing
+
+A nominal workload size is an experiment input, not a promise about runtime, so the runner bounds itself two ways: a per-type ceiling on work, and an allocation budget derived from the container's memory limit. It reports the size it actually used as `effectiveSize`, so a recorded result never overstates what ran.
+
+| Type | Ceiling | Size means |
+| --- | ---: | --- |
+| `CPU_INTENSIVE` | 50,000,000 | mixing iterations |
+| `SORTING` | 2,000,000 | elements sorted |
+| `DATA_PROCESSING` | 2,000,000 | records aggregated |
+| `MATRIX_MULTIPLICATION` | 320 | matrix dimension |
+| `SLEEP` | 120 | **seconds** |
+
+`SLEEP` is the one type whose size is a duration. Generated batches derive `workloadSize` from the estimate, so that is consistent, but a `CUSTOM` batch samples size independently and can therefore ask for a long sleep.
+
+### Reproducibility
+
+The seed is a 32-bit hash of the job name. Generated names encode the batch seed and sequence, so reusing a batch reproduces the same names, the same seeds, and therefore the same checksums, without storing an extra column. The runner uses the same Mulberry32 generator as the backend and excludes its measured duration from the checksum.
+
+### Container restrictions
+
+Every container is created with the same locked-down specification, all of it decided by `execution.runtime.ts`:
+
+- CPU and memory limits set to exactly what the job reserved, with swap equal to memory
+- `NetworkMode: none` and networking disabled
+- Read-only root filesystem, no bind mounts, no privileges, `CapDrop: ALL`, `no-new-privileges`
+- A PID ceiling, no restart policy, and the image entrypoint never overridden
+- Labels carrying the job, execution, worker, and allocation ids
+
+### Execution sequence
+
+```text
+claim   BEGIN; lock the job row; verify SCHEDULED + placed + RESERVED;
+        SCHEDULED -> RUNNING; insert JobExecution(PENDING, attempt N); COMMIT
+start   create and start the container; record its id; PENDING -> RUNNING
+await   wait for exit, bounded by EXECUTION_TIMEOUT_SECONDS
+settle  BEGIN; record status, exit code, captured output, result;
+        set the job's terminal state; release the reservation; COMMIT
+clean   remove the container
+```
+
+Claiming locks the job row so concurrent starts serialise: exactly one launches a container and the other is told the job was already started. Settling is idempotent, so the automatic path and a manual recovery call cannot both release capacity.
+
+### Outcomes
+
+| Container result | Execution | Job |
+| --- | --- | --- |
+| Exit 0 with a valid result line | `COMPLETED` | `COMPLETED` |
+| Exit 0 with no valid result line | `FAILED` | `FAILED` |
+| Non-zero exit, including an OOM kill | `FAILED` | `FAILED` |
+| Stopped for exceeding the timeout | `INTERRUPTED` | `INTERRUPTED` |
+| Container missing before it was settled | `FAILED` | `FAILED` |
+
+A timeout is an interruption rather than a failure: the workload did not misbehave, the orchestrator stopped it, and `INTERRUPTED` keeps the job eligible for a later requeue. Capacity is released on every one of these paths.
+
+### Known boundary
+
+The container is awaited in the backend process. If that process dies mid-execution, the execution stays `RUNNING` and its reservation stays held; `POST /api/executions/:id/settle` is the recovery path today, and automatic reconciliation belongs to the failure-recovery increment. Cancelling a running job is not implemented yet.
+
+## 11a. Monitoring, scaling, failure, and ML
+
+Monitoring will collect only required operational/experiment metrics. Reactive scaling will precede ML-assisted forecasting. Heartbeat failure handling will reconcile resources and requeue recoverable work. These flows are not implemented yet.
+
+## 12. API boundary
 
 Express enforces a 16 KB body limit, strict Zod schemas, structured errors, one configured CORS origin, and generic internal errors. Implemented workload endpoints are:
 
@@ -185,9 +317,23 @@ Implemented placement endpoints are:
 - `GET /api/placement/preview`
 - `POST /api/placement/assign`
 
-Job and worker management endpoints remain available. The browser and clients never receive Docker daemon access.
+Implemented resource endpoints are:
 
-## 12. Target data flow
+- `POST /api/resources/reserve`
+- `POST /api/resources/release`
+- `GET /api/resources/allocations`
+
+Implemented execution endpoints are:
+
+- `GET /api/executions/runtime`
+- `POST /api/executions/start`
+- `POST /api/executions/:id/settle`
+- `GET /api/executions`
+- `GET /api/executions/:id`
+
+Job and worker management endpoints remain available. A start request carries only a job id: the image, command, environment, limits, and timeout are all backend decisions, and a request containing any of them is rejected as an unrecognized key. The browser and clients never receive Docker daemon access.
+
+## 13. Target data flow
 
 ```text
 Workload Generator -> PostgreSQL-backed Queue -> Scheduler -> Placement
