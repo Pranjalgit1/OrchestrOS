@@ -4,7 +4,7 @@
 
 OrchestrOS is a Kubernetes-inspired local container orchestration prototype for controlled computational workloads. It runs on one physical development machine with logical workers, PostgreSQL-backed state, and a modular TypeScript backend.
 
-> **Current implementation:** deterministic workload batches, persistent jobs/workers, controlled lifecycle management, exact batch reuse, policy-based scheduling (FCFS, SJF, Priority, Round Robin), resource-aware placement decisions (First Fit, Least Loaded, Resource-Aware), transaction-safe reservation and release with row-level locking, controlled Docker execution of the five predefined workloads with recorded results, database migrations, health checks, and tests work. Monitoring, autoscaling, recovery, runtime cancellation, experiments, and ML do not run yet.
+> **Current implementation:** deterministic workload batches, persistent jobs/workers, controlled lifecycle management, exact batch reuse, policy-based scheduling (FCFS, SJF, Priority, Round Robin), resource-aware placement decisions (First Fit, Least Loaded, Resource-Aware), transaction-safe reservation and release with row-level locking, controlled Docker execution of the five predefined workloads with recorded results, live operational monitoring with recorded utilization history, database migrations, health checks, and tests work. Autoscaling, recovery, runtime cancellation, experiments, and ML do not run yet.
 
 ## System boundary
 
@@ -41,6 +41,9 @@ Controlled container (limits = reservation, no network)
               |
               v
 Recorded result + capacity released in one transaction
+              |
+              v
+   Metrics derived from those same records
 ```
 
 Target orchestration remains:
@@ -50,7 +53,7 @@ Generator -> Queue -> Scheduler -> Placement -> Transactional Reservation
   -> Docker Execution -> Monitoring -> Resource Release
 ```
 
-Monitoring and autoscaling are the remaining links.
+Every stage above now runs. Autoscaling is the remaining link.
 
 ## Implemented capabilities
 
@@ -75,7 +78,11 @@ Monitoring and autoscaling are the remaining links.
 - Containers limited to exactly the CPU and memory the job reserved
 - Recorded exit codes, captured output, and reproducible result checksums
 - Outcome recording and capacity release in one transaction
-- Structured validation/errors and five-model readiness
+- Live metrics derived from the authoritative records, so they cannot drift
+- Job lifecycle timings with p95, throughput, and success rate
+- Sampled utilization history with retention pruning
+- A live dashboard with cluster meters, worker table, and utilization sparkline
+- Structured validation/errors and readiness across the five authoritative models
 - Unit, HTTP-boundary, PostgreSQL integration, and real-container tests
 
 Scheduling selects **which job runs next** and moves it from `QUEUED` to `SCHEDULED`. It does not choose a worker, reserve resources, or start a container.
@@ -228,6 +235,53 @@ npm run docker:images
 > **Security note:** the backend container mounts the host Docker socket, which it needs to create workload containers. That is root-equivalent access to the host Docker daemon, accepted deliberately for a local single-machine prototype and recorded in [`docs/decision.md`](docs/decision.md). The frontend never receives it.
 
 If the backend process dies mid-execution, the execution stays `RUNNING` and keeps its reservation; `POST /api/executions/:id/settle` is the recovery path until automatic reconciliation exists.
+
+## Monitoring
+
+Monitoring observes the orchestrator without participating in it. Almost every metric is **derived from the authoritative records at read time** rather than accumulated in counters, so a metric cannot drift out of step with the state it describes.
+
+The one exception is utilization over time. Worker counters record only the present, so a history of them cannot be reconstructed later. `worker_samples` stores that history and nothing else.
+
+### Measured stages
+
+Five durations come from a job's own timestamps, each reported with count, average, minimum, maximum, and p95:
+
+| Metric | Measured as |
+| --- | --- |
+| `queueWait` | `scheduledAt - arrivalAt` |
+| `placementDelay` | `placedAt - scheduledAt` |
+| `startDelay` | `startedAt - placedAt` |
+| `execution` | `completedAt - startedAt` |
+| `turnaround` | `completedAt - arrivalAt` |
+
+A stage nothing has reached yet reports a zero count rather than being absent, and success rate is `null` before anything finishes rather than a misleading 0%.
+
+### Sampling
+
+One pass writes one row per worker sharing a single timestamp, so grouping on it reconstructs the cluster at that instant. A unique index makes a repeated pass a no-op. Pruning runs inside each pass, so history stays bounded.
+
+```text
+MONITORING_SAMPLE_INTERVAL_SECONDS=15   # 0 disables periodic sampling
+MONITORING_SAMPLE_RETENTION_HOURS=24    # 0 keeps history forever
+```
+
+The sampler is the project's only background loop. It is started by `server.ts` rather than `app.ts`, so importing the app never starts a timer, and it writes only `worker_samples`.
+
+### Monitoring APIs
+
+| Method | Endpoint | Behavior |
+| --- | --- | --- |
+| `GET` | `/api/monitoring/overview` | Cluster, workers, queue, reservations, and running containers |
+| `GET` | `/api/monitoring/jobs?windowMinutes=60` | Lifecycle timings, throughput, and success rate |
+| `GET` | `/api/monitoring/samples?windowMinutes=60` | Recorded utilization as cluster points over time |
+| `GET` | `/api/monitoring/config` | Sampling interval and retention |
+| `POST` | `/api/monitoring/sample` | Record one sampling pass immediately |
+
+Windows accept 1 minute to 7 days and unknown query keys are rejected, so a read cannot ask the database to scan without limit.
+
+### Dashboard
+
+The dashboard polls these endpoints every five seconds and shows cluster CPU and memory meters, a per-worker table, queue depth, throughput, lifecycle timings, running containers, and a utilization sparkline. `Refresh` re-reads on demand and `Capture sample` forces a data point, which is useful when demonstrating. The dashboard reads metrics only; it cannot start, stop, or modify work.
 
 ### Placement APIs
 
@@ -422,14 +476,16 @@ docker compose config
 - Settling a run is idempotent, so automatic and manual paths cannot double-release.
 - Captured output, exit codes, and container ids are bounded by `CHECK` constraints.
 - Only the backend reaches the Docker daemon; the frontend never receives that access.
+- Monitoring never writes orchestration state; metrics are derived so they cannot contradict it.
+- Sampled rows carry the same `CHECK` constraints as real accounting.
 - Published ports bind to `127.0.0.1`.
 
 ## Remaining work
 
-1. Quantum-based preemption and runtime job cancellation
-2. Monitoring and dashboard pages
-3. Reactive autoscaling
-4. Heartbeat failure recovery, including reconciling executions orphaned by a backend restart
+1. Reactive autoscaling
+2. Heartbeat failure recovery, including reconciling executions orphaned by a backend restart
+3. Quantum-based preemption and runtime job cancellation
+4. Interactive orchestration controls in the dashboard
 5. Historical ML data and proactive scaling
 6. Reproducible policy experiments and graphs
 

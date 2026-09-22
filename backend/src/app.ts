@@ -7,6 +7,7 @@ import { AppError } from "./errors/app-error.js";
 import { executionRouter } from "./modules/executions/execution.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
 import { jobRouter } from "./modules/jobs/job.routes.js";
+import { monitoringRouter } from "./modules/monitoring/monitoring.routes.js";
 import { placementRouter } from "./modules/placement/placement.routes.js";
 import { resourceRouter } from "./modules/resources/resource.routes.js";
 import { schedulerRouter } from "./modules/scheduler/scheduler.routes.js";
@@ -26,8 +27,8 @@ app.use(express.json({ limit: "16kb" }));
 app.get("/api", (_request, response) => {
   response.json({
     name: "OrchestrOS API",
-    phase: 6,
-    status: "execution-ready",
+    phase: 7,
+    status: "monitored-execution",
   });
 });
 app.use("/api/health", healthRouter);
@@ -37,6 +38,7 @@ app.use("/api/scheduler", schedulerRouter);
 app.use("/api/placement", placementRouter);
 app.use("/api/resources", resourceRouter);
 app.use("/api/executions", executionRouter);
+app.use("/api/monitoring", monitoringRouter);
 app.use("/api/workers", workerRouter);
 
 app.use((_request, response) => {

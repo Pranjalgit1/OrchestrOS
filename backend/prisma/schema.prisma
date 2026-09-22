@@ -153,9 +153,36 @@ model Worker {
   assignedJobs            Job[]                @relation("AssignedJobs")
   allocations             ResourceAllocation[]
   executions              JobExecution[]
+  samples                 WorkerSample[]
 
   @@index([status])
   @@map("workers")
+}
+
+/// Observational utilization history.
+///
+/// Worker counters record only the present, so utilization over time cannot be
+/// derived after the fact. These rows are the one metric OrchestrOS stores;
+/// every other metric is computed from the authoritative records on read.
+model WorkerSample {
+  id                     String       @id @default(uuid()) @db.Uuid
+  workerId               String       @db.Uuid
+  /// Every worker written by one sampling pass shares this timestamp.
+  capturedAt             DateTime
+  cpuCapacityMillicores  Int
+  memoryCapacityMiB      Int
+  cpuAllocatedMillicores Int
+  memoryAllocatedMiB     Int
+  status                 WorkerStatus
+  runningExecutions      Int          @default(0)
+  reservedAllocations    Int          @default(0)
+  createdAt              DateTime     @default(now())
+  // Samples are observational, not authoritative, so they follow the worker.
+  worker                 Worker       @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  @@unique([workerId, capturedAt])
+  @@index([capturedAt])
+  @@map("worker_samples")
 }
 
 model ResourceAllocation {

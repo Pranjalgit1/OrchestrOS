@@ -1,6 +1,6 @@
 # OrchestrOS Actual Execution Flow
 
-This document describes code that currently executes. The current implementation includes deterministic workload generation, persistent batch reuse, policy-based scheduling, resource-aware placement decisions, transaction-safe resource reservation and release, and controlled Docker execution of the five predefined workloads. Monitoring, autoscaling, failure recovery, and runtime cancellation do not run.
+This document describes code that currently executes. The current implementation includes deterministic workload generation, persistent batch reuse, policy-based scheduling, resource-aware placement decisions, transaction-safe resource reservation and release, controlled Docker execution of the five predefined workloads, and operational monitoring with recorded utilization history. Autoscaling, failure recovery, and runtime cancellation do not run.
 
 ## Flow: Startup and readiness
 
@@ -10,6 +10,7 @@ This document describes code that currently executes. The current implementation
 4. `health.service.ts` queries `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, and `JobExecution` in one Prisma transaction.
 5. A reachable complete schema returns HTTP 200; a database/schema failure returns structured HTTP 503.
 6. Health checks the database only. Docker reachability is reported separately by `GET /api/executions/runtime`, so an absent daemon does not make the stack look unhealthy.
+7. `server.ts` then starts the monitoring sampler and logs its interval and retention. This happens outside `app.ts` on purpose, so importing the Express app never starts a timer.
 
 The backend container mounts the host Docker socket, which it needs to run workload containers. Building the workload image is a separate step: `npm run docker:images`, which `npm run docker:up` runs first.
 
@@ -89,16 +90,14 @@ On `SIGINT` or `SIGTERM`, the backend prevents duplicate shutdown, drains HTTP c
 | Required flow | Planned increment |
 | --- | --- |
 | Preemption that returns a running job to the queue after its quantum | Later |
-| Worker counter updates and allocation records from a placement decision | Later |
-| Transition of a reserved job to `RUNNING` when its container starts | Later |
-| Controlled Docker workload execution and cleanup | Later |
-| Runtime metric collection and dashboard data | Later |
+| Cancelling a job that is already running | Later |
 | Reactive autoscaling | Later |
-| Heartbeat failure detection and recovery | Later |
+| Heartbeat failure detection and recovery, including reconciling orphaned executions | Later |
+| Interactive orchestration controls in the dashboard | Later |
 | ML dataset, prediction, and proactive scaling | Later |
 | Experiment execution/comparison | Later |
 
-The allocation/execution tables exist, but production code does not write them. Generated arrival metadata does not make jobs run or change state automatically.
+All six tables are written by running code. Generated arrival metadata gates scheduling eligibility but does not make jobs run on its own: every stage of the chain is driven by an explicit request, and the monitoring sampler is the only background loop.
 
 ## Flow: Preview scheduling order
 
@@ -324,7 +323,65 @@ The list route validates optional job UUID, worker UUID, execution status, and a
 ## Flow: Shutdown with work in flight
 
 1. `SIGINT` or `SIGTERM` stops accepting connections.
-2. `executionService.awaitPendingSettlements()` waits for containers already being awaited, so their outcomes are committed and their reservations released.
-3. Prisma disconnects and the process exits.
+2. The monitoring sampler is stopped, so no new observation starts during shutdown.
+3. `executionService.awaitPendingSettlements()` waits for containers already being awaited, so their outcomes are committed and their reservations released.
+4. Prisma disconnects and the process exits.
 
 If the process dies without this path, an execution stays `RUNNING` and keeps holding its reservation. `POST /api/executions/:id/settle` is the recovery path; automatic reconciliation is not implemented.
+
+## Flow: Read live metrics
+
+Entry Point:
+`GET /api/monitoring/overview`
+
+Sequence:
+
+1. `backend/src/modules/monitoring/monitoring.routes.ts`
+2. `MonitoringService.overview()` in `monitoring.service.ts`
+3. `prismaMonitoringRepository.overview()` and `.workerActivity()` in `monitoring.repository.ts`
+4. `workers`, `jobs`, `job_executions`, `resource_allocations`, and `worker_samples`
+
+Detailed Flow:
+
+1. The repository reads workers, job counts by status, execution counts by status, the active reservation count, non-terminal executions, and sample metadata inside one transaction, so every figure describes the same instant rather than a drifting one.
+2. Worker activity is a second query that counts, per worker, active reservations, live executions, total executions, and completed and failed outcomes.
+3. Cluster totals sum capacity and reservations across workers. Utilization is clamped to 0..1, so a reporting bug can never present as impossible load, and a worker with no capacity reports zero rather than dividing by zero.
+4. Jobs are bucketed into waiting (`CREATED`, `QUEUED`, `WAITING`, `SCHEDULED`), running, and finished (`COMPLETED`, `FAILED`, `INTERRUPTED`, `CANCELLED`).
+5. A worker with no recorded activity reports zeros rather than missing fields.
+6. Each running execution reports its job, worker, workload type, container id, and elapsed seconds measured from `startedAt`.
+7. Nothing is written. The response carries `capturedAt` so a client knows how fresh it is.
+
+## Flow: Read job lifecycle metrics
+
+Entry Point:
+`GET /api/monitoring/jobs?windowMinutes=<1..10080>`
+
+1. The window is validated and defaults to 60 minutes; zero, an unbounded value, or an unknown query key is rejected with HTTP 400.
+2. One raw SQL query normalises five stage durations into `(metric, seconds)` pairs and aggregates them once, so PostgreSQL computes the p95 rather than the process loading every row. Prisma cannot aggregate the difference between two columns, which is why this query is raw.
+3. Durations are anchored on jobs created inside the window. Negative durations are not filtered out, so a clock anomaly would surface rather than hide.
+4. Every one of the five stages is reported. A stage nothing has reached yet returns a zero count with null statistics, not an absent key.
+5. Completion counts are anchored on `completedAt` inside the window, because that is what a rate should measure. The window start is echoed so the denominator is never ambiguous.
+6. Success rate is null when nothing finished in the window rather than reported as zero percent.
+
+## Flow: Record a utilization sample
+
+Entry Points:
+The periodic sampler started by `server.ts`, or `POST /api/monitoring/sample`
+
+1. One `INSERT ... SELECT` writes one row per worker, all sharing a single `capturedAt`, copying each worker's capacity, reservations, and status plus its live execution and reservation counts.
+2. A unique index on `(workerId, capturedAt)` with `ON CONFLICT DO NOTHING` makes a repeated pass at the same instant a no-op instead of a double count.
+3. `CHECK` constraints reject any sample that contradicts real accounting: capacity must be positive, allocated must fall within capacity, and counts cannot be negative.
+4. Retention pruning then deletes samples older than the configured window, so history cannot grow without bound whether sampling is periodic or on demand. A retention of zero keeps everything.
+5. The periodic path skips a pass while one is already in flight, so a slow database cannot make passes pile up, and a failure is logged and skipped rather than propagated.
+6. Sampling writes only `worker_samples`. It never touches a job, a reservation, or a container.
+
+## Flow: Read utilization history
+
+Entry Point:
+`GET /api/monitoring/samples?workerId=&windowMinutes=&limit=`
+
+The route validates an optional worker UUID, a bounded window, and a limit from 1–5000 (default 500). Rows are grouped by their shared `capturedAt` into cluster points, each summing that pass's workers, and returned oldest first, which is the order a chart wants. Utilization is recomputed from the summed totals rather than averaged from per-worker percentages.
+
+## Flow: Dashboard polling
+
+The frontend fetches the overview, job metrics, and sample history together every five seconds, aborting in-flight requests on unmount. `Refresh` repeats the read on demand and `Capture sample` posts a sampling pass and then re-reads, so a demo can force a data point instead of waiting for the timer. `GET /api/monitoring/config` reports the interval and retention so the dashboard can explain an empty history rather than looking broken. The dashboard reads metrics only; it cannot start, stop, or modify work.

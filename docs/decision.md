@@ -823,3 +823,184 @@ Claims for the same job serialise, which is intended. The orphan case now has a 
 Affected Components:
 - `backend/src/modules/executions/execution.repository.ts`
 - `backend/src/modules/executions/execution.integration.test.ts`
+
+## Decision: Derive metrics from the authoritative records instead of accumulating them
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+Monitoring needs queue depth, cluster utilization, lifecycle timings, throughput, and per-worker activity. The conventional approach is to increment counters as events happen. This project already stores every event it cares about in `jobs`, `resource_allocations`, and `job_executions`, complete with timestamps.
+
+Decision:
+Compute every metric from those records at read time. Add no counter columns, no metrics event table, and no write path in the orchestration flow. The one exception is utilization over time, which `worker_samples` stores because worker counters record only the present and a history of them cannot be reconstructed after the fact.
+
+Alternatives Considered:
+- Counter columns incremented by the scheduler, placement, reservation, and execution paths
+- A metrics event table written alongside every state change
+- An in-memory metrics registry such as a Prometheus client
+- Sampling everything periodically, including things that are derivable
+
+Reasoning:
+A counter that is incremented separately from the state it describes can drift, and when it does the dashboard contradicts the database with no way to tell which is wrong. Deriving removes that failure mode by construction: a metric is a question about the records, so it cannot disagree with them. It also keeps monitoring out of the write path entirely, which matters because reservation and execution already run inside carefully scoped transactions that should not grow. An in-memory registry would lose everything on restart and could not answer questions about history, which the experiment phase needs. Sampling derivable values would store redundant data that could fall out of step with its source.
+
+Consequences:
+Metric reads cost queries rather than lookups, so windows are bounded (1 minute to 7 days) and limits are capped to keep a query from scanning without limit. Adding a metric usually means writing a query rather than a migration. The five stage timings are computed from column differences, which Prisma cannot aggregate, so that one query is raw SQL.
+
+Affected Components:
+- `backend/src/modules/monitoring/monitoring.repository.ts`
+- `backend/src/modules/monitoring/monitoring.metrics.ts`
+
+## Decision: Store utilization history as per-worker rows sharing one timestamp
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+Utilization over time is the one metric that cannot be derived later. It has to be sampled. The question is what a sample looks like: one row of cluster totals, or one row per worker.
+
+Decision:
+Write one row per worker per pass, with every row in a pass sharing a single `capturedAt`. Grouping on that timestamp reconstructs the cluster as it stood at that instant. A unique index on `(workerId, capturedAt)` with `ON CONFLICT DO NOTHING` makes a repeated pass a no-op. Sample rows carry the same `CHECK` constraints as real accounting, and they cascade with their worker instead of restricting its deletion.
+
+Alternatives Considered:
+- One row per pass holding pre-summed cluster totals
+- A separate `sampleId` column to group a pass
+- Storing computed utilization percentages alongside the raw counters
+- `ON DELETE RESTRICT`, matching the authoritative tables
+
+Reasoning:
+Per-worker rows keep the data normalised and answer per-worker questions that cluster totals would throw away, which the autoscaling and experiment phases will want. Cluster totals are a `GROUP BY` away, so nothing is lost. A shared timestamp is sufficient grouping and needs no extra column; a millisecond-precision collision between two passes is prevented by the unique index rather than tolerated. Storing percentages would duplicate information derivable from the counters and could drift from them. `RESTRICT` is right for authoritative records, because losing a reservation's history would be a correctness problem, but a worker's observations are not authoritative and should not prevent it from being removed.
+
+Consequences:
+Three workers sampled every fifteen seconds is about 17,000 rows a day, which is why retention pruning exists. Reading history means grouping rows rather than selecting them directly, done by a pure function that is unit-tested against known input.
+
+Affected Components:
+- `backend/prisma/migrations/20260922160000_worker_samples/migration.sql`
+- `backend/src/modules/monitoring/monitoring.metrics.ts`
+
+## Decision: Start the sampler in server.ts, not app.ts
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+Every earlier phase is driven by an explicit request; OrchestrOS has had no background work at all. Periodic sampling needs a timer, which makes it the first. Tests import the Express app from `app.ts` dozens of times.
+
+Decision:
+Keep the sampler out of `app.ts` and start it in `server.ts`, so importing the app never starts a timer. Call `unref()` so the sampler can never be the reason the process stays alive, stop it first during shutdown, guard against overlapping passes, and log and swallow failures. Make the interval configurable, with zero disabling periodic sampling and leaving `POST /api/monitoring/sample` as the explicit path.
+
+Alternatives Considered:
+- Starting the timer in `app.ts` alongside route registration
+- A separate sampler process or container
+- No timer at all, sampling only on request
+- A cron-style external scheduler
+
+Reasoning:
+Starting a timer on import would make every test file spawn background database writes, which is both slow and a source of flaky cross-test interference. Keeping it in `server.ts` means the process that actually serves traffic owns the loop and the test suite stays deterministic. A separate process would be the right answer for a production system but doubles the deployment for one small writer. Sampling only on request would make the history feature real in name only, since nobody would be calling it during an unattended run. Guarding overlap matters because a pass that outlives its interval would otherwise queue passes behind each other under load, which is exactly when monitoring should stay cheap.
+
+Consequences:
+The sampler is the project's single background loop and is confined to observation; it writes only `worker_samples`. Graceful shutdown stops it before awaiting execution settlements. A missed observation leaves a gap in the series rather than failing a request, which is the correct trade for a monitoring component.
+
+Affected Components:
+- `backend/src/modules/monitoring/monitoring.sampler.ts`
+- `backend/src/server.ts`
+
+## Decision: Prune inside the sampling pass and bound every metric window
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+Sampled history grows forever if nothing removes it, and metric queries scan whatever range a caller asks for. Both are unbounded by default.
+
+Decision:
+Prune samples older than a configured retention window as part of each sampling pass, and bound every metric query: windows accept 1 minute to 7 days, sample limits cap at 5000, and unknown query keys are rejected. A retention of zero keeps history forever, chosen explicitly.
+
+Alternatives Considered:
+- A separate pruning schedule or maintenance endpoint
+- Unbounded windows, trusting callers
+- Downsampling old samples into coarser buckets
+- A database-level partition or TTL policy
+
+Reasoning:
+Pruning inside the pass means history is bounded whether sampling is periodic or on demand, with no second mechanism that could be forgotten or disabled independently. Bounded windows matter because these are read endpoints computing aggregates over growing tables; an unbounded window is a way to ask the database to scan everything, and rejecting it is cheaper than optimising for it. Downsampling would be the right move at a much larger scale and is not justified for a single-machine prototype. PostgreSQL partitioning would add schema complexity for a table measured in tens of thousands of rows a day.
+
+Consequences:
+Retention defaults to 24 hours, which is roughly 17,000 rows for three workers and comfortably covers a demo or an experiment run. Anyone wanting a longer experiment history raises retention deliberately. The pruning count is returned from an on-demand capture, so the behaviour is observable rather than silent.
+
+Affected Components:
+- `backend/src/modules/monitoring/monitoring.service.ts`
+- `backend/src/modules/monitoring/monitoring.schemas.ts`
+
+## Decision: Report a timing stage with no data as a zero count, and no success rate as null
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+Early in a run most lifecycle stages have no measurements, and no jobs have finished. The API has to say something about them.
+
+Decision:
+Always return all five stage timings. A stage nothing has reached reports `count: 0` with null statistics rather than being omitted. Success rate is null when nothing finished in the window rather than zero. Utilization is clamped to 0..1, and a worker with no capacity reports zero utilization rather than dividing by zero.
+
+Alternatives Considered:
+- Omitting stages with no data
+- Reporting zero for unmeasured averages
+- Reporting a 0% success rate before anything finishes
+- Letting a divide-by-zero surface as `NaN` or `Infinity`
+
+Reasoning:
+Omitting keys would force every caller to distinguish "absent" from "nothing measured", and a dashboard would silently drop rows. Reporting zero for an unmeasured average is worse than saying nothing, because zero is a plausible value and a reader cannot tell it apart from a real measurement. A 0% success rate before any job finishes actively misinforms: it reads as total failure when the truth is no evidence. Clamping utilization means a bug in accounting shows as a full bar rather than an impossible one, and the underlying counters are still reported raw alongside it so the anomaly stays visible.
+
+Consequences:
+Consumers handle nulls, which is the honest shape of "not measured yet". The distinction was verified live: an idle cluster reported null success rate and zero counts, and after three jobs completed the same endpoint reported a rate of 1.0 with an `execution` average of 20.2 seconds against a 20-second sleep workload.
+
+Affected Components:
+- `backend/src/modules/monitoring/monitoring.metrics.ts`
+- `backend/src/modules/monitoring/monitoring.service.ts`
+
+## Decision: Keep the dashboard read-only and draw charts without a charting library
+
+Date:
+2026-09-22
+
+Status:
+Accepted
+
+Context:
+The dashboard had been a static status page with nothing to interact with. Phase 7 gives it real data to show, including a time series that wants a chart.
+
+Decision:
+Poll the monitoring endpoints every five seconds and render cluster meters, a worker table, queue depth, throughput, lifecycle timings, running containers, and a utilization sparkline drawn as an inline SVG path. Add only two controls, `Refresh` and `Capture sample`, both of which are read or observation actions. Add no charting dependency and no orchestration controls.
+
+Alternatives Considered:
+- A charting library such as Recharts or Chart.js
+- Server-sent events or a WebSocket instead of polling
+- Adding buttons to generate, schedule, place, reserve, and execute jobs
+- Leaving the dashboard static and demonstrating only through the API
+
+Reasoning:
+A sparkline is a polyline; it does not justify a dependency that would dwarf the rest of the frontend bundle. Polling at five seconds is simpler than a push channel and entirely adequate for a local prototype, and it fails softly. Orchestration controls were tempting because the dashboard has no way to drive work, but each one would need its own validation, error surfacing, and confirmation design, and putting them in would mean shipping a half-considered control surface inside a monitoring increment. Keeping the panel read-only preserves the property that monitoring cannot affect what it measures.
+
+Consequences:
+The dashboard is genuinely useful during a run and finally has working controls, but driving the orchestration chain is still an API exercise. Interactive orchestration controls remain open work. The sparkline degrades to an explanatory message when fewer than two points exist, so an empty history reads as empty rather than broken.
+
+Affected Components:
+- `frontend/src/MonitoringPanel.tsx`
+- `frontend/src/api.ts`
+- `frontend/src/styles.css`

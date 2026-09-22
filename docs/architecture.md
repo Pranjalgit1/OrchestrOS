@@ -10,7 +10,7 @@ Logical workers are database-backed capacity records, not physical computers, VM
 
 The system is an npm-workspace monorepo with a React/Vite frontend, modular Express backend, Prisma persistence adapter, and local PostgreSQL supplied by Compose. Backend features use route, service, repository, and pure-domain boundaries inside one process.
 
-The current implementation includes foundation startup, job/worker management, deterministic workload generation, scheduling, placement, transactional resource reservation, and controlled Docker execution. Monitoring, autoscaling, failure recovery, experiments, and ML remain future increments unless `docs/flow.md` says otherwise.
+The current implementation includes foundation startup, job/worker management, deterministic workload generation, scheduling, placement, transactional resource reservation, controlled Docker execution, and operational monitoring. Autoscaling, failure recovery, experiments, and ML remain future increments unless `docs/flow.md` says otherwise.
 
 ## 3. Components
 
@@ -26,7 +26,8 @@ The current implementation includes foundation startup, job/worker management, d
 | Resource manager | Transactional CPU/memory reservation and release | Implemented |
 | Container manager | Run predefined workloads under Docker limits | Implemented |
 | Workload runner image | Execute one of five fixed programs and print a checksum | Implemented |
-| Monitoring/autoscaling/failure/ML/experiments | Control and evaluation loops | Pending |
+| Monitoring | Derive operational metrics and sample utilization over time | Implemented |
+| Autoscaling/failure recovery/ML/experiments | Control and evaluation loops | Pending |
 
 ## 4. Job lifecycle and queue
 
@@ -82,9 +83,9 @@ Worker states are `STARTING`, `ACTIVE`, `IDLE`, `BUSY`, `STOPPING`, and `FAILED`
 
 ## 7. Database and consistency
 
-PostgreSQL contains `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, and `JobExecution`. All five are written by running code. SQL constraints enforce resource bounds, valid batch sizes/offsets, complete batch identity, unique sequence, one active reservation per job, matching execution/allocation job-worker identity, one execution per allocation, one execution per job attempt, bounded captured output, byte-range exit codes, hex container ids, and the rule that a terminal execution records when it completed.
+PostgreSQL contains `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, `JobExecution`, and `WorkerSample`. All six are written by running code. The first five are authoritative; `WorkerSample` is observational and is the only table monitoring writes. SQL constraints enforce resource bounds, valid batch sizes/offsets, complete batch identity, unique sequence, one active reservation per job, matching execution/allocation job-worker identity, one execution per allocation, one execution per job attempt, bounded captured output, byte-range exit codes, hex container ids, and the rule that a terminal execution records when it completed.
 
-Compose runs deployment migrations and the worker seed before backend startup. Readiness queries all five models. Published ports are loopback-only.
+Compose runs deployment migrations and the worker seed before backend startup. Readiness queries the five authoritative models; it deliberately excludes `WorkerSample`, because losing observational history is not a reason to call the orchestrator unhealthy. Published ports are loopback-only.
 
 Resource reservation is implemented and detailed in section 10: it begins a transaction, locks the worker row, rechecks CPU and memory inside the transaction, updates the allocation and worker counters atomically, and commits before any container could start.
 
@@ -294,11 +295,53 @@ A timeout is an interruption rather than a failure: the workload did not misbeha
 
 The container is awaited in the backend process. If that process dies mid-execution, the execution stays `RUNNING` and its reservation stays held; `POST /api/executions/:id/settle` is the recovery path today, and automatic reconciliation belongs to the failure-recovery increment. Cancelling a running job is not implemented yet.
 
-## 11a. Monitoring, scaling, failure, and ML
+## 12. Monitoring
 
-Monitoring will collect only required operational/experiment metrics. Reactive scaling will precede ML-assisted forecasting. Heartbeat failure handling will reconcile resources and requeue recoverable work. These flows are not implemented yet.
+Monitoring observes the orchestrator without participating in it. It never changes a job, a reservation, or a container.
 
-## 12. API boundary
+### Derived, not accumulated
+
+Almost every metric is computed from the authoritative records at read time rather than stored as it happens. Queue depth, cluster utilization, lifecycle timings, throughput, and per-worker activity are all questions the existing tables can already answer, so a counter that drifts out of step with reality cannot exist.
+
+The one exception is utilization over time. Worker counters record only the present, so a history of them cannot be reconstructed after the fact. `WorkerSample` stores that history and nothing else.
+
+### What is measured
+
+Five stage durations come from a job's own timestamps:
+
+| Metric | Measured as |
+| --- | --- |
+| `queueWait` | `scheduledAt - arrivalAt` |
+| `placementDelay` | `placedAt - scheduledAt` |
+| `startDelay` | `startedAt - placedAt` |
+| `execution` | `completedAt - startedAt` |
+| `turnaround` | `completedAt - arrivalAt` |
+
+Each reports count, average, minimum, maximum, and p95. Prisma cannot aggregate the difference between two columns, so the durations are normalised into `(metric, seconds)` pairs in SQL and aggregated once, letting PostgreSQL compute the percentile instead of loading every row into the process. A stage nothing has reached yet reports a zero count rather than being absent, so a caller never has to distinguish "missing" from "nothing measured".
+
+Timings cover jobs created inside the window; completion counts are anchored on when a job finished, which is what a rate should measure. The window start is echoed in the response so the denominator is never ambiguous.
+
+### Sampling
+
+One pass writes one row per worker, all sharing a `capturedAt`, so grouping on that timestamp reconstructs the cluster as it stood at that instant. The write is a single `INSERT ... SELECT`, and a unique index on `(workerId, capturedAt)` makes a repeated pass a no-op rather than a double count. Sample rows carry the same bounds as real accounting: capacity positive, allocated within capacity, counts non-negative.
+
+Samples are observational, so they cascade with their worker instead of blocking its deletion the way authoritative records do.
+
+### The only background loop
+
+The sampler is the project's single timer. Everything else in OrchestrOS is driven by an explicit request. It is deliberately confined to observation, and it is started by `server.ts` rather than `app.ts`, so importing the Express app — as every test does — never starts a timer. Its interval is configurable and zero disables it, in which case history becomes opt-in through `POST /api/monitoring/sample`.
+
+A pass already in flight blocks the next one, so a slow database cannot cause passes to pile up. A failed pass is logged and skipped: a missed observation must never take the orchestrator down. Pruning runs inside each pass, so history cannot grow without bound whether sampling is periodic or on demand.
+
+### Dashboard
+
+The frontend polls the overview, job metrics, and sample history every five seconds and renders cluster meters, a worker table, queue depth, throughput, lifecycle timings, running containers, and a utilization sparkline drawn without a charting dependency. It reads metrics only; it cannot start, stop, or modify work.
+
+## 13. Scaling, failure recovery, and ML
+
+Reactive scaling will precede ML-assisted forecasting. Heartbeat failure handling will reconcile resources and requeue recoverable work, including executions orphaned by a backend restart. These flows are not implemented yet.
+
+## 14. API boundary
 
 Express enforces a 16 KB body limit, strict Zod schemas, structured errors, one configured CORS origin, and generic internal errors. Implemented workload endpoints are:
 
@@ -331,14 +374,24 @@ Implemented execution endpoints are:
 - `GET /api/executions`
 - `GET /api/executions/:id`
 
+Implemented monitoring endpoints are:
+
+- `GET /api/monitoring/overview`
+- `GET /api/monitoring/jobs`
+- `GET /api/monitoring/samples`
+- `GET /api/monitoring/config`
+- `POST /api/monitoring/sample`
+
 Job and worker management endpoints remain available. A start request carries only a job id: the image, command, environment, limits, and timeout are all backend decisions, and a request containing any of them is rejected as an unrecognized key. The browser and clients never receive Docker daemon access.
 
-## 13. Target data flow
+## 15. Target data flow
 
 ```text
 Workload Generator -> PostgreSQL-backed Queue -> Scheduler -> Placement
   -> Transactional Reservation -> Docker Execution -> Monitoring -> Release
 ```
+
+Every stage above is implemented. Monitoring observes the chain rather than sitting inside it: release happens in the same transaction that records an execution's outcome.
 
 Future supporting loops:
 

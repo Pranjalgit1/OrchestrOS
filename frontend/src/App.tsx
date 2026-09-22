@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { fetchHealthStatus, type HealthStatus } from "./api";
+import { MonitoringPanel } from "./MonitoringPanel";
 
 const currentCapabilities = [
   "PostgreSQL-backed job records",
@@ -12,10 +13,11 @@ const currentCapabilities = [
   "Transaction-safe CPU and memory reservation",
   "Controlled Docker workload execution",
   "Reproducible result checksums",
+  "Live operational metrics and utilization history",
 ];
 
 const futureCapabilities = [
-  "Monitoring and autoscaling",
+  "Reactive autoscaling",
   "Failure recovery",
   "Preemption and runtime cancellation",
 ];
@@ -52,7 +54,7 @@ export function App() {
   return (
     <main className="shell">
       <header className="hero">
-        <p className="eyebrow">Phase 6 · Controlled Execution</p>
+        <p className="eyebrow">Phase 7 · Monitored Execution</p>
         <h1>OrchestrOS</h1>
         <p className="subtitle">
           A Kubernetes-inspired local container orchestration prototype with reproducible
@@ -85,13 +87,14 @@ export function App() {
       <section className="foundation-panel">
         <div>
           <p className="eyebrow">Implemented now</p>
-          <h2>Scheduled, reserved, and actually executed</h2>
+          <h2>Scheduled, reserved, executed, and measured</h2>
           <p>
             Seeded workloads become queued jobs, the scheduler picks the next job by policy, and
             placement chooses a logical worker. Reservation commits capacity inside a PostgreSQL
             transaction that locks the worker row, so concurrent jobs can never over-allocate it.
             The job then runs as one locked-down container limited to exactly that reservation,
-            and recording its result releases the capacity in a single transaction.
+            and recording its result releases the capacity in a single transaction. Every metric
+            below is derived from those same records, so it cannot disagree with them.
           </p>
           <ul>
             {currentCapabilities.map((capability) => (
@@ -108,6 +111,8 @@ export function App() {
           </ul>
         </div>
       </section>
+
+      <MonitoringPanel />
     </main>
   );
 }
