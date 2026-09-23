@@ -22,11 +22,22 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     id: randomUUID(),
     name: "test-job",
     workloadType: WorkloadType.SORTING,
+    workloadSize: 10_000,
     status: JobStatus.QUEUED,
     cpuRequiredMillicores: 500,
     memoryRequiredMiB: 256,
     estimatedDurationSeconds: 10,
     priority: 5,
+    workloadBatchId: null,
+    batchSequence: null,
+    arrivalOffsetSeconds: 0,
+    arrivalAt: now,
+    schedulingPolicy: null,
+    scheduledAt: null,
+    timeQuantumSeconds: null,
+    schedulingRounds: 0,
+    placementStrategy: null,
+    placedAt: null,
     createdAt: now,
     updatedAt: now,
     startedAt: null,
@@ -51,6 +62,7 @@ class InMemoryJobRepository implements JobRepository {
     const job = makeJob({
       name: data.name,
       workloadType: data.workloadType,
+      workloadSize: data.workloadSize ?? 1,
       status: data.status ?? JobStatus.QUEUED,
       cpuRequiredMillicores: data.cpuRequiredMillicores,
       memoryRequiredMiB: data.memoryRequiredMiB,
@@ -66,7 +78,9 @@ class InMemoryJobRepository implements JobRepository {
       .filter((job) => !status || job.status === status)
       .sort(
         (left, right) =>
-          left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id),
+          left.arrivalAt.getTime() - right.arrivalAt.getTime() ||
+          left.createdAt.getTime() - right.createdAt.getTime() ||
+          left.id.localeCompare(right.id),
       )
       .slice(0, limit);
   }
@@ -95,6 +109,7 @@ class InMemoryJobRepository implements JobRepository {
 const validJobInput = {
   name: "sorting-1",
   workloadType: WorkloadType.SORTING,
+  workloadSize: 25_000,
   cpuRequiredMillicores: 1_000,
   memoryRequiredMiB: 512,
   estimatedDurationSeconds: 20,

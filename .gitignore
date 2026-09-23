@@ -19,6 +19,8 @@ npm-debug.log*
 *.db-journal
 postgres-data/
 
+
+
 # LaTeX build artifacts
 *.aux
 *.bbl

@@ -5,6 +5,7 @@ export const createJobSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     workloadType: z.nativeEnum(WorkloadType),
+    workloadSize: z.number().int().min(1).max(100_000_000).default(1),
     cpuRequiredMillicores: z.number().int().min(100).max(64_000),
     memoryRequiredMiB: z.number().int().min(64).max(131_072),
     estimatedDurationSeconds: z.number().int().min(1).max(86_400),

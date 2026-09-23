@@ -21,7 +21,12 @@ export const prismaJobRepository: JobRepository = {
   findAll(status, limit) {
     return prisma.job.findMany({
       ...(status ? { where: { status } } : {}),
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      orderBy: [
+        { arrivalAt: "asc" },
+        { createdAt: "asc" },
+        { batchSequence: "asc" },
+        { id: "asc" },
+      ],
       take: limit,
     });
   },

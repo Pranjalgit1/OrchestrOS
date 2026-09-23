@@ -15,6 +15,31 @@ enum WorkloadType {
   SLEEP
 }
 
+enum WorkloadPattern {
+  LIGHT
+  MEDIUM
+  HEAVY
+  CONSTANT
+  BURST
+  INCREASING
+  DECREASING
+  PERIODIC
+  CUSTOM
+}
+
+enum PlacementStrategy {
+  FIRST_FIT
+  LEAST_LOADED
+  RESOURCE_AWARE
+}
+
+enum SchedulingPolicy {
+  FCFS
+  SJF
+  PRIORITY
+  ROUND_ROBIN
+}
+
 enum JobStatus {
   CREATED
   QUEUED
@@ -51,15 +76,45 @@ enum ExecutionStatus {
   CANCELLED
 }
 
+model WorkloadBatch {
+  id               String            @id @default(uuid()) @db.Uuid
+  seed             Int
+  jobCount         Int
+  pattern          WorkloadPattern
+  generatorVersion String            @db.VarChar(16)
+  parameters       Json
+  startsAt         DateTime
+  sourceBatchId    String?           @db.Uuid
+  createdAt        DateTime          @default(now())
+  sourceBatch      WorkloadBatch?    @relation("BatchReuse", fields: [sourceBatchId], references: [id], onDelete: Restrict)
+  reusedBatches    WorkloadBatch[]   @relation("BatchReuse")
+  jobs             Job[]
+
+  @@index([sourceBatchId])
+  @@index([createdAt])
+  @@map("workload_batches")
+}
+
 model Job {
   id                       String             @id @default(uuid()) @db.Uuid
   name                     String             @db.VarChar(100)
   workloadType             WorkloadType
+  workloadSize             Int                @default(1)
   status                   JobStatus          @default(QUEUED)
   cpuRequiredMillicores    Int
   memoryRequiredMiB        Int
   estimatedDurationSeconds Int
   priority                 Int                @default(5)
+  workloadBatchId          String?            @db.Uuid
+  batchSequence            Int?
+  arrivalOffsetSeconds     Int                @default(0)
+  arrivalAt                DateTime           @default(now())
+  schedulingPolicy         SchedulingPolicy?
+  scheduledAt              DateTime?
+  timeQuantumSeconds       Int?
+  schedulingRounds         Int                @default(0)
+  placementStrategy        PlacementStrategy?
+  placedAt                 DateTime?
   createdAt                DateTime           @default(now())
   updatedAt                DateTime           @updatedAt
   startedAt                DateTime?
@@ -69,11 +124,17 @@ model Job {
   containerId              String?            @unique @db.VarChar(128)
   result                   Json?
   failureReason            String?
+  workloadBatch            WorkloadBatch?     @relation(fields: [workloadBatchId], references: [id], onDelete: Restrict)
   assignedWorker           Worker?            @relation("AssignedJobs", fields: [assignedWorkerId], references: [id], onDelete: SetNull)
   allocations              ResourceAllocation[]
   executions               JobExecution[]
 
-  @@index([status, createdAt, id])
+  @@unique([workloadBatchId, batchSequence])
+  @@index([status, arrivalAt, createdAt, batchSequence, id])
+  @@index([status, estimatedDurationSeconds, arrivalAt, id])
+  @@index([status, priority, arrivalAt, id])
+  @@index([status, schedulingRounds, arrivalAt, id])
+  @@index([workloadBatchId])
   @@index([assignedWorkerId])
   @@map("jobs")
 }
@@ -92,9 +153,36 @@ model Worker {
   assignedJobs            Job[]                @relation("AssignedJobs")
   allocations             ResourceAllocation[]
   executions              JobExecution[]
+  samples                 WorkerSample[]
 
   @@index([status])
   @@map("workers")
+}
+
+/// Observational utilization history.
+///
+/// Worker counters record only the present, so utilization over time cannot be
+/// derived after the fact. These rows are the one metric OrchestrOS stores;
+/// every other metric is computed from the authoritative records on read.
+model WorkerSample {
+  id                     String       @id @default(uuid()) @db.Uuid
+  workerId               String       @db.Uuid
+  /// Every worker written by one sampling pass shares this timestamp.
+  capturedAt             DateTime
+  cpuCapacityMillicores  Int
+  memoryCapacityMiB      Int
+  cpuAllocatedMillicores Int
+  memoryAllocatedMiB     Int
+  status                 WorkerStatus
+  runningExecutions      Int          @default(0)
+  reservedAllocations    Int          @default(0)
+  createdAt              DateTime     @default(now())
+  // Samples are observational, not authoritative, so they follow the worker.
+  worker                 Worker       @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  @@unique([workerId, capturedAt])
+  @@index([capturedAt])
+  @@map("worker_samples")
 }
 
 model ResourceAllocation {
@@ -143,5 +231,6 @@ model JobExecution {
   @@unique([allocationId, jobId, workerId])
   @@index([jobId])
   @@index([workerId])
+  @@index([status, createdAt])
   @@map("job_executions")
 }

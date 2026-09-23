@@ -1,20 +1,27 @@
 import { useEffect, useState } from "react";
 
 import { fetchHealthStatus, type HealthStatus } from "./api";
+import { MonitoringPanel } from "./MonitoringPanel";
+import { OrchestratorConsole } from "./OrchestratorConsole";
 
 const currentCapabilities = [
   "PostgreSQL-backed job records",
   "Controlled job lifecycle",
   "Logical worker registry",
+  "Deterministic workload batches",
+  "FCFS, SJF, Priority, Round Robin scheduling",
+  "Resource-aware worker placement",
+  "Transaction-safe CPU and memory reservation",
+  "Controlled Docker workload execution",
+  "Reproducible result checksums",
+  "Live operational metrics and utilization history",
+  "Browser-driven orchestration with per-stage controls",
 ];
 
 const futureCapabilities = [
-  "Automated workload generation",
-  "Policy-based scheduling",
-  "Resource-aware placement",
-  "Docker workload execution",
-  "Monitoring and autoscaling",
+  "Reactive autoscaling",
   "Failure recovery",
+  "Preemption and runtime cancellation",
 ];
 
 export function App() {
@@ -23,7 +30,6 @@ export function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-
     fetchHealthStatus(controller.signal)
       .then((status) => {
         setHealth(status);
@@ -34,7 +40,6 @@ export function App() {
           setError(reason instanceof Error ? reason.message : "Health check failed");
         }
       });
-
     return () => controller.abort();
   }, []);
 
@@ -51,15 +56,15 @@ export function App() {
   return (
     <main className="shell">
       <header className="hero">
-        <p className="eyebrow">Phase 1 · Data Layer</p>
+        <p className="eyebrow">Phase 7 · Monitored Execution</p>
         <h1>OrchestrOS</h1>
         <p className="subtitle">
-          A Kubernetes-inspired local container orchestration prototype with resource-aware
-          scheduling, safe allocation, monitoring, recovery, and ML-assisted scaling.
+          A Kubernetes-inspired local container orchestration prototype with reproducible
+          workloads, resource-aware scheduling, safe allocation, recovery, and assisted scaling.
         </p>
       </header>
 
-      <section className="status-grid" aria-label="Phase 1 service status">
+      <section className="status-grid" aria-label="Service status">
         <article className="status-card">
           <span>Frontend</span>
           <strong className="healthy">Online</strong>
@@ -81,14 +86,21 @@ export function App() {
 
       {error ? <p className="error-banner">{error}. Check that the backend and PostgreSQL are running.</p> : null}
 
+      <OrchestratorConsole />
+
+      <MonitoringPanel />
+
       <section className="foundation-panel">
         <div>
           <p className="eyebrow">Implemented now</p>
-          <h2>Persistent orchestration state</h2>
+          <h2>Scheduled, reserved, executed, and measured</h2>
           <p>
-            Jobs and logical workers are validated by the API and stored in PostgreSQL. Logical
-            workers represent tracked capacity on this one physical machine; they are not separate
-            computers.
+            Seeded workloads become queued jobs, the scheduler picks the next job by policy, and
+            placement chooses a logical worker. Reservation commits capacity inside a PostgreSQL
+            transaction that locks the worker row, so concurrent jobs can never over-allocate it.
+            The job then runs as one locked-down container limited to exactly that reservation,
+            and recording its result releases the capacity in a single transaction. Every number on
+            this page is read back from those same records, so it cannot disagree with them.
           </p>
           <ul>
             {currentCapabilities.map((capability) => (
