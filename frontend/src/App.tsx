@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { fetchHealthStatus, type HealthStatus } from "./api";
 import { MonitoringPanel } from "./MonitoringPanel";
+import { OrchestratorConsole } from "./OrchestratorConsole";
 
 const currentCapabilities = [
   "PostgreSQL-backed job records",
@@ -14,6 +15,7 @@ const currentCapabilities = [
   "Controlled Docker workload execution",
   "Reproducible result checksums",
   "Live operational metrics and utilization history",
+  "Browser-driven orchestration with per-stage controls",
 ];
 
 const futureCapabilities = [
@@ -84,6 +86,10 @@ export function App() {
 
       {error ? <p className="error-banner">{error}. Check that the backend and PostgreSQL are running.</p> : null}
 
+      <OrchestratorConsole />
+
+      <MonitoringPanel />
+
       <section className="foundation-panel">
         <div>
           <p className="eyebrow">Implemented now</p>
@@ -93,8 +99,8 @@ export function App() {
             placement chooses a logical worker. Reservation commits capacity inside a PostgreSQL
             transaction that locks the worker row, so concurrent jobs can never over-allocate it.
             The job then runs as one locked-down container limited to exactly that reservation,
-            and recording its result releases the capacity in a single transaction. Every metric
-            below is derived from those same records, so it cannot disagree with them.
+            and recording its result releases the capacity in a single transaction. Every number on
+            this page is read back from those same records, so it cannot disagree with them.
           </p>
           <ul>
             {currentCapabilities.map((capability) => (
@@ -111,8 +117,6 @@ export function App() {
           </ul>
         </div>
       </section>
-
-      <MonitoringPanel />
     </main>
   );
 }

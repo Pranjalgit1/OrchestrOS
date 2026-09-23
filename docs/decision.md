@@ -980,7 +980,7 @@ Date:
 2026-09-22
 
 Status:
-Accepted
+Superseded on 2026-09-23 by **Make React the primary orchestration control interface**.
 
 Context:
 The dashboard had been a static status page with nothing to interact with. Phase 7 gives it real data to show, including a time series that wants a chart.
@@ -998,9 +998,135 @@ Reasoning:
 A sparkline is a polyline; it does not justify a dependency that would dwarf the rest of the frontend bundle. Polling at five seconds is simpler than a push channel and entirely adequate for a local prototype, and it fails softly. Orchestration controls were tempting because the dashboard has no way to drive work, but each one would need its own validation, error surfacing, and confirmation design, and putting them in would mean shipping a half-considered control surface inside a monitoring increment. Keeping the panel read-only preserves the property that monitoring cannot affect what it measures.
 
 Consequences:
-The dashboard is genuinely useful during a run and finally has working controls, but driving the orchestration chain is still an API exercise. Interactive orchestration controls remain open work. The sparkline degrades to an explanatory message when fewer than two points exist, so an empty history reads as empty rather than broken.
+This decision is superseded by the browser-control facade above. The sparkline remains dependency-free and the monitoring panel itself remains observation-only; the new orchestrator panel owns user actions and calls backend APIs. The sparkline still degrades to an explanatory message when fewer than two points exist, so an empty history reads as empty rather than broken.
 
 Affected Components:
 - `frontend/src/MonitoringPanel.tsx`
 - `frontend/src/api.ts`
 - `frontend/src/styles.css`
+
+
+## Decision: Make React the primary orchestration control interface
+
+Date:
+2026-09-23
+
+Status:
+Accepted
+
+Context:
+The backend already performed the full pipeline correctly, but a normal demonstration required a user to know and call five API/PowerShell commands in a specific order: dispatch, placement, reservation, execution, and later monitoring. The React dashboard only displayed status. That made the project's real capability difficult to operate and gave the impression it was a simulator.
+
+Decision:
+Make the React dashboard the normal operator interface. Add browser controls for workload generation, scheduler policy, placement strategy, run-next, bounded batch run, automatic run, terminal cleanup, live queue selection, and per-stage demonstration. Introduce `POST /api/orchestrator/run` as a thin backend facade that calls the existing scheduler, placement, resource, and execution services in their normal order, plus `GET /api/orchestrator/state` as a single dashboard read and `POST /api/orchestrator/clear-finished` for safe demo cleanup.
+
+React only collects intent, submits requests, polls backend state, and renders returned facts. It never picks a job or worker, changes a job state locally, computes capacity, holds a reservation, constructs a Docker request, or keeps a shadow metric. The original per-stage APIs remain available for testing, debugging, and a step-by-step teaching view.
+
+Alternatives Considered:
+- Keep the dashboard read-only and document the PowerShell commands better
+- Implement scheduling, placement, and resource accounting in React for convenience
+- Have the frontend make the four existing stage calls itself in sequence
+- Add a generic workflow engine or message queue
+
+Reasoning:
+Better instructions do not solve the product problem: command sequencing is an implementation detail, not a user workflow. Moving logic into React would create a second source of truth that would inevitably drift from PostgreSQL and would make row-locking and Docker safety unenforceable. Having React issue the four stage calls would still couple it to sequencing, leave half-advanced jobs easy to strand, and make error handling a frontend concern. A workflow engine is unnecessary for a local single-process prototype when the existing services already expose the needed boundaries. The facade keeps the behavior in the backend while giving the browser one meaningful action.
+
+Consequences:
+The UI can demonstrate the real system end to end without PowerShell. A facade response includes stage outcomes (`OK`, `SKIPPED`, `FAILED`) with the actual backend detail, which the activity log renders. The UI's automatic run is deliberately only a loop that asks the backend to advance a bounded batch; it stops on backend-reported idle/full conditions and never assumes a click advanced a job. This is not an autoscaler or a new scheduler.
+
+Affected Components:
+- `backend/src/modules/orchestrator/`
+- `frontend/src/OrchestratorConsole.tsx`
+- `frontend/src/components/`
+
+## Decision: Use a valid all-zero CUSTOM batch for the browser's Immediate demo preset
+
+Date:
+2026-09-23
+
+Status:
+Accepted
+
+Context:
+Predefined workload patterns intentionally space arrivals over time. That is correct for experiments but frustrating in a short mentor demonstration: generating ten `LIGHT` jobs makes most of them ineligible for twenty to forty seconds each, so **Run Orchestrator** appears to do nothing after the first job.
+
+Decision:
+Expose an **Immediate — all jobs eligible at once** choice in the browser. It maps onto the existing `CUSTOM` generator contract with an all-zero, correctly sized `arrivalOffsetsSeconds` array. It also offers a controlled `SLEEP` profile (4–10 seconds) or a mixed-compute profile. The browser submits an ordinary validated generation request; no backend eligibility rule is bypassed or special-cased.
+
+Alternatives Considered:
+- Change the scheduler to ignore planned arrival times for UI-generated work
+- Add a separate undocumented "demo" job type
+- Force every predefined pattern to use zero offsets
+- Make users wait for the normal arrival schedule
+
+Reasoning:
+Ignoring arrival time would invalidate a scheduler invariant and make a UI action behave differently from the API. A special job type would duplicate generator logic and make experiment input less reproducible. Changing every pattern would damage the temporal behavior those patterns were created to test. `CUSTOM` was already designed for exactly bounded explicit ranges and ordered offsets, so all-zero offsets are valid input that preserves every backend rule while making the operator's intention explicit.
+
+Consequences:
+Immediate batches are deterministic for the same seed and make all jobs eligible as soon as the batch transaction commits. The UI labels the preset as `CUSTOM`, so it never pretends it is a new predefined pattern. Predefined patterns still display the time until a queued job becomes eligible.
+
+Affected Components:
+- `frontend/src/api.ts`
+- `frontend/src/components/ControlPanel.tsx`
+- `backend/src/modules/workloads/workload.schemas.ts`
+
+## Decision: Make terminal-only cleanup a backend transaction
+
+Date:
+2026-09-23
+
+Status:
+Accepted
+
+Context:
+A browser demonstration creates visible completed jobs, executions, allocations, and batches. The user needs a clean reset without shell SQL, but a broad delete operation could remove queued work, a live container, or a reservation that worker counters still reflect.
+
+Decision:
+Add `POST /api/orchestrator/clear-finished`. In one transaction it selects only terminal jobs (`COMPLETED`, `FAILED`, `INTERRUPTED`, `CANCELLED`), deletes their execution and allocation records in foreign-key order, then deletes the jobs and now-empty batches. It deliberately does not select `QUEUED`, `SCHEDULED`, or `RUNNING` work.
+
+Alternatives Considered:
+- Let React delete rows directly
+- A generic delete-all endpoint
+- Keep cleanup as a PowerShell/psql instruction
+- Retain all completed work and never offer cleanup
+
+Reasoning:
+React cannot and must not connect to the database. A generic delete-all endpoint would be unsafe in exactly the situation the demo is meant to show: a running job holding a reservation. Keeping cleanup in shell instructions defeats the purpose of making the browser the primary interface. Terminal-only cleanup is easy to explain, preserves active work, and lets a user reset a demonstration without affecting the pipeline's concurrency guarantees.
+
+Consequences:
+Clearing history removes terminal job results and their batch records, so it is a local demonstration convenience rather than an audit-retention feature. Running jobs and their resource accounting always survive. Tests verify that an active reservation and its worker counters remain after cleanup.
+
+Affected Components:
+- `backend/src/modules/orchestrator/orchestrator.repository.ts`
+- `backend/src/modules/orchestrator/orchestrator.routes.ts`
+- `frontend/src/OrchestratorConsole.tsx`
+
+## Decision: Run database integration tests serially
+
+Date:
+2026-09-23
+
+Status:
+Accepted
+
+Context:
+The Node test runner runs test files concurrently by default. This repository's integration tests intentionally share one PostgreSQL database and several services, including a global scheduler that considers every eligible job and a placement service that considers every worker. A new terminal-cleanup test also removes finished jobs globally by design.
+
+Decision:
+Set the backend test script to `--test-concurrency=1`. Unit tests remain fast enough, and database/Docker integration tests execute against a deterministic shared state.
+
+Alternatives Considered:
+- Keep concurrent files and rely on randomly prefixed names alone
+- Give every test file a separate database/schema
+- Mock PostgreSQL for integration tests
+- Disable the cleanup test
+
+Reasoning:
+Prefixes isolate most rows but cannot isolate intentionally global domain operations such as "next eligible job", "least loaded worker", or terminal cleanup. Concurrent test files exposed exactly that: one file could validly schedule another file's job or reserve another file's worker before its cleanup ran. Separate databases are better at larger scale but significantly complicate local Compose setup. Serial execution takes roughly 105 seconds with Docker, which is acceptable for a college prototype and gives reliable proof rather than intermittent failures.
+
+Consequences:
+`npm test` is deterministic and slower when database integration is enabled. Test fakes remain used for pure orchestration behavior, while real PostgreSQL and Docker tests still prove the critical path.
+
+Affected Components:
+- `backend/package.json`
+- `backend/src/modules/orchestrator/orchestrator.integration.test.ts`

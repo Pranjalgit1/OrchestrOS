@@ -8,6 +8,7 @@ import { executionRouter } from "./modules/executions/execution.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
 import { jobRouter } from "./modules/jobs/job.routes.js";
 import { monitoringRouter } from "./modules/monitoring/monitoring.routes.js";
+import { orchestratorRouter } from "./modules/orchestrator/orchestrator.routes.js";
 import { placementRouter } from "./modules/placement/placement.routes.js";
 import { resourceRouter } from "./modules/resources/resource.routes.js";
 import { schedulerRouter } from "./modules/scheduler/scheduler.routes.js";
@@ -32,6 +33,7 @@ app.get("/api", (_request, response) => {
   });
 });
 app.use("/api/health", healthRouter);
+app.use("/api/orchestrator", orchestratorRouter);
 app.use("/api/jobs", jobRouter);
 app.use("/api/workloads", workloadRouter);
 app.use("/api/scheduler", schedulerRouter);

@@ -19,8 +19,7 @@ npm-debug.log*
 *.db-journal
 postgres-data/
 
-# Project documentation
-/docs/
+
 
 # LaTeX build artifacts
 *.aux

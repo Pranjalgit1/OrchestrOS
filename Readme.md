@@ -4,7 +4,7 @@
 
 OrchestrOS is a Kubernetes-inspired local container orchestration prototype for controlled computational workloads. It runs on one physical development machine with logical workers, PostgreSQL-backed state, and a modular TypeScript backend.
 
-> **Current implementation:** deterministic workload batches, persistent jobs/workers, controlled lifecycle management, exact batch reuse, policy-based scheduling (FCFS, SJF, Priority, Round Robin), resource-aware placement decisions (First Fit, Least Loaded, Resource-Aware), transaction-safe reservation and release with row-level locking, controlled Docker execution of the five predefined workloads with recorded results, live operational monitoring with recorded utilization history, database migrations, health checks, and tests work. Autoscaling, recovery, runtime cancellation, experiments, and ML do not run yet.
+> **Current implementation:** deterministic workload batches, persistent jobs/workers, controlled lifecycle management, exact batch reuse, policy-based scheduling (FCFS, SJF, Priority, Round Robin), resource-aware placement decisions (First Fit, Least Loaded, Resource-Aware), transaction-safe reservation and release with row-level locking, controlled Docker execution of the five predefined workloads with recorded results, live operational monitoring with recorded utilization history, and a browser-first control interface that drives the full backend pipeline. Autoscaling, recovery, runtime cancellation, experiments, and ML do not run yet.
 
 ## System boundary
 
@@ -82,10 +82,36 @@ Every stage above now runs. Autoscaling is the remaining link.
 - Job lifecycle timings with p95, throughput, and success rate
 - Sampled utilization history with retention pruning
 - A live dashboard with cluster meters, worker table, and utilization sparkline
+- Browser controls for generating workloads and running the whole pipeline
+- Live job queue, selected-job pipeline trace, reservation evidence, Docker status, and activity log
 - Structured validation/errors and readiness across the five authoritative models
 - Unit, HTTP-boundary, PostgreSQL integration, and real-container tests
 
-Scheduling selects **which job runs next** and moves it from `QUEUED` to `SCHEDULED`. It does not choose a worker, reserve resources, or start a container.
+Scheduling selects **which job runs next** and moves it from `QUEUED` to `SCHEDULED`. It does not choose a worker, reserve resources, or start a container. The browser's orchestrator control endpoint composes the existing scheduler, placement, reservation, and execution services; it does not move these decisions into React.
+
+## Browser-first demonstration
+
+The React dashboard is the normal way to operate OrchestrOS. Open <http://localhost:5173>; no PowerShell or API knowledge is required for a mentor demonstration.
+
+1. In **Control Panel**, choose the number of jobs, a seed, scheduler policy, and placement strategy.
+2. For a concise demo, choose **Immediate — all jobs eligible at once (Custom)** and **Sleep — 4–10s each**.
+3. Click **Demo Mode — generate 10 and run**, or click **Generate Workload** followed by **Run Orchestrator (auto)**.
+4. The UI calls the backend facade, which drives `Scheduler -> Placement -> PostgreSQL Reservation -> Docker Execution` for each job.
+5. Watch the pipeline counts, worker cards, live queue, selected-job facts, and activity log. Workers become `BUSY`, then return to `IDLE` when the backend releases their resources after completion.
+6. Select a job to see its exact worker, reserved CPU/memory, transaction/row-lock explanation, container status, elapsed time, exit code, and checksum result. Use **Clear finished jobs** when the demonstration ends.
+
+The control panel also exposes **Run Next Job**, **Run N Now**, pause/resume for auto mode, and per-stage controls under a selected job for teaching/debugging. They call existing backend APIs; React never performs scheduling, placement, transactions, or Docker work itself.
+
+### The browser control API
+
+| Browser action | Backend call | Backend owns |
+| --- | --- | --- |
+| Generate Workload | `POST /api/workloads/generate` | Deterministic generator + batch transaction |
+| Run Next / Run N / Auto | `POST /api/orchestrator/run` | Scheduler, placement, reservation, Docker execution |
+| Live queue/workers/pipeline | `GET /api/orchestrator/state` | Persisted state and derived pipeline stage |
+| Clear finished jobs | `POST /api/orchestrator/clear-finished` | Safe terminal-only cleanup transaction |
+
+The original individual APIs remain available for testing and debugging, but they are implementation details rather than the normal UI workflow.
 
 ## Scheduling policies
 
@@ -281,7 +307,7 @@ Windows accept 1 minute to 7 days and unknown query keys are rejected, so a read
 
 ### Dashboard
 
-The dashboard polls these endpoints every five seconds and shows cluster CPU and memory meters, a per-worker table, queue depth, throughput, lifecycle timings, running containers, and a utilization sparkline. `Refresh` re-reads on demand and `Capture sample` forces a data point, which is useful when demonstrating. The dashboard reads metrics only; it cannot start, stop, or modify work.
+The **monitoring panel** reads metrics only; the separate orchestrator panel above it drives work through backend APIs. `Refresh` repeats the read on demand and `Capture sample` forces a data point, which is useful when demonstrating.
 
 ### Placement APIs
 
@@ -485,9 +511,8 @@ docker compose config
 1. Reactive autoscaling
 2. Heartbeat failure recovery, including reconciling executions orphaned by a backend restart
 3. Quantum-based preemption and runtime job cancellation
-4. Interactive orchestration controls in the dashboard
-5. Historical ML data and proactive scaling
-6. Reproducible policy experiments and graphs
+4. Historical ML data and proactive scaling
+5. Reproducible policy experiments and graphs
 
 ## Engineering memory
 

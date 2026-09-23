@@ -10,14 +10,15 @@ Logical workers are database-backed capacity records, not physical computers, VM
 
 The system is an npm-workspace monorepo with a React/Vite frontend, modular Express backend, Prisma persistence adapter, and local PostgreSQL supplied by Compose. Backend features use route, service, repository, and pure-domain boundaries inside one process.
 
-The current implementation includes foundation startup, job/worker management, deterministic workload generation, scheduling, placement, transactional resource reservation, controlled Docker execution, and operational monitoring. Autoscaling, failure recovery, experiments, and ML remain future increments unless `docs/flow.md` says otherwise.
+The current implementation includes foundation startup, job/worker management, deterministic workload generation, scheduling, placement, transactional resource reservation, controlled Docker execution, operational monitoring, and a browser-first orchestration control interface. Autoscaling, failure recovery, experiments, and ML remain future increments unless `docs/flow.md` says otherwise.
 
 ## 3. Components
 
 | Component | Responsibility | Status |
 | --- | --- | --- |
-| Frontend | Show service state and implemented/planned capabilities | Status shell implemented |
+| Frontend | Primary browser control interface and live state visualisation | Implemented |
 | Backend API | Validate requests and expose modular operations | Implemented |
+| Orchestrator facade | Compose existing pipeline services for browser actions | Implemented |
 | Job manager/queue | Persist controlled jobs and enforce the create/read/cancel lifecycle | Implemented; claiming is done by the scheduler and by execution |
 | Worker manager | Persist logical capacity and initial workers | Implemented management |
 | Workload generator | Produce and persist deterministic controlled workload batches | Implemented |
@@ -341,7 +342,45 @@ The frontend polls the overview, job metrics, and sample history every five seco
 
 Reactive scaling will precede ML-assisted forecasting. Heartbeat failure handling will reconcile resources and requeue recoverable work, including executions orphaned by a backend restart. These flows are not implemented yet.
 
-## 14. API boundary
+## 14. Interactive browser control interface
+
+React is the primary way an operator or evaluator controls OrchestrOS. It collects the few decisions a user is entitled to make — workload shape, scheduling policy, placement strategy, and how much work to advance — then displays the state the backend reports. It does not choose a job, choose a worker, reserve a resource, construct a Docker request, mutate a lifecycle, or maintain a shadow counter.
+
+### Browser control flow
+
+```text
+Browser Control Panel
+  ├─ Generate Workload ───────> POST /api/workloads/generate
+  ├─ Run Next / Run Batch / Auto -> POST /api/orchestrator/run
+  ├─ Clear finished ──────────> POST /api/orchestrator/clear-finished
+  └─ Read state every 1.5s ───> GET /api/orchestrator/state
+
+/api/orchestrator/run
+  -> existing SchedulerService
+  -> existing PlacementService
+  -> existing ResourceService (transaction + row lock)
+  -> existing ExecutionService (Docker + asynchronous settlement)
+```
+
+`/api/orchestrator/run` is a facade, not a second implementation of the pipeline. It calls the existing services in their normal order and returns the outcome each service made. The individual stage APIs remain intact for step-by-step teaching, debugging, and recovery; they are no longer required for normal operation.
+
+### What the UI controls
+
+The workload generator offers exactly the existing supported batch counts (10, 25, 50, 100), deterministic seed, all predefined arrival patterns, and an **Immediate** preset. Immediate is not a hidden bypass: it maps to the existing `CUSTOM` pattern with valid, all-zero arrival offsets, so every generated job is eligible immediately for a concise demonstration. It offers a controlled `SLEEP` profile (4–10 seconds, useful to watch) or a mixed compute profile; the backend still validates and generates every specification.
+
+Scheduler selection is FCFS, SJF, Priority, or Round Robin with a time quantum. Placement selection is First Fit, Least Loaded, or Resource-Aware. The browser sends these choices; the backend applies them. An automatic run is a browser loop that keeps asking the backend to advance a bounded batch; it stops when the backend says no eligible job remains or capacity is currently insufficient. The browser never assumes that a job advanced.
+
+### State snapshot and visual evidence
+
+`GET /api/orchestrator/state` is one purpose-built dashboard read. For each job it returns persisted job fields plus the assigned worker name, active reservation, latest execution/container state, derived pipeline stage, eligibility, and time until planned arrival. For each worker it returns its persisted CPU and memory counters plus the jobs currently running there. The pipeline visualization, queue table, worker cards, selected-job detail, and activity log all use this response or the outcomes returned by the backend; no display value is invented by React.
+
+The selected-job panel deliberately exposes database and Docker facts: worker name, exact reserved CPU and memory, row-lock transaction explanation, container id/status/elapsed time/exit code, and stored checksum result. The per-stage controls call the existing stage endpoints and are disabled when the persisted state does not permit the action.
+
+### Demonstration cleanup
+
+`POST /api/orchestrator/clear-finished` removes only terminal jobs and their dependent execution/allocation records inside one transaction, then removes now-empty batches. It deliberately never deletes a queued, scheduled, reserved, or running job, so it cannot strand a container or change a worker's committed counters. It exists to reset a finished browser demonstration without requiring shell commands.
+
+## 15. API boundary
 
 Express enforces a 16 KB body limit, strict Zod schemas, structured errors, one configured CORS origin, and generic internal errors. Implemented workload endpoints are:
 
@@ -382,9 +421,15 @@ Implemented monitoring endpoints are:
 - `GET /api/monitoring/config`
 - `POST /api/monitoring/sample`
 
+Implemented browser-control endpoints are:
+
+- `GET /api/orchestrator/state`
+- `POST /api/orchestrator/run`
+- `POST /api/orchestrator/clear-finished`
+
 Job and worker management endpoints remain available. A start request carries only a job id: the image, command, environment, limits, and timeout are all backend decisions, and a request containing any of them is rejected as an unrecognized key. The browser and clients never receive Docker daemon access.
 
-## 15. Target data flow
+## 16. Target data flow
 
 ```text
 Workload Generator -> PostgreSQL-backed Queue -> Scheduler -> Placement

@@ -93,7 +93,6 @@ On `SIGINT` or `SIGTERM`, the backend prevents duplicate shutdown, drains HTTP c
 | Cancelling a job that is already running | Later |
 | Reactive autoscaling | Later |
 | Heartbeat failure detection and recovery, including reconciling orphaned executions | Later |
-| Interactive orchestration controls in the dashboard | Later |
 | ML dataset, prediction, and proactive scaling | Later |
 | Experiment execution/comparison | Later |
 
@@ -382,6 +381,61 @@ Entry Point:
 
 The route validates an optional worker UUID, a bounded window, and a limit from 1–5000 (default 500). Rows are grouped by their shared `capturedAt` into cluster points, each summing that pass's workers, and returned oldest first, which is the order a chart wants. Utilization is recomputed from the summed totals rather than averaged from per-worker percentages.
 
-## Flow: Dashboard polling
+## Flow: Browser dashboard control and polling
 
-The frontend fetches the overview, job metrics, and sample history together every five seconds, aborting in-flight requests on unmount. `Refresh` repeats the read on demand and `Capture sample` posts a sampling pass and then re-reads, so a demo can force a data point instead of waiting for the timer. `GET /api/monitoring/config` reports the interval and retention so the dashboard can explain an empty history rather than looking broken. The dashboard reads metrics only; it cannot start, stop, or modify work.
+The browser is the normal control interface. It polls `GET /api/orchestrator/state` every 1.5 seconds for jobs, workers, pipeline counts, reservations, and running containers. It separately polls monitoring metrics every five seconds. React never computes a scheduling decision or modifies state locally; it renders backend facts and submits validated operator choices.
+
+`Refresh` and `Capture sample` remain monitoring-only controls. The orchestration controls are described below.
+
+
+## Flow: Generate a workload from the browser
+
+Entry Point:
+The **Generate Workload** button in `frontend/src/components/ControlPanel.tsx`
+
+1. The UI collects an allowed count (10, 25, 50, or 100), arrival pattern, deterministic seed, and controlled profile.
+2. The browser maps the controls onto the existing `POST /api/workloads/generate` contract; it does not generate a job itself.
+3. Predefined patterns are sent unchanged. The browser's **Immediate** preset sends the existing `CUSTOM` pattern with an all-zero, valid arrival-offset array, so every job is eligible immediately without bypassing arrival validation.
+4. The backend's `WorkloadService.generate()` calls the existing deterministic generator and persists `WorkloadBatch` plus `QUEUED` jobs in one transaction.
+5. The browser re-reads `GET /api/orchestrator/state`; the new jobs appear in the live queue with type, CPU, memory, priority, estimate, and eligibility.
+
+## Flow: Run the orchestrator from the browser
+
+Entry Points:
+**Run Next Job**, **Run N Now**, **Run Orchestrator (auto)**, and **Demo Mode** in the browser
+
+API Entry Point:
+`POST /api/orchestrator/run`
+
+Sequence:
+
+1. The browser sends only the scheduling policy, placement strategy, optional Round Robin quantum, and a bounded job count. It cannot choose a job id, worker id, CPU/memory amount, image, command, or container settings.
+2. `orchestrator.routes.ts` validates that request with strict Zod schemas and calls `OrchestratorService.run()`.
+3. For each requested job, `runNext()` first looks for an earlier `SCHEDULED` job with no live execution. If one exists, it resumes it instead of leaving a half-advanced job stranded.
+4. Otherwise it calls the existing `SchedulerService.dispatch()` to select and claim one eligible queued job according to FCFS, SJF, Priority, or Round Robin. A job whose planned arrival is still future is not eligible.
+5. It calls the existing `PlacementService.assign()` with the chosen strategy. An insufficient worker returns a recorded `INSUFFICIENT_RESOURCES` stop; it is not treated as a frontend error.
+6. It calls the existing `ResourceService.reserve()`, which locks the selected worker row and rechecks capacity inside the PostgreSQL transaction before inserting the `RESERVED` allocation and incrementing the counters.
+7. It calls the existing `ExecutionService.start()`, which claims `SCHEDULED -> RUNNING`, starts the fixed Docker runner, and settles it asynchronously. Settlement writes the outcome and releases capacity in the same transaction.
+8. The facade returns one `StageOutcome` per stage, including `OK`, `SKIPPED`, or `FAILED`, with the actual backend detail and stable error code. The browser's activity log displays these facts directly.
+9. Auto mode repeats the bounded request every two seconds. It stops when the backend reports no eligible job or the cluster is currently full; React never assumes an action succeeded merely because a button was clicked.
+
+## Flow: Inspect a job and advance an individual stage
+
+1. Selecting a row from the browser queue highlights the job's persisted pipeline stage: Queue, Scheduler, Placement, Reservation, Docker Execution, Completed, or Terminal.
+2. The detail panel shows the job's backend fields, assigned worker, active reservation, latest execution, container status, elapsed time, stored result, and failure reason.
+3. Its demonstration controls call the existing stage endpoints (`/api/placement/assign`, `/api/resources/reserve`, `/api/executions/start`, and `/api/resources/release`). The UI disables a control when the persisted state does not permit it.
+4. The next `/api/orchestrator/state` read refreshes every displayed value. The browser does not synthesize a stage transition.
+
+## Flow: Clear a completed browser demonstration
+
+Entry Point:
+The **Clear finished jobs** button
+
+API Entry Point:
+`POST /api/orchestrator/clear-finished`
+
+1. `OrchestratorService.clearFinished()` calls one repository transaction.
+2. The repository finds only `COMPLETED`, `FAILED`, `INTERRUPTED`, and `CANCELLED` jobs.
+3. It deletes their executions, allocations, and jobs in foreign-key order, then removes batches with no remaining jobs and no reused descendants.
+4. It does not select or delete `QUEUED`, `SCHEDULED`, or `RUNNING` jobs, so it cannot remove work awaiting execution, a live container, or an active reservation.
+5. The browser re-reads state and returns to an empty queue while preserving the three seeded logical workers and monitoring history.
