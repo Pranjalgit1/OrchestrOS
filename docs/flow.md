@@ -1,441 +1,157 @@
-# OrchestrOS Actual Execution Flow
+# What happens when you use the app
 
-This document describes code that currently executes. The current implementation includes deterministic workload generation, persistent batch reuse, policy-based scheduling, resource-aware placement decisions, transaction-safe resource reservation and release, controlled Docker execution of the five predefined workloads, and operational monitoring with recorded utilization history. Autoscaling, failure recovery, and runtime cancellation do not run.
+This guide follows a job from creation to completion. The backend makes the scheduling and resource decisions; the browser sends requests and displays the results.
 
-## Flow: Startup and readiness
+## 1. Start the app
 
-1. `compose.yaml` starts MySQL and waits for an authenticated `SELECT 1` health check.
-2. The one-shot `database-setup` service runs all committed Prisma migrations and idempotently seeds three workers.
-3. Backend starts only after setup succeeds; frontend starts only after backend health succeeds.
-4. `health.service.js` queries `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, and `JobExecution` in one Prisma transaction.
-5. A reachable complete schema returns HTTP 200; a database/schema failure returns structured HTTP 503.
-6. Health checks the database only. Docker reachability is reported separately by `GET /api/executions/runtime`, so an absent daemon does not make the stack look unhealthy.
-7. `server.js` then starts the monitoring sampler and logs its interval and retention. This happens outside `app.js` on purpose, so importing the Express app never starts a timer.
+With the two-terminal setup, MySQL runs locally, one terminal runs the backend, and another runs the frontend.
 
-The backend container mounts the host Docker socket, which it needs to run workload containers. Building the workload image is a separate step: `npm run docker:images`, which `npm run docker:up` runs first.
+With the full Compose setup, startup happens in this order:
 
-Direct development remains: start MySQL, run `npm run db:setup`, then run backend and frontend in separate terminals. On the host the backend reaches Docker through the platform default socket path (a named pipe on Windows).
+1. Start MySQL and wait until a login and `SELECT 1` query succeed.
+2. Run the database migration and create missing starting workers.
+3. Start the backend and wait for its database health check.
+4. Start the frontend.
 
-## Flow: Generate workload batch
+The backend also starts the usage-history timer unless it has been disabled. The database health endpoint and Docker-runtime endpoint check different things.
 
-Entry Point:
-`POST /api/workloads/generate`
+## 2. Generate jobs
 
-Sequence:
+You choose a seed, job count, and pattern, then click Generate Workload.
 
-1. `backend/src/modules/workloads/workload.routes.js`
-2. `generateWorkloadSchema` in `workload.schemas.js`
-3. `WorkloadService.generate()` in `workload.service.js`
-4. `generateWorkloadSpecs()` in `workload.generator.js`
-5. `prismaWorkloadRepository.createBatch()` in `workload.repository.js`
-6. Prisma interactive transaction
-7. MySQL `workload_batches` and `jobs`
+1. The browser sends `POST /api/workloads/generate`.
+2. The backend rejects missing, unknown, or out-of-range inputs.
+3. The generator chooses each job's type, size, resources, priority, duration estimate, and arrival offset.
+4. The backend chooses the batch start time, unless you supplied one.
+5. Each job gets an arrival time based on that start time plus its offset.
+6. The backend saves the batch and all jobs in one transaction.
+7. The jobs appear as `QUEUED` in the dashboard.
 
-Detailed Flow:
+The same generation settings reproduce the same job specifications. Their database IDs can differ.
 
-1. Express parses a body limited to 16 KB.
-2. Strict Zod validation accepts seed, one of 10/25/50/100 counts, an approved pattern, optional ISO start time, and custom configuration only for `CUSTOM`.
-3. `SUDDEN_BURST` normalizes to persisted `BURST`.
-4. The service captures one start time and invokes pure generator version `v1`.
-5. Mulberry32 samples each job's controlled type, CPU, memory, duration, and priority; predefined sizes are derived from duration and CPU, and sequence plus arrival offset come from the pattern.
-6. The repository begins one Prisma transaction, creates batch metadata, bulk-creates every job as `QUEUED`, and reads the batch back in sequence order.
-7. Each `arrivalAt` equals batch `startsAt` plus its offset. It is metadata only; no scheduler/timer acts on it.
-8. Any insert/read failure rolls back both batch and all jobs.
-9. Success returns HTTP 201, a `Location` header, and the batch with ordered jobs.
+A custom batch must provide one arrival offset per job, in order from smallest to largest. The browser's Immediate preset uses ten or more zero offsets, so every generated job is eligible immediately. Its Sleep preset chooses small durations that are easy to watch.
 
-## Flow: Custom generation
+## 3. Reuse an existing batch
 
-The same generation route requires custom workload types, bounded integer ranges for size/CPU/memory/duration/priority, and exactly `count` nonnegative, nondecreasing offsets no greater than 86,400 seconds. Unknown fields, commands, images, unsupported counts, mismatched offsets, and unsafe ranges return HTTP 400.
+`POST /api/workloads/:id/reuse` copies the saved job specifications into a new batch with new queued job records. It can use a new start time.
 
-## Flow: Read workload batch
+It copies stored specifications rather than calling the generator again. That preserves the old workload choices even if the generator changes later.
 
-Entry Point:
-`GET /api/workloads/:id`
+## 4. Ask the orchestrator to run work
 
-1. Route validates a UUID.
-2. Service calls `findBatchById()`.
-3. Prisma reads batch and jobs ordered by `batchSequence`.
-4. Existing batch returns HTTP 200; missing batch returns HTTP 404.
+Run Next, Run N, and auto mode call `POST /api/orchestrator/run` with the chosen policy and placement strategy.
 
-## Flow: Reuse workload batch
+For each job, the backend:
 
-Entry Point:
-`POST /api/workloads/:id/reuse`
+1. Looks for an already scheduled job that needs its next step completed.
+2. If there is none, asks the scheduler to choose an eligible queued job.
+3. Chooses a worker if the job does not have one yet.
+4. Reserves resources if they are not reserved yet.
+5. Starts the execution.
+6. Reports which steps succeeded and where it stopped, if any.
 
-1. Route validates source UUID and optional new ISO start time.
-2. Service loads the persisted source batch and ordered jobs.
-3. It copies controlled request fields, sequence, and arrival offsets without calling the generator.
-4. Repository atomically creates a new batch with `sourceBatchId` and new `QUEUED` jobs.
-5. New `arrivalAt` values use the requested/new start time; specification and offsets remain identical.
-6. Success returns HTTP 201 and a `Location` header. Missing source returns HTTP 404.
+A call can advance up to 25 jobs. It does not wait for every container to finish. If there is no eligible work or the next job cannot fit, it reports that outcome instead of pretending a container started.
 
-## Flow: Manual job management
+Auto mode is a browser timer that repeats run requests. Pausing it or closing the page stops those requests. It does not cancel containers already running.
 
-`POST /api/jobs` strictly validates name, workload type, workload size, CPU, memory, duration, and priority, then persists `QUEUED`. `GET /api/jobs` lists by planned arrival and stable tie-breakers; this is not scheduler policy order. `GET /api/jobs/:id` reads one. `POST /api/jobs/:id/cancel` atomically changes only `QUEUED` to `CANCELLED`, is idempotent for retries, and rejects states needing future runtime cleanup.
+## 5. Scheduling chooses the job
 
-## Flow: Worker management
+The scheduler looks for jobs that are still `QUEUED` and whose arrival time has passed. It orders them using the selected policy.
 
-`POST /api/workers` validates name and capacity and forces `IDLE` with zero allocation. `GET /api/workers` orders by name. `GET /api/workers/:id` reads one. These endpoints do not provision machines or alter heartbeat/allocation state.
+The chosen job becomes `SCHEDULED`. The policy, scheduling time, round count, and optional Round Robin time slice are saved.
 
-## Flow: Error handling
+The update requires the job to still be queued. If another request got there first, this request skips that job. Scheduling alone does not choose a worker or reserve any CPU or memory.
 
-Malformed JSON returns 400, bodies over 16 KB return 413, Zod failures return 400, typed domain failures return 404/409, unknown routes return 404, and unexpected errors are logged and returned as generic 500 responses.
+Preview scheduling shows the order without changing any records.
 
-## Flow: Shutdown
+## 6. Placement chooses the worker
 
-On `SIGINT` or `SIGTERM`, the backend prevents duplicate shutdown, drains HTTP connections, disconnects Prisma, and exits according to close success.
+The backend reads worker capacities and current/planned load. It removes workers that cannot accept work or cannot fit both resource requests.
 
-## Not implemented
+It then applies First Fit, Least Loaded, or Resource Aware and saves the chosen worker on the job. If no worker fits, it reports insufficient resources.
 
-| Required flow | Planned increment |
+This is a plan, not a reservation. The worker's reserved counters have not changed yet. Preview placement shows candidates and reasons without saving a choice.
+
+## 7. Reservation claims CPU and memory
+
+For the selected worker, the backend:
+
+1. Begins a database transaction.
+2. Locks the worker record so another reservation must wait.
+3. Checks whether this job already has a live reservation.
+4. Reads the current free CPU and memory again.
+5. If the job fits, creates a `RESERVED` allocation and increases the worker's reserved counters.
+6. Sets the worker to `BUSY` and commits the changes together.
+
+If there is not enough capacity, no reservation is created. If a database write fails, the transaction undoes its changes.
+
+The job remains `SCHEDULED`. The allocation row is the record that its resources are reserved.
+
+## 8. Execution starts the container
+
+Before claiming execution, the backend checks Docker and the allowed workload image. A missing image produces an error asking you to build it; an unavailable Docker engine produces a separate error.
+
+To start a job:
+
+1. Lock the job record.
+2. Check that it is scheduled, placed, and reserved.
+3. Change the job to `RUNNING` and create an execution record.
+4. Commit those database changes.
+5. Create and start the workload container with the reserved CPU and memory limits.
+6. Save the container ID.
+7. Return a response while a backend task waits for the container to finish.
+
+If creating or starting the container fails, the backend records the failure and releases the reservation through its normal finish-handling code.
+
+## 9. Finish the run and release resources
+
+When the container exits, the backend reads its result and capped output.
+
+| What happened | Saved outcome |
 | --- | --- |
-| Preemption that returns a running job to the queue after its quantum | Later |
-| Cancelling a job that is already running | Later |
-| Reactive autoscaling | Later |
-| Heartbeat failure detection and recovery, including reconciling orphaned executions | Later |
-| ML dataset, prediction, and proactive scaling | Later |
-| Experiment execution/comparison | Later |
+| Exit code 0 and a valid result | `COMPLETED` |
+| Non-zero exit, including running out of memory | `FAILED` |
+| Exit code 0 but no valid expected result | `FAILED` |
+| Stopped because it exceeded the time limit | `INTERRUPTED` |
 
-All six tables are written by running code. Generated arrival metadata gates scheduling eligibility but does not make jobs run on its own: every stage of the chain is driven by an explicit request, and the monitoring sampler is the only background loop.
+One transaction saves the execution outcome, updates the job, changes the allocation to `RELEASED`, and subtracts its resources from the worker. If the worker has nothing reserved, it becomes `IDLE`.
 
-## Flow: Preview scheduling order
+The container is then removed. Saved output and results remain in MySQL until their records are cleared.
 
-Entry Point:
-`GET /api/scheduler/preview?policy=<policy>&limit=<optional>`
-
-Sequence:
+Repeating an already completed settle or release returns the saved outcome. It should not free the same resources twice.
 
-1. `backend/src/modules/scheduler/scheduler.routes.js`
-2. `previewQuerySchema` in `scheduler.schemas.js`
-3. `SchedulerService.preview()` in `scheduler.service.js`
-4. `prismaSchedulerRepository.findEligible()` in `scheduler.repository.js`
-5. `orderByPolicy()` in `scheduler.policies.js`
+## 10. Read current state and history
 
-Detailed Flow:
+The dashboard regularly calls `GET /api/orchestrator/state` to display jobs, worker assignments, reservations, and execution progress.
 
-1. The route requires one of `FCFS`, `SJF`, `PRIORITY`, or `ROUND_ROBIN`, plus an optional limit from 1–100 (default 20).
-2. The service captures the current time once.
-3. The repository reads up to 500 jobs that are `QUEUED` with `arrivalAt <= now`.
-4. The pure policy function orders those candidates.
-5. The route returns the policy, eligible count, and the limited ordered jobs.
-6. No job state changes. This endpoint exists to demonstrate and compare policy ordering.
+The monitoring panel reads resource use and job timing summaries. It does not make scheduling decisions.
 
-## Flow: Dispatch jobs by policy
+The sampler separately saves one usage snapshot per worker at the configured interval. Rows from the same pass share a timestamp. A repeated pass at that timestamp does not add duplicates. Old samples are removed according to the retention setting.
 
-Entry Point:
-`POST /api/scheduler/dispatch`
+The Capture sample button requests a sample immediately, even when the timer is disabled.
 
-Sequence:
-
-1. `scheduler.routes.js`
-2. `dispatchSchema` in `scheduler.schemas.js`
-3. `SchedulerService.dispatch()`
-4. `orderByPolicy()`
-5. `assertJobTransition()` in `../jobs/job.transitions.js`
-6. `prismaSchedulerRepository.claim()`
-7. MySQL `jobs`
-
-Detailed Flow:
-
-1. Strict validation accepts a policy, an optional count from 1–100 (default 1), and an optional time quantum from 1–3600 seconds.
-2. A time quantum is rejected with HTTP 400 for any policy other than `ROUND_ROBIN`; `ROUND_ROBIN` defaults to 10 seconds.
-3. The service captures one timestamp, loads eligible candidates, and orders them by policy.
-4. For each candidate up to the requested count, the shared transition policy validates `QUEUED -> SCHEDULED`.
-5. The repository runs one conditional `updateMany` matching the job ID and `QUEUED` status, setting `SCHEDULED`, the policy, `scheduledAt`, the quantum, and incrementing `schedulingRounds`.
-6. If the update matched zero rows, another dispatch already claimed that job; the service skips it and continues. The round counter is not incremented for a lost claim.
-7. The route returns the policy, quantum, requested count, eligible count, scheduled count, and the scheduled jobs.
-8. Scheduling assigns no worker, reserves no resources, and starts no container.
-
-## Flow: Read worker capacity
-
-Entry Point:
-`GET /api/placement/capacity`
-
-Sequence:
-
-1. `backend/src/modules/placement/placement.routes.js`
-2. `PlacementService.capacity()` in `placement.service.js`
-3. `prismaPlacementRepository.listWorkers()` and `assignedLoadByWorker()`
-4. `buildSnapshot()` in `placement.accounting.js`
+## 11. Manage individual records
 
-Detailed Flow:
+- Create one job with `POST /api/jobs`; it starts queued.
+- Cancel a queued job with `POST /api/jobs/:id/cancel`.
+- Create a logical worker with `POST /api/workers`; it starts idle with no resources reserved.
+- Read job, worker, allocation, and execution records through their GET endpoints.
+- Use the selected-job stage buttons to inspect or advance a step when demonstrating how the system works.
 
-1. The repository reads all workers ordered by name.
-2. A Prisma `groupBy` sums CPU and memory requirements of jobs whose `assignedWorkerId` is set and whose status is `SCHEDULED` or `RUNNING`.
-3. Each snapshot reports capacity, persisted reservations, advisory assigned load, remaining availability, CPU and memory utilization, and whether the worker can accept work.
-4. No state changes.
+Cancelling a running container from the UI is not implemented yet.
 
-## Flow: Preview placement
+## 12. Clear finished jobs
 
-Entry Point:
-`GET /api/placement/preview?jobId=<uuid>&strategy=<strategy>`
+The dashboard calls `POST /api/orchestrator/clear-finished`.
 
-1. The route requires a UUID and one of `FIRST_FIT`, `LEAST_LOADED`, or `RESOURCE_AWARE`.
-2. The service loads the job, returning HTTP 404 when it does not exist.
-3. It builds capacity snapshots and calls the pure `evaluatePlacement()`.
-4. The response lists every candidate with eligibility, human-readable reasons for rejection, and a score, plus the selected worker.
-5. `selected` is `null` when no worker has enough free CPU and memory.
-6. No state changes, so this endpoint can be used to compare strategies.
+The backend selects jobs in `COMPLETED`, `FAILED`, `INTERRUPTED`, or `CANCELLED` states. In one transaction it removes their execution records, allocations, and job records, then removes empty batches that are no longer referenced by reused batches.
 
-## Flow: Assign placement
-
-Entry Point:
-`POST /api/placement/assign`
+Queued, scheduled, and running jobs are not selected for this cleanup. Workers and sampled usage history remain. Since finished records are removed, later summaries based on those records will change.
 
-Sequence:
+## 13. Errors and shutdown
 
-1. `placement.routes.js`
-2. `assignPlacementSchema` in `placement.schemas.js`
-3. `PlacementService.assign()`
-4. `evaluatePlacement()`
-5. `prismaPlacementRepository.assign()`
-6. MySQL `jobs`
-
-Detailed Flow:
-
-1. Strict validation accepts only a job UUID and a strategy.
-2. A job that does not exist returns HTTP 404.
-3. A job that is not `SCHEDULED` returns HTTP 409 `JOB_NOT_PLACEABLE`; an already placed job returns HTTP 409 `JOB_ALREADY_PLACED`.
-4. The service builds capacity snapshots and evaluates the strategy.
-5. When no worker is eligible it returns HTTP 409 `INSUFFICIENT_RESOURCES` and the job remains unplaced.
-6. Otherwise one conditional `updateMany` matching the job ID, `SCHEDULED` status, and a null worker sets `assignedWorkerId`, `placementStrategy`, and `placedAt`.
-7. A zero-row update means a concurrent placement won, returning HTTP 409 `PLACEMENT_CONFLICT`.
-8. The response returns the full evaluation plus the updated job.
-9. Job status stays `SCHEDULED`: placement is not a lifecycle transition. Worker counters are untouched and no allocation row is created, so the decision is advisory until reservation re-verifies it under a row lock.
-
-## Flow: Reserve resources
-
-Entry Point:
-`POST /api/resources/reserve`
-
-Sequence:
-
-1. `backend/src/modules/resources/resource.routes.js`
-2. `reserveResourcesSchema` in `resource.schemas.js`
-3. `ResourceService.reserve()` in `resource.service.js`
-4. `prismaResourceRepository.reserve()` in `resource.repository.js`
-5. MySQL transaction with `SELECT ... FOR UPDATE`
-6. `resource_allocations` and `workers`
-
-Detailed Flow:
-
-1. Strict validation accepts only a job UUID. The reserved amount and worker are never client-supplied.
-2. A missing job returns HTTP 404.
-3. A job whose status is not `SCHEDULED` returns HTTP 409 `JOB_NOT_RESERVABLE`.
-4. A job with no `assignedWorkerId` returns HTTP 409 `JOB_NOT_PLACED`, so reservation cannot run before placement.
-5. The repository opens an interactive transaction with a 15s start window and 20s timeout, because waiting on a row lock is expected.
-6. A parameterized `SELECT ... FOR UPDATE` locks the worker row and `lockWaitMs` is recorded.
-7. Still holding the lock, the transaction first checks whether the job already has a `RESERVED` allocation and returns HTTP 409 `ALREADY_RESERVED` if so. This precedes the capacity check because the job's own reservation is counted in the worker's usage, which would otherwise be reported as a false shortfall.
-8. Capacity and allocated counters are re-read inside the transaction; the earlier placement decision is not trusted.
-9. If `capacity - allocated` is short on CPU or memory, the transaction returns without writing and the route responds HTTP 409 `INSUFFICIENT_RESOURCES` with the observed free capacity.
-10. Otherwise a `RESERVED` allocation row is inserted, the worker counters are incremented, and the worker is set `BUSY`.
-11. A concurrent duplicate that slips past step 7 violates the functional unique index and is mapped to the same HTTP 409 `ALREADY_RESERVED`, leaving counters unchanged.
-12. On commit the route returns HTTP 201 with the allocation, the updated worker, and `lockWaitMs`.
-13. Any failure before commit rolls back the allocation row, the counter update, and the worker status together.
-14. Job status stays `SCHEDULED`; no container is started.
+Input errors return a readable error code and message. Invalid JSON returns HTTP 400; a request body over 16 KB returns HTTP 413. Unknown URLs return HTTP 404. The [API guide](api.md) explains the normal request format.
 
-## Flow: Release resources
+On a normal shutdown signal, the server stops its sampler, closes its listener, waits for pending execution-result work, and disconnects from MySQL.
 
-Entry Point:
-`POST /api/resources/release`
-
-1. Validation accepts only a job UUID; a missing job returns HTTP 404.
-2. A transaction looks for the job's `RESERVED` allocation.
-3. When found, the worker row is locked, the allocation becomes `RELEASED` with `releasedAt`, and the worker counters are decremented.
-4. When the worker holds no further reservations its status returns to `IDLE`.
-5. When the job was already released, the existing record is returned with `alreadyReleased: true` and nothing is decremented again, so retries are safe.
-6. When the job never reserved, the route responds HTTP 409 `NO_ACTIVE_ALLOCATION`.
-
-## Flow: List allocations
-
-Entry Point:
-`GET /api/resources/allocations?jobId=&workerId=&status=&limit=`
-
-The route validates optional job UUID, worker UUID, allocation status, and a limit from 1–100 (default 50), then returns matching allocation records newest first. This is the audit view of reservation history and changes no state.
-
-## Flow: Inspect the container runtime
-
-Entry Point:
-`GET /api/executions/runtime`
-
-1. `DockerContainerRuntime.describe()` calls the daemon's unversioned `/version`.
-2. The reported API version is negotiated against what the adapter supports: never newer than `1.44`, never older than the daemon's minimum. A daemon that dropped every version the adapter knows fails loudly instead of sending unsupported requests.
-3. The negotiated version is cached and used as the path prefix for every later call.
-4. The route reports the server version, API version, the one allowed image, whether that image is present, and the socket path.
-5. An unreachable socket returns HTTP 503 `DOCKER_UNAVAILABLE`. Nothing is created or changed.
-
-## Flow: Execute a reserved job
-
-Entry Point:
-`POST /api/executions/start`
-
-Sequence:
-
-1. `backend/src/modules/executions/execution.routes.js`
-2. `startExecutionSchema` in `execution.schemas.js`
-3. `ExecutionService.start()` in `execution.service.js`
-4. `prismaExecutionRepository.claim()` in `execution.repository.js`
-5. `DockerContainerRuntime.start()` in `execution.runtime.js`
-6. `DockerEngineClient` in `docker.client.js`, over the daemon socket
-7. `job_executions`, `jobs`, `resource_allocations`, and `workers`
-
-Detailed Flow:
-
-1. Strict validation accepts only a job UUID. An `image`, `command`, `env`, or `timeoutSeconds` field is rejected with HTTP 400 `VALIDATION_ERROR` as an unrecognized key.
-2. The workload image is verified once per process. A missing image returns HTTP 503 `WORKLOAD_IMAGE_MISSING` and names the build command; an unreachable daemon returns HTTP 503 `DOCKER_UNAVAILABLE`. Neither claims the job.
-3. The claim transaction locks the job row with `SELECT ... FOR UPDATE`, so concurrent starts serialise instead of racing.
-4. A missing job returns HTTP 404.
-5. A job that is `RUNNING` and already owns a `PENDING` or `RUNNING` execution returns HTTP 409 `EXECUTION_ALREADY_STARTED`. A job that is `RUNNING` with no live execution is an orphan from an interrupted process and returns HTTP 409 `JOB_NOT_EXECUTABLE`, which is also the answer for any other non-`SCHEDULED` state or an unplaced job.
-6. A job with no `RESERVED` allocation returns HTTP 409 `NO_ACTIVE_ALLOCATION`, so execution cannot run on uncommitted capacity.
-7. Still inside the transaction, the job moves `SCHEDULED -> RUNNING` with `startedAt`, and a `JobExecution` row is inserted as `PENDING` with `attempt` one higher than the job's previous executions, bound to the live allocation. A unique-index collision is reported as `EXECUTION_ALREADY_STARTED`. The transaction commits before any container exists.
-8. Outside the transaction, the container is created from `orchestros/workload-runner:v1` under the restrictions in `architecture.md` section 11, named `orchestros-exec-<executionId>`, with CPU and memory limits equal to the allocation and the four controlled environment variables. The seed is a hash of the job name.
-9. If creation or start fails, the container is removed and the execution is finalised as `FAILED` with the daemon's message, which also releases the reservation. The route then returns the failure rather than leaving the job stuck `RUNNING`.
-10. On success the container id is stored on both the execution and the job, the execution becomes `RUNNING`, and the route returns HTTP 202 with the execution, the container description, and the effective timeout. It does not wait for the workload.
-11. A background task awaits the container's exit and then settles it through the same path as a manual settle.
-
-## Flow: Settle a finished container
-
-Entry Points:
-The background task started by `POST /api/executions/start`, or `POST /api/executions/:executionId/settle`
-
-Detailed Flow:
-
-1. An unknown execution returns HTTP 404.
-2. An execution that already reached a terminal state is answered from the database alone, with `alreadySettled: true` and `released: false`. Docker is not contacted, because the container has normally been removed by then.
-3. An execution that never reached a container is recorded as `FAILED`.
-4. If the daemon no longer knows the container while the execution is still open, the outcome is unrecoverable: the execution is recorded as `FAILED` with an explicit reason and a null exit code rather than a guessed one, and the reservation is released.
-5. A container that is still running returns HTTP 409 `EXECUTION_STILL_RUNNING` from the manual endpoint; the background task instead waits for it.
-6. The background task's wait is bounded by `EXECUTION_TIMEOUT_SECONDS`. On expiry OrchestrOS stops the container with a five second grace period and marks the run timed out.
-7. The final state and both output streams are read. Each stream is demultiplexed from Docker's framed log format and capped at `EXECUTION_LOG_LIMIT_BYTES`, with a `[truncated]` marker when it was cut.
-8. The outcome is classified: a timeout is `INTERRUPTED`; a non-zero exit is `FAILED` with a specific cause, including a distinct message for an OOM kill; a zero exit whose stdout does not match the runner contract is `FAILED`, not a success; a zero exit with a valid result line is `COMPLETED`.
-9. One transaction then writes the execution's status, exit code, captured output, and failure reason, sets the job's terminal state and `completedAt`, stores the parsed result on the job when there is one, and releases the reservation by the shared `releaseAllocationWithin` path. Worker counters drop and the worker returns to `IDLE` when it holds nothing.
-10. Finalisation is guarded by the execution's current status, so the automatic and manual paths cannot both release capacity.
-11. The container is removed. A removal failure is logged but does not affect the committed outcome.
-
-## Flow: Read executions
-
-Entry Points:
-`GET /api/executions?jobId=&workerId=&status=&limit=` and `GET /api/executions/:executionId`
-
-The list route validates optional job UUID, worker UUID, execution status, and a limit from 1–100 (default 50), returning matching executions newest first. The detail route returns one execution or HTTP 404. Both are read-only and include the captured output, so a run's evidence is inspectable after the container is gone.
-
-## Flow: Shutdown with work in flight
-
-1. `SIGINT` or `SIGTERM` stops accepting connections.
-2. The monitoring sampler is stopped, so no new observation starts during shutdown.
-3. `executionService.awaitPendingSettlements()` waits for containers already being awaited, so their outcomes are committed and their reservations released.
-4. Prisma disconnects and the process exits.
-
-If the process dies without this path, an execution stays `RUNNING` and keeps holding its reservation. `POST /api/executions/:id/settle` is the recovery path; automatic reconciliation is not implemented.
-
-## Flow: Read live metrics
-
-Entry Point:
-`GET /api/monitoring/overview`
-
-Sequence:
-
-1. `backend/src/modules/monitoring/monitoring.routes.js`
-2. `MonitoringService.overview()` in `monitoring.service.js`
-3. `prismaMonitoringRepository.overview()` and `.workerActivity()` in `monitoring.repository.js`
-4. `workers`, `jobs`, `job_executions`, `resource_allocations`, and `worker_samples`
-
-Detailed Flow:
-
-1. The repository reads workers, job counts by status, execution counts by status, the active reservation count, non-terminal executions, and sample metadata inside one transaction, so every figure describes the same instant rather than a drifting one.
-2. Worker activity is a second query that counts, per worker, active reservations, live executions, total executions, and completed and failed outcomes.
-3. Cluster totals sum capacity and reservations across workers. Utilization is clamped to 0..1, so a reporting bug can never present as impossible load, and a worker with no capacity reports zero rather than dividing by zero.
-4. Jobs are bucketed into waiting (`CREATED`, `QUEUED`, `WAITING`, `SCHEDULED`), running, and finished (`COMPLETED`, `FAILED`, `INTERRUPTED`, `CANCELLED`).
-5. A worker with no recorded activity reports zeros rather than missing fields.
-6. Each running execution reports its job, worker, workload type, container id, and elapsed seconds measured from `startedAt`.
-7. Nothing is written. The response carries `capturedAt` so a client knows how fresh it is.
-
-## Flow: Read job lifecycle metrics
-
-Entry Point:
-`GET /api/monitoring/jobs?windowMinutes=<1..10080>`
-
-1. The window is validated and defaults to 60 minutes; zero, an unbounded value, or an unknown query key is rejected with HTTP 400.
-2. One raw SQL query normalises five stage durations into `(metric, seconds)` pairs and aggregates them once, so MySQL computes the p95 rather than the process loading every row. Prisma cannot aggregate the difference between two columns, which is why this query is raw.
-3. Durations are anchored on jobs created inside the window. Negative durations are not filtered out, so a clock anomaly would surface rather than hide.
-4. Every one of the five stages is reported. A stage nothing has reached yet returns a zero count with null statistics, not an absent key.
-5. Completion counts are anchored on `completedAt` inside the window, because that is what a rate should measure. The window start is echoed so the denominator is never ambiguous.
-6. Success rate is null when nothing finished in the window rather than reported as zero percent.
-
-## Flow: Record a utilization sample
-
-Entry Points:
-The periodic sampler started by `server.js`, or `POST /api/monitoring/sample`
-
-1. One `INSERT ... SELECT` writes one row per worker, all sharing a single `capturedAt`, copying each worker's capacity, reservations, and status plus its live execution and reservation counts.
-2. A unique index on `(workerId, capturedAt)` with `ON DUPLICATE KEY UPDATE` with a no-op assignment makes a repeated pass at the same instant a no-op instead of a double count.
-3. `CHECK` constraints reject any sample that contradicts real accounting: capacity must be positive, allocated must fall within capacity, and counts cannot be negative.
-4. Retention pruning then deletes samples older than the configured window, so history cannot grow without bound whether sampling is periodic or on demand. A retention of zero keeps everything.
-5. The periodic path skips a pass while one is already in flight, so a slow database cannot make passes pile up, and a failure is logged and skipped rather than propagated.
-6. Sampling writes only `worker_samples`. It never touches a job, a reservation, or a container.
-
-## Flow: Read utilization history
-
-Entry Point:
-`GET /api/monitoring/samples?workerId=&windowMinutes=&limit=`
-
-The route validates an optional worker UUID, a bounded window, and a limit from 1–5000 (default 500). Rows are grouped by their shared `capturedAt` into cluster points, each summing that pass's workers, and returned oldest first, which is the order a chart wants. Utilization is recomputed from the summed totals rather than averaged from per-worker percentages.
-
-## Flow: Browser dashboard control and polling
-
-The browser is the normal control interface. It polls `GET /api/orchestrator/state` every 1.5 seconds for jobs, workers, pipeline counts, reservations, and running containers. It separately polls monitoring metrics every five seconds. React never computes a scheduling decision or modifies state locally; it renders backend facts and submits validated operator choices.
-
-`Refresh` and `Capture sample` remain monitoring-only controls. The orchestration controls are described below.
-
-
-## Flow: Generate a workload from the browser
-
-Entry Point:
-The **Generate Workload** button in `frontend/src/components/ControlPanel.jsx`
-
-1. The UI collects an allowed count (10, 25, 50, or 100), arrival pattern, deterministic seed, and controlled profile.
-2. The browser maps the controls onto the existing `POST /api/workloads/generate` contract; it does not generate a job itself.
-3. Predefined patterns are sent unchanged. The browser's **Immediate** preset sends the existing `CUSTOM` pattern with an all-zero, valid arrival-offset array, so every job is eligible immediately without bypassing arrival validation.
-4. The backend's `WorkloadService.generate()` calls the existing deterministic generator and persists `WorkloadBatch` plus `QUEUED` jobs in one transaction.
-5. The browser re-reads `GET /api/orchestrator/state`; the new jobs appear in the live queue with type, CPU, memory, priority, estimate, and eligibility.
-
-## Flow: Run the orchestrator from the browser
-
-Entry Points:
-**Run Next Job**, **Run N Now**, **Run Orchestrator (auto)**, and **Demo Mode** in the browser
-
-API Entry Point:
-`POST /api/orchestrator/run`
-
-Sequence:
-
-1. The browser sends only the scheduling policy, placement strategy, optional Round Robin quantum, and a bounded job count. It cannot choose a job id, worker id, CPU/memory amount, image, command, or container settings.
-2. `orchestrator.routes.js` validates that request with strict Zod schemas and calls `OrchestratorService.run()`.
-3. For each requested job, `runNext()` first looks for an earlier `SCHEDULED` job with no live execution. If one exists, it resumes it instead of leaving a half-advanced job stranded.
-4. Otherwise it calls the existing `SchedulerService.dispatch()` to select and claim one eligible queued job according to FCFS, SJF, Priority, or Round Robin. A job whose planned arrival is still future is not eligible.
-5. It calls the existing `PlacementService.assign()` with the chosen strategy. An insufficient worker returns a recorded `INSUFFICIENT_RESOURCES` stop; it is not treated as a frontend error.
-6. It calls the existing `ResourceService.reserve()`, which locks the selected worker row and rechecks capacity inside the MySQL transaction before inserting the `RESERVED` allocation and incrementing the counters.
-7. It calls the existing `ExecutionService.start()`, which claims `SCHEDULED -> RUNNING`, starts the fixed Docker runner, and settles it asynchronously. Settlement writes the outcome and releases capacity in the same transaction.
-8. The facade returns one `StageOutcome` per stage, including `OK`, `SKIPPED`, or `FAILED`, with the actual backend detail and stable error code. The browser's activity log displays these facts directly.
-9. Auto mode repeats the bounded request every two seconds. It stops when the backend reports no eligible job or the cluster is currently full; React never assumes an action succeeded merely because a button was clicked.
-
-## Flow: Inspect a job and advance an individual stage
-
-1. Selecting a row from the browser queue highlights the job's persisted pipeline stage: Queue, Scheduler, Placement, Reservation, Docker Execution, Completed, or Terminal.
-2. The detail panel shows the job's backend fields, assigned worker, active reservation, latest execution, container status, elapsed time, stored result, and failure reason.
-3. Its demonstration controls call the existing stage endpoints (`/api/placement/assign`, `/api/resources/reserve`, `/api/executions/start`, and `/api/resources/release`). The UI disables a control when the persisted state does not permit it.
-4. The next `/api/orchestrator/state` read refreshes every displayed value. The browser does not synthesize a stage transition.
-
-## Flow: Clear a completed browser demonstration
-
-Entry Point:
-The **Clear finished jobs** button
-
-API Entry Point:
-`POST /api/orchestrator/clear-finished`
-
-1. `OrchestratorService.clearFinished()` calls one repository transaction.
-2. The repository finds only `COMPLETED`, `FAILED`, `INTERRUPTED`, and `CANCELLED` jobs.
-3. It deletes their executions, allocations, and jobs in foreign-key order, then removes batches with no remaining jobs and no reused descendants.
-4. It does not select or delete `QUEUED`, `SCHEDULED`, or `RUNNING` jobs, so it cannot remove work awaiting execution, a live container, or an active reservation.
-5. The browser re-reads state and returns to an empty queue while preserving the three seeded logical workers and monitoring history.
+A forced stop or crash can still leave a job marked running. Once its container has finished, `POST /api/executions/:executionId/settle` can save the outcome and release resources. It refuses to settle a container that is still running. If the container is missing, it records an explicit failure rather than inventing a result. Automatic crash recovery is planned.

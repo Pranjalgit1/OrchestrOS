@@ -1,449 +1,235 @@
-# OrchestrOS Architecture
+# How the project is built
 
-## 1. Purpose and boundary
+OrchestrOS runs computing jobs on one development computer. It combines a browser dashboard, a JavaScript backend, MySQL, and Docker.
 
-OrchestrOS is a Kubernetes-inspired local container orchestration prototype. It runs on one physical development machine and will schedule controlled workloads, place them across logical workers, execute them in Docker, protect resource accounting with MySQL transactions, recover interrupted work, and use forecasting to assist scaling.
+The browser asks for work to happen. The backend makes the decisions. MySQL stores what happened. Docker runs each workload.
 
-Logical workers are database-backed capacity records, not physical computers, VMs, cloud nodes, or Docker hosts. Kubernetes, cloud provisioning, arbitrary commands/images, Redis, Kafka, GPU orchestration, complex service discovery, and production multi-tenancy are outside scope.
+```text
+Browser: React dashboard
+          |
+          | API requests
+          v
+Backend: Express application
+          |                 |
+          v                 v
+       MySQL          Docker containers
+   saved records       actual workloads
+```
 
-## 2. Architectural style and current implementation
+## 1. Main parts
 
-The system is an npm-workspace monorepo with a React/Vite frontend, modular Express backend, Prisma persistence adapter, and local MySQL supplied by Compose. Backend features use route, service, repository, and pure-domain boundaries inside one process.
-
-The current implementation includes foundation startup, job/worker management, deterministic workload generation, scheduling, placement, transactional resource reservation, controlled Docker execution, operational monitoring, and a browser-first orchestration control interface. Autoscaling, failure recovery, experiments, and ML remain future increments unless `docs/flow.md` says otherwise.
-
-## 3. Components
-
-| Component | Responsibility | Status |
+| Part | Main job | Where to look |
 | --- | --- | --- |
-| Frontend | Primary browser control interface and live state visualisation | Implemented |
-| Backend API | Validate requests and expose modular operations | Implemented |
-| Orchestrator facade | Compose existing pipeline services for browser actions | Implemented |
-| Job manager/queue | Persist controlled jobs and enforce the create/read/cancel lifecycle | Implemented; claiming is done by the scheduler and by execution |
-| Worker manager | Persist logical capacity and initial workers | Implemented management |
-| Workload generator | Produce and persist deterministic controlled workload batches | Implemented |
-| Scheduler | Select FCFS, SJF, Priority, or Round Robin job | Implemented |
-| Placement | Select First Fit, Least Loaded, or Resource-Aware worker | Implemented (advisory) |
-| Resource manager | Transactional CPU/memory reservation and release | Implemented |
-| Container manager | Run predefined workloads under Docker limits | Implemented |
-| Workload runner image | Execute one of five fixed programs and print a checksum | Implemented |
-| Monitoring | Derive operational metrics and sample utilization over time | Implemented |
-| Autoscaling/failure recovery/ML/experiments | Control and evaluation loops | Pending |
+| Dashboard | Show controls, jobs, workers, results, and graphs | `frontend/src/` |
+| API setup | Connect routes, validate request bodies, and report errors | `backend/src/app.js` |
+| Server | Listen for requests, start monitoring, and handle shutdown | `backend/src/server.js` |
+| Orchestrator | Call scheduling, placement, reservation, and execution in order | `backend/src/modules/orchestrator/` |
+| Jobs and workers | Create and read their database records | `backend/src/modules/jobs/`, `backend/src/modules/workers/` |
+| Workload generator | Create repeatable batches of job specifications | `backend/src/modules/workloads/` |
+| Scheduler | Choose the next job | `backend/src/modules/scheduler/` |
+| Placement | Choose a worker | `backend/src/modules/placement/` |
+| Resources | Reserve and release CPU and memory | `backend/src/modules/resources/` |
+| Executions | Start Docker containers and record results | `backend/src/modules/executions/` |
+| Monitoring | Read current values and save usage history | `backend/src/modules/monitoring/` |
+| Workload program | Do the actual calculation inside a container | `workload-runner/run.js` |
 
-## 4. Job lifecycle and queue
+Most backend features use the same file pattern:
 
-Required job states are `CREATED`, `QUEUED`, `WAITING`, `SCHEDULED`, `RUNNING`, `COMPLETED`, `FAILED`, `INTERRUPTED`, and `CANCELLED`. Valid edges are centralized in `job.transitions.js`. Manual and generated jobs enter MySQL as `QUEUED`. Execution drives `SCHEDULED -> RUNNING` and then `RUNNING -> COMPLETED`, `FAILED`, or `INTERRUPTED`. Only queued cancellation is active; cancelling a running job waits for a later increment.
-
-MySQL is the only queue source of truth. There is no in-memory queue or Redis. `arrivalAt` and `arrivalOffsetSeconds` gate eligibility: the scheduler only considers queued jobs whose planned arrival has passed. No timer releases jobs on its own; every stage of the chain is driven by an explicit request.
-
-## 5. Deterministic workload generation
-
-`workload.generator.js` is pure: it does not call Prisma, clocks, UUIDs, `Math.random`, or external services. Generator version `v1` uses a local Mulberry32 PRNG. Determinism covers the ordered workload specifications and arrival offsets for the same version, seed, count, canonical pattern, and custom configuration. Database IDs and default batch start times are intentionally not deterministic.
-
-Allowed batch sizes are exactly 10, 25, 50, and 100. Each job independently samples its workload type, CPU, memory, estimated duration, and priority from the pattern's pools, so batches vary without short repeating cycles. Batches of 25 or more cover all five controlled workload types; a 10-job batch may omit one. The five controlled types are:
-
-- CPU-intensive calculation
-- Matrix multiplication
-- Sorting
-- Data processing
-- Controlled sleep
-
-Generated fields include workload type/size, CPU millicores, memory MiB, estimated duration, priority, sequence, and arrival offset. No command or Docker image can be generated or submitted.
-
-For predefined patterns, `workloadSize` is **derived** from the sampled estimated duration and CPU request so the stored size reflects the work the estimate represents. `SLEEP` size equals its duration in seconds; other types scale by documented per-type factors. Custom batches keep the caller's explicit size range instead. This keeps future SJF scheduling and later container execution consistent with each other.
-
-### Pattern contract (`v1`)
-
-| Pattern | Arrival/resource behavior |
+| File ending | Purpose |
 | --- | --- |
-| `LIGHT` | Low resource pools; deterministic seeded 20–40 second gaps |
-| `MEDIUM` | Medium pools; seeded 8–16 second gaps |
-| `HEAVY` | High but locally bounded pools; seeded 2–6 second gaps |
-| `CONSTANT` | Medium varied resources; fixed 10 second gaps |
-| `BURST` | Groups of five jobs share an offset; groups are 30 seconds apart |
-| `INCREASING` | Light→medium→heavy resources; gaps decrease toward 2 seconds |
-| `DECREASING` | Heavy→medium→light resources; gaps increase toward 20 seconds |
-| `PERIODIC` | Repeating resource profile and gap cycle `[2,2,2,20]` |
-| `CUSTOM` | Caller supplies bounded ranges/types and exact nondecreasing offsets |
+| `.routes.js` | Connect an API URL to its handler |
+| `.schemas.js` | Check that incoming values are allowed |
+| `.service.js` | Apply the feature's rules |
+| `.repository.js` | Read and change database records |
+| `.test.js` | Check behavior with controlled inputs |
+| `.integration.test.js` | Check behavior using a real database or container |
 
-`SUDDEN_BURST` is accepted as an input alias and stored as canonical `BURST`.
+Some features also have calculation-only files, such as `scheduler.policies.js` and `placement.accounting.js`. These are easier to test because they do not need a server or database.
 
-A `WorkloadBatch` stores seed, count, pattern, generator version, normalized parameters, start time, and optional source-batch lineage. Batch and jobs are created in one Prisma transaction. Batch sequence is unique. Reuse clones persisted job specifications into new queued jobs rather than rerunning the current generator, so future generator changes cannot alter an experiment input.
+## 2. What MySQL stores
 
-## 6. Logical workers and resource units
+The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). The initial SQL is in [the MySQL migration](../backend/prisma/migrations/20261005000000_mysql_initial/migration.sql).
 
-CPU uses integer millicores (`1000` = one logical core) and memory uses MiB (`1024` = one GiB). The idempotent seed creates:
+| Table | What one row means |
+| --- | --- |
+| `workload_batches` | A saved group of generated jobs and the settings used to create them |
+| `jobs` | One job, its resource needs, current state, timing, and result |
+| `workers` | One logical worker's capacity, reserved resources, and state |
+| `resource_allocations` | A job's CPU and memory reservation, including released history |
+| `job_executions` | One attempt to run a job in a container |
+| `worker_samples` | One worker's resource-use snapshot at a particular time |
 
-| Worker | CPU | Memory |
+The queue is saved in `jobs`. There is no second queue that must be kept in sync with MySQL.
+
+Prisma is the library the backend uses for most database operations. Raw SQL is used where needed, including row locks and some monitoring calculations.
+
+## 3. Jobs and states
+
+Jobs created manually or by the generator start as `QUEUED`.
+
+```text
+QUEUED -> SCHEDULED -> RUNNING -> COMPLETED
+   |                       | -> FAILED
+   |                       | -> INTERRUPTED
+   v
+CANCELLED
+```
+
+| State | Meaning |
+| --- | --- |
+| `QUEUED` | Waiting to be chosen; its arrival time may still be in the future |
+| `SCHEDULED` | Chosen by the scheduler; it may still need a worker or reservation |
+| `RUNNING` | Execution has been claimed; the container is starting or running |
+| `COMPLETED` | Finished successfully and returned a valid result |
+| `FAILED` | Could not start, exited with an error, or did not return a valid result |
+| `INTERRUPTED` | The system stopped the run after its time limit |
+| `CANCELLED` | Cancelled while queued |
+
+`CREATED` and `WAITING` also exist in the allowed state model, but normal job creation currently starts at `QUEUED`. State-change rules live in `job.transitions.js`.
+
+The dashboard also shows stages such as placed and reserved. These come from the job's worker and allocation records; they are not extra job-status values.
+
+## 4. Logical workers and units
+
+Workers are saved capacity budgets on the same computer. Their capacity values do not create extra physical hardware.
+
+- **CPU:** 1000 millicores equals one logical core.
+- **Memory:** 1024 MiB equals one GiB.
+
+The setup script creates these workers if they are missing:
+
+| Worker | CPU in millicores | Memory in MiB |
 | --- | ---: | ---: |
-| `worker-1` | 2000 | 2048 MiB |
-| `worker-2` | 4000 | 4096 MiB |
-| `worker-3` | 6000 | 8192 MiB |
+| `worker-1` | 2000 | 2048 |
+| `worker-2` | 4000 | 4096 |
+| `worker-3` | 6000 | 8192 |
 
-Worker states are `STARTING`, `ACTIVE`, `IDLE`, `BUSY`, `STOPPING`, and `FAILED`. Current create/seed behavior uses `IDLE` and zero allocation.
+New workers start `IDLE` with nothing reserved. A worker with a reservation becomes `BUSY`; it becomes `IDLE` again when its reserved CPU and memory reach zero. The model also supports `STARTING`, `ACTIVE`, `STOPPING`, and `FAILED`.
 
-## 7. Database and consistency
+## 5. Repeatable workload generation
 
-MySQL contains `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, `JobExecution`, and `WorkerSample`. All six are written by running code. The first five are authoritative; `WorkerSample` is observational and is the only table monitoring writes. SQL constraints enforce resource bounds, valid batch sizes/offsets, complete batch identity, unique sequence, one active reservation per job, matching execution/allocation job-worker identity, one execution per allocation, one execution per job attempt, bounded captured output, byte-range exit codes, hex container ids, and the rule that a terminal execution records when it completed.
+The generator supports batches of exactly 10, 25, 50, or 100 jobs. A seed is a number that lets it repeat the same choices.
 
-Compose runs deployment migrations and the worker seed before backend startup. Readiness queries the five authoritative models; it deliberately excludes `WorkerSample`, because losing observational history is not a reason to call the orchestrator unhealthy. Published ports are loopback-only.
+For the same generator version, seed, count, pattern, and custom settings, it produces the same job specifications and arrival offsets. New database IDs and default start times will still differ.
 
-Resource reservation is implemented and detailed in section 10: it begins a transaction, locks the worker row, rechecks CPU and memory inside the transaction, updates the allocation and worker counters atomically, and commits before any container could start.
+The current generator version is `v1`. Tests pin its output, so a deliberate change to its choices should use a new version.
 
-## 8. Scheduler and placement separation
-
-The scheduler answers only **which job runs next**. It never chooses a worker, reserves resources, or starts containers. Placement, reservation, and execution are separate components with their own endpoints, described in sections 9, 10, and 11.
-
-`scheduler.policies.js` is pure: it takes candidate jobs, a policy, and the current time, and returns an ordering. Persistence and claiming live in the repository and service.
-
-### Eligibility
-
-A job is a candidate only when its status is `QUEUED` and its planned `arrivalAt` has passed. Generated arrival metadata therefore gates scheduling rather than being decorative.
-
-### Policies
-
-| Policy | Ordering |
+| Pattern | Meaning |
 | --- | --- |
-| `FCFS` | Planned arrival, then creation time, batch sequence, and ID |
-| `SJF` | Shortest `estimatedDurationSeconds` first, then arrival order |
-| `PRIORITY` | Highest effective priority first, then arrival order |
-| `ROUND_ROBIN` | Fewest completed scheduling rounds first, then arrival order |
+| `LIGHT` | Small resource requests, with 20-40 second arrival gaps |
+| `MEDIUM` | Medium requests, with 8-16 second gaps |
+| `HEAVY` | Larger requests, with 2-6 second gaps |
+| `CONSTANT` | Varied medium requests, with a fixed 10 second gap |
+| `BURST` | Five jobs arrive together; the next group arrives 30 seconds later |
+| `INCREASING` | Requests grow larger and arrivals get closer together |
+| `DECREASING` | Requests become smaller and arrivals spread out |
+| `PERIODIC` | Repeating request patterns and gaps of 2, 2, 2, then 20 seconds |
+| `CUSTOM` | You choose allowed types, value ranges, and exact arrival offsets |
 
-Priority uses **higher numbers as more urgent** (1 lowest, 10 highest). Starvation prevention is implemented as aging: a queued job gains one effective priority level for each full 60 seconds it has waited since arrival, capped at 10. Aging is computed from the passed-in time, so it stays a pure function.
+`SUDDEN_BURST` is accepted as another input name for `BURST`.
 
-Round Robin records a configurable time quantum (default 10 seconds, range 1–3600) on the scheduled job and increments `schedulingRounds`. Because a job that later returns to `QUEUED` carries a higher round count, it rotates behind fresher work instead of monopolising the scheduler. With no preemption yet, a first pass over never-scheduled jobs follows arrival order.
+Each job has a type, size, CPU request, memory request, duration estimate, priority, and arrival time. For standard patterns, size is based on the duration and CPU estimate. For sleep jobs, size is seconds. Custom batches use the requested size range.
 
-### Concurrency safety
+The batch and all its jobs are saved together. Reusing a batch copies its saved job specifications instead of generating new choices.
 
-Claiming uses a single conditional update that matches the job ID **and** `QUEUED` status. Two parallel dispatches therefore cannot schedule the same job: the loser observes zero updated rows, does not increment the round counter, and skips to the next candidate. Every transition is validated through the shared job transition policy.
+## 6. Scheduling: which job goes next?
 
-Policy is supplied per request rather than stored as global state, so the same workload can be replayed under different policies for comparison.
+Only `QUEUED` jobs whose arrival time has passed can be selected.
 
-## 9. Resource-aware placement
-
-Placement answers only **which worker runs an already-scheduled job**. It never selects the job, changes job lifecycle state, or starts a container.
-
-`placement.accounting.js` is pure: it turns workers and their current load into capacity snapshots, evaluates eligibility, scores candidates, and selects one.
-
-### Advisory decisions
-
-Placement persists `assignedWorkerId`, `placementStrategy`, and `placedAt` on the job. It deliberately does **not** mutate worker allocation counters or create `ResourceAllocation` rows, because all real reservation is transaction-safe and owned by the resource manager. A placement decision is therefore a plan that reservation re-verifies while holding a row lock, and it may be refused if capacity was taken in the meantime.
-
-### Resource accounting
-
-For each worker:
-
-```text
-used      = persistedReserved + advisoryAssigned
-available = capacity - used
-```
-
-`persistedReserved` comes from the worker's allocation counters, written only by transactional reservation. `advisoryAssigned` sums the CPU and memory requirements of jobs already placed on that worker in `SCHEDULED` or `RUNNING` state. Including the advisory part stops repeated placements from overcommitting the same worker in the plan and keeps load-sensitive strategies meaningful before reservation exists.
-
-### Eligibility
-
-A worker is eligible only when both hold:
-
-- its status is `IDLE`, `ACTIVE`, or `BUSY` (`STARTING`, `STOPPING`, and `FAILED` cannot accept work)
-- `availableCpu >= job.cpuRequiredMillicores` **and** `availableMemory >= job.memoryRequiredMiB`
-
-Ineligible candidates are returned with explicit reasons. When no worker is eligible, placement is refused with `INSUFFICIENT_RESOURCES` and the job stays unplaced. A job that exactly fits is eligible.
-
-### Strategies
-
-Lower scores win; ties break on worker name for determinism.
-
-| Strategy | Selection |
+| Policy | How it chooses |
 | --- | --- |
-| `FIRST_FIT` | First eligible worker in stable name order |
-| `LEAST_LOADED` | Lowest current peak utilization, `max(cpuUtil, memUtil)` |
-| `RESOURCE_AWARE` | Lowest `0.7 × peakUtilAfter + 0.3 × |cpuUtilAfter − memUtilAfter|` |
+| `FCFS` | First arrival goes first; ties use creation time, batch position, then ID |
+| `SJF` | Shortest estimated duration goes first; ties use arrival order |
+| `PRIORITY` | Highest effective priority goes first; ties use arrival order |
+| `ROUND_ROBIN` | Fewest previous scheduling rounds goes first; ties use arrival order |
 
-`RESOURCE_AWARE` scores the worker **after** hypothetically placing the job, so it prefers placements that stay far from saturation and keep CPU and memory balanced. This can differ from `LEAST_LOADED`: a currently idle but small worker may be a worse fit than a busier worker with room to absorb the job evenly. The formula is intentionally small and explainable rather than an opaque model.
+Priority ranges from 1 to 10, with 10 highest. Waiting jobs gain one effective priority level per full minute waited, up to 10. This helps old jobs get a turn.
 
-### Concurrency safety
+Round Robin records a time slice, normally 10 seconds, and increases the job's round count. The accepted time slice is 1-3600 seconds. Actually pausing and resuming a running container is still planned.
 
-Assignment uses one conditional update matching the job ID, `SCHEDULED` status, and a null worker. Parallel placements of the same job therefore assign it exactly once; losers receive `PLACEMENT_CONFLICT`.
+The scheduler changes a job only if it is still queued. This stops two simultaneous scheduling requests from both selecting the same job successfully.
 
-## 10. Transaction-safe resource management
+## 7. Placement: which worker should receive it?
 
-Reservation is the point where an advisory plan becomes a committed claim on capacity. It is the project's core DBMS demonstration.
+Placement chooses a worker for an already scheduled job. It saves the choice, strategy, and time. Reservation happens afterward.
 
-### Reservation sequence
+A worker must be `IDLE`, `ACTIVE`, or `BUSY`, and its calculated free CPU and memory must both fit the job. Placement considers saved reservation counters and the requirements of jobs already assigned in scheduled/running states.
 
-```text
-BEGIN
-  SELECT ... FROM workers WHERE id = $1 FOR UPDATE   -- row-level lock
-  IF the job already holds a RESERVED allocation THEN
-      refuse with ALREADY_RESERVED
-  re-read capacity and allocated counters
-  IF capacity - allocated >= request THEN
-      INSERT resource_allocations (status = RESERVED)
-      UPDATE workers SET allocated = allocated + request, status = BUSY
-  ELSE
-      refuse without writing
-COMMIT
-```
-
-The recheck happens **inside** the transaction while the lock is held. A placement decision made earlier is advisory and may be stale, so reservation never trusts it. Concurrent reservations for the same worker serialise on the lock: the first commits, the second re-reads the updated counters and is refused with `INSUFFICIENT_RESOURCES`.
-
-The duplicate check deliberately precedes the capacity check. A job that already holds a reservation is itself counted in the worker's allocated total, so checking capacity first would report a shortfall that does not exist and hide the real cause. The functional unique index still guards the insert, so a concurrent duplicate that passes the check is mapped to the same `ALREADY_RESERVED` outcome.
-
-The amount reserved is always the job's own `cpuRequiredMillicores` and `memoryRequiredMiB`. Clients cannot choose an amount or a worker.
-
-### Release sequence
-
-```text
-BEGIN
-  find the RESERVED allocation for the job
-  SELECT ... FROM workers WHERE id = $1 FOR UPDATE
-  UPDATE resource_allocations SET status = RELEASED, releasedAt = now()
-  UPDATE workers SET allocated = allocated - reserved
-  IF allocated is now zero THEN status = IDLE
-COMMIT
-```
-
-Release is idempotent: releasing an already released job returns the existing record without decrementing again. A job that never reserved returns `NO_ACTIVE_ALLOCATION`.
-
-### Layered safety
-
-Three independent mechanisms prevent over-allocation:
-
-1. **Row lock plus in-transaction recheck** serialises competing reservations.
-2. **A functional unique index** allows only one `RESERVED` allocation per job.
-3. **A SQL `CHECK` constraint** (`allocated <= capacity`) is the last line of defence if application logic is ever wrong.
-
-Atomicity means a failure at any step rolls back the allocation row, the counter update, and the worker status together, so no capacity is ever half-claimed.
-
-Because reservations legitimately block on a row lock, the transaction uses a widened `maxWait` of 15s and `timeout` of 20s rather than Prisma's tighter defaults. `lockWaitMs` is measured and returned to make contention observable.
-
-### Boundary
-
-Reservation does not start a container and does not move the job to `RUNNING`; execution owns that transition. The allocation row is the authoritative record that capacity is held. Worker status becomes `BUSY` while any reservation exists and returns to `IDLE` when the last one is released.
-
-## 11. Controlled Docker execution
-
-Execution is the only component that talks to Docker. It runs a reserved job as one container, records what happened, and returns the reservation.
-
-### The controlled workload image
-
-`workload-runner/` builds a single image, `orchestros/workload-runner:v1`, whose entrypoint is one fixed program. The image name is a constant in `execution.contract.js`, not configuration, so there is no code path that can run any other image. The program accepts no command, script, or formula; its entire input is four environment variables the backend constructs itself:
-
-| Variable | Meaning |
+| Strategy | How it chooses |
 | --- | --- |
-| `ORCHESTROS_WORKLOAD_TYPE` | One of the five `WorkloadType` values |
-| `ORCHESTROS_WORKLOAD_SIZE` | The job's persisted nominal size |
-| `ORCHESTROS_SEED` | Derived from the job name |
-| `ORCHESTROS_MEMORY_LIMIT_MIB` | The container's memory limit |
+| `FIRST_FIT` | First suitable worker in name order |
+| `LEAST_LOADED` | Worker with the lowest current load, using the higher of CPU and memory usage |
+| `RESOURCE_AWARE` | Worker that would have the best balance and lowest high usage after adding the job |
 
-The runner validates all four before doing any work and exits `64` if any is missing, malformed, or out of range. On success it prints exactly one JSON line and exits `0`; a workload that throws exits `70`.
+The Resource Aware score is `0.7 * peak + 0.3 * imbalance`. Here, peak is the higher of the expected CPU and memory usage fractions, and imbalance is their difference. Lower scores win. Worker names break ties.
 
-### Work ceilings and honest sizing
+If no worker fits, placement reports insufficient resources. A saved placement is only a plan: reservation checks the real counters again before granting capacity.
 
-A nominal workload size is an experiment input, not a promise about runtime, so the runner bounds itself two ways: a per-type ceiling on work, and an allocation budget derived from the container's memory limit. It reports the size it actually used as `effectiveSize`, so a recorded result never overstates what ran.
+## 8. Reservation: make the capacity claim real
 
-| Type | Ceiling | Size means |
-| --- | ---: | --- |
-| `CPU_INTENSIVE` | 50,000,000 | mixing iterations |
-| `SORTING` | 2,000,000 | elements sorted |
-| `DATA_PROCESSING` | 2,000,000 | records aggregated |
-| `MATRIX_MULTIPLICATION` | 320 | matrix dimension |
-| `SLEEP` | 120 | **seconds** |
+Suppose a worker has 1000 millicores free and two jobs each ask for 700. Both jobs cannot be granted 700.
 
-`SLEEP` is the one type whose size is a duration. Generated batches derive `workloadSize` from the estimate, so that is consistent, but a `CUSTOM` batch samples size independently and can therefore ask for a long sleep.
+The reservation code starts a **transaction**, locks the worker's row, checks for an existing reservation, and reads its current free capacity. It then saves the allocation and updates the worker counters together. A competing request for that worker waits, then checks the updated values.
 
-### Reproducibility
+If anything fails, the transaction undoes its changes. The worker cannot be left with only half of the reservation saved.
 
-The seed is a 32-bit hash of the job name. Generated names encode the batch seed and sequence, so reusing a batch reproduces the same names, the same seeds, and therefore the same checksums, without storing an extra column. The runner uses the same Mulberry32 generator as the backend and excludes its measured duration from the checksum.
+MySQL also checks these rules:
 
-### Container restrictions
+- Reserved CPU and memory cannot be negative or exceed capacity.
+- A job can have only one live `RESERVED` allocation.
+- Older released or rolled-back allocations can remain as history.
+- An execution must refer to an allocation with the same job and worker.
 
-Every container is created with the same locked-down specification, all of it decided by `execution.runtime.js`:
+The one-live-reservation rule uses a functional unique index: it checks the job ID only for reserved rows and ignores historical rows for uniqueness. The SQL migration contains this rule because the Prisma schema cannot describe that index directly.
 
-- CPU and memory limits set to exactly what the job reserved, with swap equal to memory
-- `NetworkMode: none` and networking disabled
-- Read-only root filesystem, no bind mounts, no privileges, `CapDrop: ALL`, `no-new-privileges`
-- A PID ceiling, no restart policy, and the image entrypoint never overridden
-- Labels carrying the job, execution, worker, and allocation ids
+Releasing an allocation changes it to `RELEASED` and subtracts its CPU and memory from the worker. Repeating a completed release returns the existing result instead of subtracting again.
 
-### Execution sequence
+## 9. Docker execution
 
-```text
-claim   BEGIN; lock the job row; verify SCHEDULED + placed + RESERVED;
-        SCHEDULED -> RUNNING; insert JobExecution(PENDING, attempt N); COMMIT
-start   create and start the container; record its id; PENDING -> RUNNING
-await   wait for exit, bounded by EXECUTION_TIMEOUT_SECONDS
-settle  BEGIN; record status, exit code, captured output, result;
-        set the job's terminal state; release the reservation; COMMIT
-clean   remove the container
-```
+The backend runs the fixed image `orchestros/workload-runner:v1`. API callers choose from supported workload types; they cannot provide their own image, command, script, or container environment.
 
-Claiming locks the job row so concurrent starts serialise: exactly one launches a container and the other is told the job was already started. Settling is idempotent, so the automatic path and a manual recovery call cannot both release capacity.
+| Workload | What it does | Maximum work size |
+| --- | --- | ---: |
+| `CPU_INTENSIVE` | Repeated calculations | 50,000,000 iterations |
+| `MATRIX_MULTIPLICATION` | Multiply matrices | Dimension 320 |
+| `SORTING` | Sort generated values | 2,000,000 elements |
+| `DATA_PROCESSING` | Process generated records | 2,000,000 records |
+| `SLEEP` | Wait for a set time | 120 seconds |
 
-### Outcomes
+The runner can reduce work further to fit its memory budget. It reports the size it actually used as `effectiveSize`.
 
-| Container result | Execution | Job |
-| --- | --- | --- |
-| Exit 0 with a valid result line | `COMPLETED` | `COMPLETED` |
-| Exit 0 with no valid result line | `FAILED` | `FAILED` |
-| Non-zero exit, including an OOM kill | `FAILED` | `FAILED` |
-| Stopped for exceeding the timeout | `INTERRUPTED` | `INTERRUPTED` |
-| Container missing before it was settled | `FAILED` | `FAILED` |
+The backend supplies four inputs: `ORCHESTROS_WORKLOAD_TYPE`, `ORCHESTROS_WORKLOAD_SIZE`, `ORCHESTROS_SEED`, and `ORCHESTROS_MEMORY_LIMIT_MIB`. The runner's seed comes from the job name. Reusing the same work can reproduce the same checksum; elapsed time is not part of that checksum.
 
-A timeout is an interruption rather than a failure: the workload did not misbehave, the orchestrator stopped it, and `INTERRUPTED` keeps the job eligible for a later requeue. Capacity is released on every one of these paths.
+Each container gets the job's reserved CPU and memory limits. It has no network, no host-folder mounts, a read-only root filesystem, restricted permissions, and a process-count limit.
 
-### Known boundary
+The backend talks directly to Docker's API. In Compose, only the backend receives the Docker socket. This gives it control over the host Docker engine, so this setup is intended for a local development machine.
 
-The container is awaited in the backend process. If that process dies mid-execution, the execution stays `RUNNING` and its reservation stays held; `POST /api/executions/:id/settle` is the recovery path today, and automatic reconciliation belongs to the failure-recovery increment. Cancelling a running job is not implemented yet.
+When a run finishes, the backend saves the outcome and frees its resources in one database transaction. It then removes the container. A zero exit code counts as success only if the expected result is present. Errors are `FAILED`; a time limit is `INTERRUPTED`.
 
-## 12. Monitoring
+## 10. Monitoring
 
-Monitoring observes the orchestrator without participating in it. It never changes a job, a reservation, or a container.
+Current metrics are calculated from saved jobs, executions, allocations, and workers. Monitoring does not choose or start jobs.
 
-### Derived, not accumulated
+Usage history needs its own records. The sampler saves one `worker_samples` row per worker every 15 seconds by default. Rows from one pass share a timestamp. Duplicate passes at that timestamp do not create duplicate samples. Samples older than 24 hours are removed by default.
 
-Almost every metric is computed from the authoritative records at read time rather than stored as it happens. Queue depth, cluster utilization, lifecycle timings, throughput, and per-worker activity are all questions the existing tables can already answer, so a counter that drifts out of step with reality cannot exist.
+The sampler starts in `server.js`, so importing the app in a test does not start a timer. Setting the interval to 0 disables automatic sampling; the API can still capture a sample on request.
 
-The one exception is utilization over time. Worker counters record only the present, so a history of them cannot be reconstructed after the fact. `WorkerSample` stores that history and nothing else.
-
-### What is measured
-
-Five stage durations come from a job's own timestamps:
-
-| Metric | Measured as |
+| Timing | What it measures |
 | --- | --- |
-| `queueWait` | `scheduledAt - arrivalAt` |
-| `placementDelay` | `placedAt - scheduledAt` |
-| `startDelay` | `startedAt - placedAt` |
-| `execution` | `completedAt - startedAt` |
-| `turnaround` | `completedAt - arrivalAt` |
+| `queueWait` | Planned arrival until scheduling |
+| `placementDelay` | Scheduling until worker placement |
+| `startDelay` | Placement until execution starts |
+| `execution` | Execution start until completion |
+| `turnaround` | Planned arrival until completion |
 
-Each reports count, average, minimum, maximum, and p95. Prisma cannot aggregate the difference between two columns, so the durations are normalised into `(metric, seconds)` pairs in SQL and aggregated once, letting MySQL compute the percentile instead of loading every row into the process. A stage nothing has reached yet reports a zero count rather than being absent, so a caller never has to distinguish "missing" from "nothing measured".
+Each timing includes count, average, minimum, maximum, and p95. MySQL calculates the timestamp differences and the percentile. p95 uses a value between neighboring sorted measurements when needed. The API converts the database's numeric results into JavaScript numbers.
 
-Timings cover jobs created inside the window; completion counts are anchored on when a job finished, which is what a rate should measure. The window start is echoed in the response so the denominator is never ambiguous.
+A stage with no data has count 0. Success rate is `null` when there are no completed outcomes to calculate it from. The API limits requested history to between 1 minute and 7 days.
 
-### Sampling
+## 11. What is unfinished
 
-One pass writes one row per worker, all sharing a `capturedAt`, so grouping on that timestamp reconstructs the cluster as it stood at that instant. The write is a single `INSERT ... SELECT`, and a unique index on `(workerId, capturedAt)` makes a repeated pass a no-op rather than a double count. Sample rows carry the same bounds as real accounting: capacity positive, allocated within capacity, counts non-negative.
+Automatic scaling, crash recovery, runtime cancellation, actual Round Robin preemption, machine learning, and full experiment comparison are still planned. Closing the browser stops its auto-run requests, but already started work continues while the backend runs.
 
-Samples are observational, so they cascade with their worker instead of blocking its deletion the way authoritative records do.
+If the backend crashes, a job can remain marked running and keep its reservation. The manual settle endpoint can record a finished or missing container; it is not a replacement for the planned automatic recovery process.
 
-### The only background loop
-
-The sampler is the project's single timer. Everything else in OrchestrOS is driven by an explicit request. It is deliberately confined to observation, and it is started by `server.js` rather than `app.js`, so importing the Express app — as every test does — never starts a timer. Its interval is configurable and zero disables it, in which case history becomes opt-in through `POST /api/monitoring/sample`.
-
-A pass already in flight blocks the next one, so a slow database cannot cause passes to pile up. A failed pass is logged and skipped: a missed observation must never take the orchestrator down. Pruning runs inside each pass, so history cannot grow without bound whether sampling is periodic or on demand.
-
-### Dashboard
-
-The frontend polls the overview, job metrics, and sample history every five seconds and renders cluster meters, a worker table, queue depth, throughput, lifecycle timings, running containers, and a utilization sparkline drawn without a charting dependency. It reads metrics only; it cannot start, stop, or modify work.
-
-## 13. Scaling, failure recovery, and ML
-
-Reactive scaling will precede ML-assisted forecasting. Heartbeat failure handling will reconcile resources and requeue recoverable work, including executions orphaned by a backend restart. These flows are not implemented yet.
-
-## 14. Interactive browser control interface
-
-React is the primary way an operator or evaluator controls OrchestrOS. It collects the few decisions a user is entitled to make — workload shape, scheduling policy, placement strategy, and how much work to advance — then displays the state the backend reports. It does not choose a job, choose a worker, reserve a resource, construct a Docker request, mutate a lifecycle, or maintain a shadow counter.
-
-### Browser control flow
-
-```text
-Browser Control Panel
-  ├─ Generate Workload ───────> POST /api/workloads/generate
-  ├─ Run Next / Run Batch / Auto -> POST /api/orchestrator/run
-  ├─ Clear finished ──────────> POST /api/orchestrator/clear-finished
-  └─ Read state every 1.5s ───> GET /api/orchestrator/state
-
-/api/orchestrator/run
-  -> existing SchedulerService
-  -> existing PlacementService
-  -> existing ResourceService (transaction + row lock)
-  -> existing ExecutionService (Docker + asynchronous settlement)
-```
-
-`/api/orchestrator/run` is a facade, not a second implementation of the pipeline. It calls the existing services in their normal order and returns the outcome each service made. The individual stage APIs remain intact for step-by-step teaching, debugging, and recovery; they are no longer required for normal operation.
-
-### What the UI controls
-
-The workload generator offers exactly the existing supported batch counts (10, 25, 50, 100), deterministic seed, all predefined arrival patterns, and an **Immediate** preset. Immediate is not a hidden bypass: it maps to the existing `CUSTOM` pattern with valid, all-zero arrival offsets, so every generated job is eligible immediately for a concise demonstration. It offers a controlled `SLEEP` profile (4–10 seconds, useful to watch) or a mixed compute profile; the backend still validates and generates every specification.
-
-Scheduler selection is FCFS, SJF, Priority, or Round Robin with a time quantum. Placement selection is First Fit, Least Loaded, or Resource-Aware. The browser sends these choices; the backend applies them. An automatic run is a browser loop that keeps asking the backend to advance a bounded batch; it stops when the backend says no eligible job remains or capacity is currently insufficient. The browser never assumes that a job advanced.
-
-### State snapshot and visual evidence
-
-`GET /api/orchestrator/state` is one purpose-built dashboard read. For each job it returns persisted job fields plus the assigned worker name, active reservation, latest execution/container state, derived pipeline stage, eligibility, and time until planned arrival. For each worker it returns its persisted CPU and memory counters plus the jobs currently running there. The pipeline visualization, queue table, worker cards, selected-job detail, and activity log all use this response or the outcomes returned by the backend; no display value is invented by React.
-
-The selected-job panel deliberately exposes database and Docker facts: worker name, exact reserved CPU and memory, row-lock transaction explanation, container id/status/elapsed time/exit code, and stored checksum result. The per-stage controls call the existing stage endpoints and are disabled when the persisted state does not permit the action.
-
-### Demonstration cleanup
-
-`POST /api/orchestrator/clear-finished` removes only terminal jobs and their dependent execution/allocation records inside one transaction, then removes now-empty batches. It deliberately never deletes a queued, scheduled, reserved, or running job, so it cannot strand a container or change a worker's committed counters. It exists to reset a finished browser demonstration without requiring shell commands.
-
-## 15. API boundary
-
-Express enforces a 16 KB body limit, strict Zod schemas, structured errors, one configured CORS origin, and generic internal errors. Implemented workload endpoints are:
-
-- `POST /api/workloads/generate`
-- `GET /api/workloads/:id`
-- `POST /api/workloads/:id/reuse`
-
-Implemented scheduler endpoints are:
-
-- `GET /api/scheduler/preview`
-- `POST /api/scheduler/dispatch`
-
-Implemented placement endpoints are:
-
-- `GET /api/placement/capacity`
-- `GET /api/placement/preview`
-- `POST /api/placement/assign`
-
-Implemented resource endpoints are:
-
-- `POST /api/resources/reserve`
-- `POST /api/resources/release`
-- `GET /api/resources/allocations`
-
-Implemented execution endpoints are:
-
-- `GET /api/executions/runtime`
-- `POST /api/executions/start`
-- `POST /api/executions/:id/settle`
-- `GET /api/executions`
-- `GET /api/executions/:id`
-
-Implemented monitoring endpoints are:
-
-- `GET /api/monitoring/overview`
-- `GET /api/monitoring/jobs`
-- `GET /api/monitoring/samples`
-- `GET /api/monitoring/config`
-- `POST /api/monitoring/sample`
-
-Implemented browser-control endpoints are:
-
-- `GET /api/orchestrator/state`
-- `POST /api/orchestrator/run`
-- `POST /api/orchestrator/clear-finished`
-
-Job and worker management endpoints remain available. A start request carries only a job id: the image, command, environment, limits, and timeout are all backend decisions, and a request containing any of them is rejected as an unrecognized key. The browser and clients never receive Docker daemon access.
-
-## 16. Target data flow
-
-```text
-Workload Generator -> MySQL-backed Queue -> Scheduler -> Placement
-  -> Transactional Reservation -> Docker Execution -> Monitoring -> Release
-```
-
-Every stage above is implemented. Monitoring observes the chain rather than sitting inside it: release happens in the same transaction that records an execution's outcome.
-
-Future supporting loops:
-
-```text
-Monitoring -> Reactive/ML-assisted Autoscaler -> Logical capacity
-Heartbeat -> Failure Detector -> Reconciliation -> Requeue
-Historical metrics -> ML Predictor -> Forecast -> Bounded scaling decision
-```
-
-The retained proposal visual is [`docs/image.png`](image.png); actual code paths are in [`docs/flow.md`](flow.md).
+Read [the job flow](flow.md) for the steps in order, or [the design choices](decision.md) for why these decisions were made.
