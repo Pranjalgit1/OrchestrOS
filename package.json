@@ -12,8 +12,7 @@
     "npm": ">=10.0.0"
   },
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run check && npm run build --workspace frontend",
     "dev:backend": "npm run dev --workspace backend",
     "dev:frontend": "npm run dev --workspace frontend",
     "start:backend": "npm run start --workspace backend",
@@ -27,6 +26,7 @@
     "test": "npm run test --workspace backend",
     "docker:images": "docker build -t orchestros/workload-runner:v1 workload-runner",
     "docker:up": "npm run docker:images && docker compose up --build",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "check": "npm run check --workspace backend"
   }
 }

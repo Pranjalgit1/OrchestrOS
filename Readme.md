@@ -2,7 +2,7 @@
 
 **Intelligent Container Orchestration with Resource-Aware Scheduling & Autoscaling**
 
-OrchestrOS is a Kubernetes-inspired local container orchestration prototype for controlled computational workloads. It runs on one physical development machine with logical workers, PostgreSQL-backed state, and a modular TypeScript backend.
+OrchestrOS is a Kubernetes-inspired local container orchestration prototype for controlled computational workloads. It runs on one physical development machine with logical workers, MySQL-backed state, and a modular JavaScript backend.
 
 > **Current implementation:** deterministic workload batches, persistent jobs/workers, controlled lifecycle management, exact batch reuse, policy-based scheduling (FCFS, SJF, Priority, Round Robin), resource-aware placement decisions (First Fit, Least Loaded, Resource-Aware), transaction-safe reservation and release with row-level locking, controlled Docker execution of the five predefined workloads with recorded results, live operational monitoring with recorded utilization history, and a browser-first control interface that drives the full backend pipeline. Autoscaling, recovery, runtime cancellation, experiments, and ML do not run yet.
 
@@ -16,7 +16,7 @@ Logical workers are resource-capacity records on one machine—not physical node
 Generate or reuse controlled workload
               |
               v
-WorkloadBatch + QUEUED Jobs  ->  PostgreSQL
+WorkloadBatch + QUEUED Jobs  ->  MySQL
               |
               v
 Scheduler (FCFS / SJF / Priority / Round Robin)
@@ -58,7 +58,7 @@ Every stage above now runs. Autoscaling is the remaining link.
 ## Implemented capabilities
 
 - React/Vite status dashboard and modular Express API
-- PostgreSQL/Prisma migrations and startup migration gate
+- MySQL/Prisma migrations and startup migration gate
 - Job and logical-worker create/read APIs
 - All required job states and controlled queued cancellation
 - Three idempotently seeded logical workers
@@ -85,7 +85,7 @@ Every stage above now runs. Autoscaling is the remaining link.
 - Browser controls for generating workloads and running the whole pipeline
 - Live job queue, selected-job pipeline trace, reservation evidence, Docker status, and activity log
 - Structured validation/errors and readiness across the five authoritative models
-- Unit, HTTP-boundary, PostgreSQL integration, and real-container tests
+- Unit, HTTP-boundary, MySQL integration, and real-container tests
 
 Scheduling selects **which job runs next** and moves it from `QUEUED` to `SCHEDULED`. It does not choose a worker, reserve resources, or start a container. The browser's orchestrator control endpoint composes the existing scheduler, placement, reservation, and execution services; it does not move these decisions into React.
 
@@ -96,7 +96,7 @@ The React dashboard is the normal way to operate OrchestrOS. Open <http://localh
 1. In **Control Panel**, choose the number of jobs, a seed, scheduler policy, and placement strategy.
 2. For a concise demo, choose **Immediate — all jobs eligible at once (Custom)** and **Sleep — 4–10s each**.
 3. Click **Demo Mode — generate 10 and run**, or click **Generate Workload** followed by **Run Orchestrator (auto)**.
-4. The UI calls the backend facade, which drives `Scheduler -> Placement -> PostgreSQL Reservation -> Docker Execution` for each job.
+4. The UI calls the backend facade, which drives `Scheduler -> Placement -> MySQL Reservation -> Docker Execution` for each job.
 5. Watch the pipeline counts, worker cards, live queue, selected-job facts, and activity log. Workers become `BUSY`, then return to `IDLE` when the backend releases their resources after completion.
 6. Select a job to see its exact worker, reserved CPU/memory, transaction/row-lock explanation, container status, elapsed time, exit code, and checksum result. Use **Clear finished jobs** when the demonstration ends.
 
@@ -163,7 +163,7 @@ Release reverses this under the same lock, marks the allocation `RELEASED`, and 
 Three layers prevent over-allocation:
 
 1. Row lock plus in-transaction recheck
-2. A partial unique index allowing one `RESERVED` allocation per job
+2. A functional unique index allowing one `RESERVED` allocation per job
 3. A SQL `CHECK` constraint keeping allocated within capacity
 
 ### Resource APIs
@@ -291,7 +291,7 @@ MONITORING_SAMPLE_INTERVAL_SECONDS=15   # 0 disables periodic sampling
 MONITORING_SAMPLE_RETENTION_HOURS=24    # 0 keeps history forever
 ```
 
-The sampler is the project's only background loop. It is started by `server.ts` rather than `app.ts`, so importing the app never starts a timer, and it writes only `worker_samples`.
+The sampler is the project's only background loop. It is started by `server.js` rather than `app.js`, so importing the app never starts a timer, and it writes only `worker_samples`.
 
 ### Monitoring APIs
 
@@ -456,10 +456,14 @@ Stop without deleting database data:
 npm run docker:down
 ```
 
+The application uses JavaScript (including JSX), Node.js, and MySQL 8.4. The backend runs source files directly; no compilation step is required. Direct MySQL installations must support enforced check constraints and functional indexes (MySQL 8.0.16 or newer).
+
+The committed migration is a fresh MySQL baseline. Point `DATABASE_URL` at a new MySQL database before running setup. The host and container URLs must match `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_DATABASE`; percent-encode reserved characters in URL credentials. `MYSQL_ROOT_PASSWORD` initializes the container administrator account. The backend uses the application account. The named MySQL volume preserves data across restarts.
+
 For direct development:
 
 ```powershell
-docker compose up -d postgres
+docker compose up -d mysql
 npm run db:setup
 npm run docker:images
 npm run dev:backend
@@ -472,7 +476,7 @@ Run `npm run dev:frontend` in a second terminal.
 ```powershell
 npm test
 
-# Include real PostgreSQL integration tests after db:setup
+# Include real MySQL integration tests after db:setup
 $env:RUN_DATABASE_TESTS = "true"
 npm test
 
@@ -481,7 +485,7 @@ $env:RUN_DOCKER_TESTS = "true"
 npm test
 
 npm run prisma:validate
-npm run typecheck
+npm run check
 npm run build
 npm audit
 docker compose config
@@ -489,7 +493,7 @@ docker compose config
 
 ## Safety and consistency
 
-- PostgreSQL is authoritative; no Redis or Kafka is used.
+- MySQL is authoritative; no Redis or Kafka is used.
 - Batch metadata and all jobs commit or roll back together.
 - Stored batch reuse copies exact specifications into independent lifecycle records.
 - Job/resource/batch bounds are enforced by Zod and SQL constraints.

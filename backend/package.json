@@ -7,17 +7,16 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
     "prisma:generate": "dotenv -e ../.env.example -- prisma generate",
     "prisma:validate": "dotenv -e ../.env.example -- prisma validate",
     "db:migrate:dev": "dotenv -e ../.env -- prisma migrate dev",
-    "db:deploy": "prisma migrate deploy",
-    "db:seed": "tsx prisma/seed.ts",
-    "db:setup": "prisma migrate deploy && tsx prisma/seed.ts",
-    "test": "tsx --test --test-concurrency=1 src/*.test.ts src/modules/jobs/*.test.ts src/modules/workers/*.test.ts src/modules/workloads/*.test.ts src/modules/scheduler/*.test.ts src/modules/placement/*.test.ts src/modules/resources/*.test.ts src/modules/executions/*.test.ts src/modules/monitoring/*.test.ts src/modules/orchestrator/*.test.ts"
+    "db:deploy": "dotenv -e ../.env -- prisma migrate deploy",
+    "db:seed": "dotenv -e ../.env -- node prisma/seed.js",
+    "db:setup": "npm run db:deploy && npm run db:seed",
+    "test": "node --test --test-concurrency=1 src/*.test.js src/modules/jobs/*.test.js src/modules/workers/*.test.js src/modules/workloads/*.test.js src/modules/scheduler/*.test.js src/modules/placement/*.test.js src/modules/resources/*.test.js src/modules/executions/*.test.js src/modules/monitoring/*.test.js src/modules/orchestrator/*.test.js",
+    "check": "node scripts/check.js"
   },
   "dependencies": {
     "@prisma/client": "6.12.0",
@@ -27,12 +26,7 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@types/cors": "2.8.19",
-    "@types/express": "5.0.6",
-    "@types/node": "24.10.1",
     "dotenv-cli": "11.0.0",
-    "prisma": "6.12.0",
-    "tsx": "4.23.15",
-    "typescript": "5.9.3"
+    "prisma": "6.12.0"
   }
 }

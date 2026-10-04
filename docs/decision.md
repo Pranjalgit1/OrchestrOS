@@ -14,7 +14,7 @@ Context:
 Phase 0 needed separate frontend and backend boundaries while the approved architecture requires backend responsibilities to begin as modules in one process rather than independently deployed microservices.
 
 Decision:
-Use one private npm-workspace repository with `frontend` and `backend` packages. Keep Express assembly in `app.ts`, process lifecycle in `server.ts`, and feature code under `backend/src/modules`. Future scheduler, placement, resource, worker, container, monitoring, autoscaling, failure, workload, and experiment responsibilities will become modules in this backend before any independent deployment is considered.
+Use one private npm-workspace repository with `frontend` and `backend` packages. Keep Express assembly in `app.js`, process lifecycle in `server.js`, and feature code under `backend/src/modules`. Future scheduler, placement, resource, worker, container, monitoring, autoscaling, failure, workload, and experiment responsibilities will become modules in this backend before any independent deployment is considered.
 
 Alternatives Considered:
 - Multiple independently deployed backend microservices
@@ -41,7 +41,7 @@ Status:
 Accepted
 
 Context:
-The repository had no executable code. Phase 0 required proof that the frontend, backend, Prisma, PostgreSQL, environment, and Docker foundation work without claiming future orchestration behavior exists.
+The repository had no executable code. Phase 0 required proof that the frontend, backend, Prisma, MySQL, environment, and Docker foundation work without claiming future orchestration behavior exists.
 
 Decision:
 Implement `GET /api/health`. Express calls a health service, the service executes `SELECT 1` through Prisma, and the React foundation screen calls the endpoint through a Vite proxy. A missing database produces HTTP 503 and a degraded status rather than a false healthy response.
@@ -59,9 +59,9 @@ Database readiness is visible immediately and Compose can gate dependent service
 
 Affected Components:
 - `backend/src/modules/health/`
-- `backend/src/app.ts`
-- `frontend/src/App.tsx`
-- `frontend/src/api.ts`
+- `backend/src/app.js`
+- `frontend/src/App.jsx`
+- `frontend/src/api.js`
 - `compose.yaml`
 
 ## Decision: Use Docker Compose for the local application topology
@@ -73,13 +73,13 @@ Status:
 Accepted
 
 Context:
-The MVP is local-first and requires PostgreSQL plus repeatable application startup. It must not require Kubernetes, cloud infrastructure, or multiple machines.
+The MVP is local-first and requires MySQL plus repeatable application startup. It must not require Kubernetes, cloud infrastructure, or multiple machines.
 
 Decision:
-Define three Phase 0 services in `compose.yaml`: PostgreSQL, backend, and frontend. PostgreSQL uses a named volume and health check; the backend waits for database health; the frontend waits for backend health. The frontend uses Vite preview for the local prototype rather than adding a separate web server dependency. Direct host development remains supported.
+Define three Phase 0 services in `compose.yaml`: MySQL, backend, and frontend. MySQL uses a named volume and health check; the backend waits for database health; the frontend waits for backend health. The frontend uses Vite preview for the local prototype rather than adding a separate web server dependency. Direct host development remains supported.
 
 Alternatives Considered:
-- Require developers to install PostgreSQL directly
+- Require developers to install MySQL directly
 - Add Kubernetes manifests
 - Add Nginx solely to serve the Phase 0 frontend
 
@@ -95,7 +95,7 @@ Affected Components:
 - `frontend/Dockerfile`
 - `.dockerignore`
 
-## Decision: Pin a conservative compatible TypeScript dependency baseline
+## Decision: Pin a conservative compatible JavaScript dependency baseline
 
 Date:
 2026-09-21
@@ -104,10 +104,10 @@ Status:
 Accepted
 
 Context:
-Phase 0 needed deterministic installs. Registry inspection showed newer major/prerelease lines, including a Prisma 8 release candidate and TypeScript 7, while the project had no compatibility reason to adopt them immediately.
+Phase 0 needed deterministic installs. Registry inspection showed newer major/prerelease lines, including a Prisma 8 release candidate, while the project had no compatibility reason to adopt them immediately.
 
 Decision:
-Pin exact package versions in each package manifest. Use React 19.2.0, Vite 8.3.0, TypeScript 5.9.3, Express 5.2.1, Prisma 6.12.0, and the exact supporting versions declared in the manifests. Require Node.js 22.12 or newer; container images use Node.js 24.13.0. Prisma scripts load the repository environment through pinned `dotenv-cli` 11.0.0.
+Pin exact package versions in each package manifest. Use React 19.2.0, Vite 8.3.0, Express 5.2.1, Prisma 6.12.0, and the exact supporting versions declared in the manifests. Require Node.js 22.12 or newer; container images use Node.js 24.13.0. Prisma scripts load the repository environment through pinned `dotenv-cli` 11.0.0.
 
 Alternatives Considered:
 - Open semver ranges
@@ -135,10 +135,10 @@ Status:
 Accepted
 
 Context:
-Phase 0 requires PostgreSQL and Prisma setup, while Phase 1 explicitly owns jobs, workers, allocations, executions, and their migrations. Adding speculative tables now would blur phase acceptance and risk schema churn.
+Phase 0 requires MySQL and Prisma setup, while Phase 1 explicitly owns jobs, workers, allocations, executions, and their migrations. Adding speculative tables now would blur phase acceptance and risk schema churn.
 
 Decision:
-Keep the Phase 0 Prisma schema limited to the PostgreSQL datasource and client generator. Use a raw, constant `SELECT 1` only for readiness. Introduce reviewed domain models and the initial migration in Phase 1.
+Keep the Phase 0 Prisma schema limited to the MySQL datasource and client generator. Use a raw, constant `SELECT 1` only for readiness. Introduce reviewed domain models and the initial migration in Phase 1.
 
 Alternatives Considered:
 - Add placeholder tables with incomplete fields
@@ -153,8 +153,8 @@ Phase 0 creates no application tables and runs no migrations. The API supports r
 
 Affected Components:
 - `backend/prisma/schema.prisma`
-- `backend/src/lib/prisma.ts`
-- `backend/src/modules/health/health.service.ts`
+- `backend/src/lib/prisma.js`
+- `backend/src/modules/health/health.service.js`
 ## Decision: Bind published services to loopback by default
 
 Date:
@@ -164,28 +164,28 @@ Status:
 Accepted
 
 Context:
-The project is local-first, has no Phase 0 authentication, and uses documented development credentials. Publishing PostgreSQL and application ports on every host interface would expose them to the local network unnecessarily. Compose also cannot safely percent-encode arbitrary interpolated credentials while constructing a URL.
+The project is local-first, has no Phase 0 authentication, and uses documented development credentials. Publishing MySQL and application ports on every host interface would expose them to the local network unnecessarily. Compose also cannot safely percent-encode arbitrary interpolated credentials while constructing a URL.
 
 Decision:
 Bind every Compose-published port to `127.0.0.1`. Bind direct backend and Vite development servers to `127.0.0.1` by default, while their containers explicitly bind to `0.0.0.0` inside Docker's isolated network. Supply a separate `DATABASE_URL_DOCKER` value whose credentials must be URL-encoded instead of constructing it from raw Compose password variables.
 
 Alternatives Considered:
 - Publish all services on every host interface
-- Remove host PostgreSQL publishing entirely
+- Remove host MySQL publishing entirely
 - Construct the Prisma URL from raw username/password interpolation
 
 Reasoning:
-Loopback binding matches the one-machine boundary and reduces exposure without preventing host development. Keeping the PostgreSQL host port loopback-accessible supports Prisma migration commands. A complete encoded URL handles reserved password characters predictably.
+Loopback binding matches the one-machine boundary and reduces exposure without preventing host development. Keeping the MySQL host port loopback-accessible supports Prisma migration commands. A complete encoded URL handles reserved password characters predictably.
 
 Consequences:
-LAN clients cannot access OrchestrOS by default. If PostgreSQL credentials change, both PostgreSQL variables and the host/container database URLs must be updated consistently, with reserved characters percent-encoded in URLs.
+LAN clients cannot access OrchestrOS by default. If MySQL credentials change, both MySQL variables and the host/container database URLs must be updated consistently, with reserved characters percent-encoded in URLs.
 
 Affected Components:
 - `compose.yaml`
 - `.env.example`
-- `backend/src/config/env.ts`
-- `backend/src/server.ts`
-- `frontend/vite.config.ts`
+- `backend/src/config/env.js`
+- `backend/src/server.js`
+- `frontend/vite.config.js`
 - `Readme.md`
 ## Decision: Model Phase 1 with four constrained domain tables
 
@@ -228,7 +228,7 @@ Context:
 The complete lifecycle has nine required states, but Phase 1 has no scheduler, container termination, or transactional resource release.
 
 Decision:
-Centralize all valid lifecycle edges in `job.transitions.ts`. `POST /api/jobs` always persists `QUEUED`; clients cannot set managed fields. `POST /api/jobs/:id/cancel` conditionally updates only queued rows, is idempotent for already-cancelled jobs, rejects invalid terminal transitions, and returns `JOB_NOT_CANCELLABLE` for states whose safe cancellation requires later runtime cleanup.
+Centralize all valid lifecycle edges in `job.transitions.js`. `POST /api/jobs` always persists `QUEUED`; clients cannot set managed fields. `POST /api/jobs/:id/cancel` conditionally updates only queued rows, is idempotent for already-cancelled jobs, rejects invalid terminal transitions, and returns `JOB_NOT_CANCELLABLE` for states whose safe cancellation requires later runtime cleanup.
 
 Alternatives Considered:
 - Generic status update endpoint
@@ -244,7 +244,7 @@ Phase 1 supports only queued cancellation. Later scheduler/executor services mus
 
 Affected Components:
 - `backend/src/modules/jobs/`
-- `backend/src/app.ts`
+- `backend/src/app.js`
 
 ## Decision: Gate API startup on migration and idempotent worker seed
 
@@ -258,7 +258,7 @@ Context:
 A database connection can succeed while required tables are missing. Phase 1 also requires three initial logical workers without resetting live records on every restart.
 
 Decision:
-Add a one-shot Compose `database-setup` service that runs `prisma migrate deploy` followed by the TSX seed before the backend starts. Seed workers with upsert-by-name and an empty update so reruns create missing records but do not reset status, allocations, or timestamps. Health checks access Phase 1 tables through Prisma.
+Add a one-shot Compose `database-setup` service that runs `prisma migrate deploy` followed by the Node.js seed before the backend starts. Seed workers with upsert-by-name and an empty update so reruns create missing records but do not reset status, allocations, or timestamps. Health checks access Phase 1 tables through Prisma.
 
 Alternatives Considered:
 - Run `prisma migrate dev` during application startup
@@ -273,9 +273,9 @@ Compose includes an exited-success setup container in its service history. Migra
 
 Affected Components:
 - `compose.yaml`
-- `backend/prisma/seed.ts`
+- `backend/prisma/seed.js`
 - `backend/package.json`
-- `backend/src/modules/health/health.service.ts`
+- `backend/src/modules/health/health.service.js`
 
 ## Decision: Use repository-injected services and Node-native tests
 
@@ -289,25 +289,25 @@ Context:
 Job and worker behavior requires focused tests, but the project should avoid unnecessary dependencies and tests must not mutate the development database.
 
 Decision:
-Place Prisma operations behind narrow job and worker repository interfaces. Services accept repositories through constructors and default to Prisma implementations. Run deterministic service tests with in-memory repositories and Node's built-in test runner through already-installed TSX. Add HTTP-boundary tests and an opt-in `RUN_DATABASE_TESTS=true` suite that uses unique temporary records, exercises the real API/Prisma/PostgreSQL path, and removes those records afterward.
+Place Prisma operations behind narrow job and worker repository interfaces. Services accept repositories through constructors and default to Prisma implementations. Run deterministic service tests with in-memory repositories and Node's built-in test runner directly in Node.js. Add HTTP-boundary tests and an opt-in `RUN_DATABASE_TESTS=true` suite that uses unique temporary records, exercises the real API/Prisma/MySQL path, and removes those records afterward.
 
 Alternatives Considered:
 - Add Vitest and Supertest
-- Make all tests depend on a running PostgreSQL database
+- Make all tests depend on a running MySQL database
 - Mock the global Prisma singleton through module patching
 
 Reasoning:
-Constructor injection keeps default tests deterministic and fast without adding packages. The opt-in integration path verifies conditional cancellation, Prisma error translation, database constraints, and HTTP contracts when PostgreSQL is available.
+Constructor injection keeps default tests deterministic and fast without adding packages. The opt-in integration path verifies conditional cancellation, Prisma error translation, database constraints, and HTTP contracts when MySQL is available.
 
 Consequences:
-Repository interfaces add a small abstraction. Default tests skip one integration case when PostgreSQL is unavailable; phase validation must enable it after migrations and seeding. Phase 5 will require additional isolated concurrency tests for row locking and reservation transactions.
+Repository interfaces add a small abstraction. Default tests skip one integration case when MySQL is unavailable; phase validation must enable it after migrations and seeding. Phase 5 will require additional isolated concurrency tests for row locking and reservation transactions.
 
 Affected Components:
 - `backend/src/modules/jobs/`
 - `backend/src/modules/workers/`
 - `backend/package.json`
 - `package.json`
-## Decision: Enforce allocation/execution identity in PostgreSQL
+## Decision: Enforce allocation/execution identity in MySQL
 
 Date:
 2026-09-21
@@ -319,7 +319,7 @@ Context:
 The initial Phase 1 schema allowed an execution's job, worker, and allocation references to disagree and allowed more than one active reservation for a job. Those states would make later resource release and audit history unsafe.
 
 Decision:
-Require every `JobExecution` to reference an allocation and worker. Add composite candidate keys and a composite foreign key that binds execution allocation, job, and worker identity. Add a PostgreSQL partial unique index allowing only one `RESERVED` allocation per job while preserving multiple historical `RELEASED` or `ROLLED_BACK` records.
+Require every `JobExecution` to reference an allocation and worker. Add composite candidate keys and a composite foreign key that binds execution allocation, job, and worker identity. Add a MySQL functional unique index allowing only one `RESERVED` allocation per job while preserving multiple historical `RELEASED` or `ROLLED_BACK` records.
 
 Alternatives Considered:
 - Validate identity only in application services
@@ -334,8 +334,8 @@ Execution records can only be created after reservation. Phase 5 allocation tran
 
 Affected Components:
 - `backend/prisma/schema.prisma`
-- `backend/prisma/migrations/20260921151000_enforce_allocation_integrity/migration.sql`
-- `backend/src/modules/jobs/job.integration.test.ts`
+- `backend/prisma/migrations/20261005000000_mysql_initial/migration.sql`
+- `backend/src/modules/jobs/job.integration.test.js`
 ## Decision: Version deterministic workload generation and persist reusable batches
 
 Date:
@@ -365,7 +365,7 @@ Database IDs and default start timestamps differ across batches, but ordered wor
 Affected Components:
 - `backend/src/modules/workloads/`
 - `backend/prisma/schema.prisma`
-- `backend/prisma/migrations/20260921153000_workload_batches/migration.sql`
+- `backend/prisma/migrations/20261005000000_mysql_initial/migration.sql`
 
 ## Decision: Use conservative documented workload-pattern profiles
 
@@ -393,8 +393,8 @@ Consequences:
 These profiles are an experimental contract rather than measured host capacity. Future tuning must be versioned and documented. Planned arrival is stored as metadata until scheduling exists.
 
 Affected Components:
-- `backend/src/modules/workloads/workload.generator.ts`
-- `backend/src/modules/workloads/workload.schemas.ts`
+- `backend/src/modules/workloads/workload.generator.js`
+- `backend/src/modules/workloads/workload.schemas.js`
 - `docs/architecture.md`
 - `Readme.md`
 
@@ -424,8 +424,8 @@ Consequences:
 Batches of 10 may omit one workload type, while batches of 25 or more cover all five. Changing pools, factors, or draw order now fails the golden-vector tests and requires a new generator version. `workloadSize` cannot be requested directly for predefined patterns.
 
 Affected Components:
-- `backend/src/modules/workloads/workload.generator.ts`
-- `backend/src/modules/workloads/workload.test.ts`
+- `backend/src/modules/workloads/workload.generator.js`
+- `backend/src/modules/workloads/workload.test.js`
 - `docs/architecture.md`
 - `Readme.md`
 
@@ -455,8 +455,8 @@ Consequences:
 Manual jobs omitting a size record `1`. Existing out-of-range rows would block the new constraints, and legacy arrival timestamps now reflect original creation time.
 
 Affected Components:
-- `backend/src/modules/jobs/job.schemas.ts`
-- `backend/prisma/migrations/20260921160000_workload_arrival_index_bounds/migration.sql`
+- `backend/src/modules/jobs/job.schemas.js`
+- `backend/prisma/migrations/20261005000000_mysql_initial/migration.sql`
 - `backend/prisma/schema.prisma`
 
 ## Decision: Define scheduling policy semantics and a conditional claim
@@ -488,7 +488,7 @@ Priority ordering depends on wall-clock wait time, so tests must inject the curr
 
 Affected Components:
 - `backend/src/modules/scheduler/`
-- `backend/prisma/migrations/20260921170000_job_scheduling/migration.sql`
+- `backend/prisma/migrations/20261005000000_mysql_initial/migration.sql`
 - `backend/prisma/schema.prisma`
 
 ## Decision: Make placement an advisory decision with projected load accounting
@@ -519,7 +519,7 @@ A placed job holds no reserved capacity, so reservation must re-verify availabil
 
 Affected Components:
 - `backend/src/modules/placement/`
-- `backend/prisma/migrations/20260921180000_job_placement/migration.sql`
+- `backend/prisma/migrations/20261005000000_mysql_initial/migration.sql`
 - `backend/prisma/schema.prisma`
 
 ## Decision: Score RESOURCE_AWARE on post-placement fit
@@ -549,8 +549,8 @@ Consequences:
 The strategy can pick a busier worker over an idle one when the idle worker is a poor shape fit, which is intended and covered by tests. The weights are a documented experimental contract; changing them changes placement outcomes and must be recorded.
 
 Affected Components:
-- `backend/src/modules/placement/placement.accounting.ts`
-- `backend/src/modules/placement/placement.test.ts`
+- `backend/src/modules/placement/placement.accounting.js`
+- `backend/src/modules/placement/placement.test.js`
 
 ## Decision: Reserve capacity with a worker row lock and an in-transaction recheck
 
@@ -576,11 +576,11 @@ Reasoning:
 Pessimistic row locking is the clearest demonstration of the DBMS concepts this project must show, and it makes the read-then-write sequence obviously correct. A conditional update would work for counters alone but would not let the allocation insert, counter update, and status change share one verified decision. Serializable isolation would add retry handling without improving safety for a single-row hot spot.
 
 Consequences:
-Reservations on the same worker serialise, which is intended and measured through `lockWaitMs`. Because lock waits are legitimate, the transaction uses a widened 15s start window and 20s timeout instead of Prisma's tighter defaults; the first concurrency test failed until this was corrected. Raw SQL is used only for locking and stays parameterized. The in-transaction duplicate check runs before the capacity recheck: a live smoke test showed that a job re-reserving on a saturated worker was told `INSUFFICIENT_RESOURCES`, because its own reservation is part of the worker's allocated total. Ordering the duplicate check first reports the real cause; the partial unique index remains the backstop for concurrent duplicates.
+Reservations on the same worker serialise, which is intended and measured through `lockWaitMs`. Because lock waits are legitimate, the transaction uses a widened 15s start window and 20s timeout instead of Prisma's tighter defaults; the first concurrency test failed until this was corrected. Raw SQL is used only for locking and stays parameterized. The in-transaction duplicate check runs before the capacity recheck: a live smoke test showed that a job re-reserving on a saturated worker was told `INSUFFICIENT_RESOURCES`, because its own reservation is part of the worker's allocated total. Ordering the duplicate check first reports the real cause; the functional unique index remains the backstop for concurrent duplicates.
 
 Affected Components:
-- `backend/src/modules/resources/resource.repository.ts`
-- `backend/src/modules/resources/resource.integration.test.ts`
+- `backend/src/modules/resources/resource.repository.js`
+- `backend/src/modules/resources/resource.integration.test.js`
 
 ## Decision: Keep job status unchanged during reservation and make release idempotent
 
@@ -609,8 +609,8 @@ Consequences:
 A `SCHEDULED` job may or may not hold a reservation, so the allocation record must be consulted to tell the difference. Adding a `RESERVED` job state later would require a migration and a transition-policy change. `ROLLED_BACK` remains unused for now and is reserved for recovery reconciliation.
 
 Affected Components:
-- `backend/src/modules/resources/resource.service.ts`
-- `backend/src/modules/resources/resource.repository.ts`
+- `backend/src/modules/resources/resource.service.js`
+- `backend/src/modules/resources/resource.repository.js`
 - `docs/flow.md`
 
 ## Decision: Grant the backend container access to the host Docker socket
@@ -641,8 +641,8 @@ The backend container is a privileged component in practice, and the decision wo
 
 Affected Components:
 - `compose.yaml`
-- `backend/src/config/env.ts`
-- `backend/src/modules/executions/execution.runtime.ts`
+- `backend/src/config/env.js`
+- `backend/src/modules/executions/execution.runtime.js`
 
 ## Decision: Talk to the Docker Engine API directly instead of adding a client library
 
@@ -656,7 +656,7 @@ Context:
 Execution needs seven daemon operations: version, image inspect, container create, start, wait, logs, and remove. The usual choice is `dockerode`.
 
 Decision:
-Write a small adapter over `node:http` with `socketPath`, in `docker.client.ts`, exposing only those operations. Negotiate the API version from the daemon's `/version` response, clamped to what the adapter was written against and checked against the daemon's minimum. Demultiplex Docker's framed log stream directly and cap each stream while reading it.
+Write a small adapter over `node:http` with `socketPath`, in `docker.client.js`, exposing only those operations. Negotiate the API version from the daemon's `/version` response, clamped to what the adapter was written against and checked against the daemon's minimum. Demultiplex Docker's framed log stream directly and cap each stream while reading it.
 
 Alternatives Considered:
 - `dockerode`
@@ -670,8 +670,8 @@ Consequences:
 No new npm dependency and `npm audit` stays clean. The log demultiplexer and version negotiation are ours to maintain and are unit-tested directly. Adding an eighth operation means writing it rather than calling it.
 
 Affected Components:
-- `backend/src/modules/executions/docker.client.ts`
-- `backend/src/modules/executions/execution.test.ts`
+- `backend/src/modules/executions/docker.client.js`
+- `backend/src/modules/executions/execution.test.js`
 
 ## Decision: Ship a purpose-built workload runner image with self-imposed work ceilings
 
@@ -702,7 +702,7 @@ Consequences:
 Affected Components:
 - `workload-runner/run.js`
 - `workload-runner/Dockerfile`
-- `backend/src/modules/executions/execution.contract.ts`
+- `backend/src/modules/executions/execution.contract.js`
 
 ## Decision: Derive the workload seed from the job name
 
@@ -731,8 +731,8 @@ Consequences:
 Two jobs with the same name get the same seed, which is intended for batch reuse and harmless otherwise. Renaming a job changes its seed and therefore its checksum.
 
 Affected Components:
-- `backend/src/modules/executions/execution.contract.ts`
-- `backend/src/modules/executions/execution.service.ts`
+- `backend/src/modules/executions/execution.contract.js`
+- `backend/src/modules/executions/execution.service.js`
 
 ## Decision: Start executions asynchronously and settle them idempotently
 
@@ -761,9 +761,9 @@ Consequences:
 If the backend process dies mid-execution, the execution stays `RUNNING` and its reservation stays held until someone settles it; that gap is documented rather than hidden, and automatic reconciliation belongs to the failure-recovery increment. Graceful shutdown waits for in-flight settlements. Tests expose `awaitPendingSettlements()` so they can assert on completed runs deterministically.
 
 Affected Components:
-- `backend/src/modules/executions/execution.service.ts`
-- `backend/src/modules/executions/execution.routes.ts`
-- `backend/src/server.ts`
+- `backend/src/modules/executions/execution.service.js`
+- `backend/src/modules/executions/execution.routes.js`
+- `backend/src/server.js`
 
 ## Decision: Record a timeout as an interruption and never invent a result
 
@@ -792,8 +792,8 @@ Consequences:
 An interrupted job is distinguishable from a failed one, which the requeue path will rely on. `INTERRUPTED` executions carry the exit code the daemon reported after the stop, commonly 137, alongside the timeout reason, so the reason rather than the code explains the outcome. Verified live: a `SLEEP` job against a ten second limit ran for just over fifteen seconds including the stop grace, then recorded `INTERRUPTED`, a null result, a released allocation, and an idle worker.
 
 Affected Components:
-- `backend/src/modules/executions/execution.service.ts`
-- `backend/src/modules/executions/execution.contract.ts`
+- `backend/src/modules/executions/execution.service.js`
+- `backend/src/modules/executions/execution.contract.js`
 
 ## Decision: Lock the job row when claiming an execution
 
@@ -821,8 +821,8 @@ Consequences:
 Claims for the same job serialise, which is intended. The orphan case now has a defined answer and stays refused until reconciliation exists. Verified live and in an integration test: concurrent claims produce exactly one execution and one `EXECUTION_ALREADY_STARTED`.
 
 Affected Components:
-- `backend/src/modules/executions/execution.repository.ts`
-- `backend/src/modules/executions/execution.integration.test.ts`
+- `backend/src/modules/executions/execution.repository.js`
+- `backend/src/modules/executions/execution.integration.test.js`
 
 ## Decision: Derive metrics from the authoritative records instead of accumulating them
 
@@ -851,8 +851,8 @@ Consequences:
 Metric reads cost queries rather than lookups, so windows are bounded (1 minute to 7 days) and limits are capped to keep a query from scanning without limit. Adding a metric usually means writing a query rather than a migration. The five stage timings are computed from column differences, which Prisma cannot aggregate, so that one query is raw SQL.
 
 Affected Components:
-- `backend/src/modules/monitoring/monitoring.repository.ts`
-- `backend/src/modules/monitoring/monitoring.metrics.ts`
+- `backend/src/modules/monitoring/monitoring.repository.js`
+- `backend/src/modules/monitoring/monitoring.metrics.js`
 
 ## Decision: Store utilization history as per-worker rows sharing one timestamp
 
@@ -866,7 +866,7 @@ Context:
 Utilization over time is the one metric that cannot be derived later. It has to be sampled. The question is what a sample looks like: one row of cluster totals, or one row per worker.
 
 Decision:
-Write one row per worker per pass, with every row in a pass sharing a single `capturedAt`. Grouping on that timestamp reconstructs the cluster as it stood at that instant. A unique index on `(workerId, capturedAt)` with `ON CONFLICT DO NOTHING` makes a repeated pass a no-op. Sample rows carry the same `CHECK` constraints as real accounting, and they cascade with their worker instead of restricting its deletion.
+Write one row per worker per pass, with every row in a pass sharing a single `capturedAt`. Grouping on that timestamp reconstructs the cluster as it stood at that instant. A unique index on `(workerId, capturedAt)` with `ON DUPLICATE KEY UPDATE` with a no-op assignment makes a repeated pass a no-op. Sample rows carry the same `CHECK` constraints as real accounting, and they cascade with their worker instead of restricting its deletion.
 
 Alternatives Considered:
 - One row per pass holding pre-summed cluster totals
@@ -881,10 +881,10 @@ Consequences:
 Three workers sampled every fifteen seconds is about 17,000 rows a day, which is why retention pruning exists. Reading history means grouping rows rather than selecting them directly, done by a pure function that is unit-tested against known input.
 
 Affected Components:
-- `backend/prisma/migrations/20260922160000_worker_samples/migration.sql`
-- `backend/src/modules/monitoring/monitoring.metrics.ts`
+- `backend/prisma/migrations/20261005000000_mysql_initial/migration.sql`
+- `backend/src/modules/monitoring/monitoring.metrics.js`
 
-## Decision: Start the sampler in server.ts, not app.ts
+## Decision: Start the sampler in server.js, not app.js
 
 Date:
 2026-09-22
@@ -893,26 +893,26 @@ Status:
 Accepted
 
 Context:
-Every earlier phase is driven by an explicit request; OrchestrOS has had no background work at all. Periodic sampling needs a timer, which makes it the first. Tests import the Express app from `app.ts` dozens of times.
+Every earlier phase is driven by an explicit request; OrchestrOS has had no background work at all. Periodic sampling needs a timer, which makes it the first. Tests import the Express app from `app.js` dozens of times.
 
 Decision:
-Keep the sampler out of `app.ts` and start it in `server.ts`, so importing the app never starts a timer. Call `unref()` so the sampler can never be the reason the process stays alive, stop it first during shutdown, guard against overlapping passes, and log and swallow failures. Make the interval configurable, with zero disabling periodic sampling and leaving `POST /api/monitoring/sample` as the explicit path.
+Keep the sampler out of `app.js` and start it in `server.js`, so importing the app never starts a timer. Call `unref()` so the sampler can never be the reason the process stays alive, stop it first during shutdown, guard against overlapping passes, and log and swallow failures. Make the interval configurable, with zero disabling periodic sampling and leaving `POST /api/monitoring/sample` as the explicit path.
 
 Alternatives Considered:
-- Starting the timer in `app.ts` alongside route registration
+- Starting the timer in `app.js` alongside route registration
 - A separate sampler process or container
 - No timer at all, sampling only on request
 - A cron-style external scheduler
 
 Reasoning:
-Starting a timer on import would make every test file spawn background database writes, which is both slow and a source of flaky cross-test interference. Keeping it in `server.ts` means the process that actually serves traffic owns the loop and the test suite stays deterministic. A separate process would be the right answer for a production system but doubles the deployment for one small writer. Sampling only on request would make the history feature real in name only, since nobody would be calling it during an unattended run. Guarding overlap matters because a pass that outlives its interval would otherwise queue passes behind each other under load, which is exactly when monitoring should stay cheap.
+Starting a timer on import would make every test file spawn background database writes, which is both slow and a source of flaky cross-test interference. Keeping it in `server.js` means the process that actually serves traffic owns the loop and the test suite stays deterministic. A separate process would be the right answer for a production system but doubles the deployment for one small writer. Sampling only on request would make the history feature real in name only, since nobody would be calling it during an unattended run. Guarding overlap matters because a pass that outlives its interval would otherwise queue passes behind each other under load, which is exactly when monitoring should stay cheap.
 
 Consequences:
 The sampler is the project's single background loop and is confined to observation; it writes only `worker_samples`. Graceful shutdown stops it before awaiting execution settlements. A missed observation leaves a gap in the series rather than failing a request, which is the correct trade for a monitoring component.
 
 Affected Components:
-- `backend/src/modules/monitoring/monitoring.sampler.ts`
-- `backend/src/server.ts`
+- `backend/src/modules/monitoring/monitoring.sampler.js`
+- `backend/src/server.js`
 
 ## Decision: Prune inside the sampling pass and bound every metric window
 
@@ -935,14 +935,14 @@ Alternatives Considered:
 - A database-level partition or TTL policy
 
 Reasoning:
-Pruning inside the pass means history is bounded whether sampling is periodic or on demand, with no second mechanism that could be forgotten or disabled independently. Bounded windows matter because these are read endpoints computing aggregates over growing tables; an unbounded window is a way to ask the database to scan everything, and rejecting it is cheaper than optimising for it. Downsampling would be the right move at a much larger scale and is not justified for a single-machine prototype. PostgreSQL partitioning would add schema complexity for a table measured in tens of thousands of rows a day.
+Pruning inside the pass means history is bounded whether sampling is periodic or on demand, with no second mechanism that could be forgotten or disabled independently. Bounded windows matter because these are read endpoints computing aggregates over growing tables; an unbounded window is a way to ask the database to scan everything, and rejecting it is cheaper than optimising for it. Downsampling would be the right move at a much larger scale and is not justified for a single-machine prototype. MySQL partitioning would add schema complexity for a table measured in tens of thousands of rows a day.
 
 Consequences:
 Retention defaults to 24 hours, which is roughly 17,000 rows for three workers and comfortably covers a demo or an experiment run. Anyone wanting a longer experiment history raises retention deliberately. The pruning count is returned from an on-demand capture, so the behaviour is observable rather than silent.
 
 Affected Components:
-- `backend/src/modules/monitoring/monitoring.service.ts`
-- `backend/src/modules/monitoring/monitoring.schemas.ts`
+- `backend/src/modules/monitoring/monitoring.service.js`
+- `backend/src/modules/monitoring/monitoring.schemas.js`
 
 ## Decision: Report a timing stage with no data as a zero count, and no success rate as null
 
@@ -971,8 +971,8 @@ Consequences:
 Consumers handle nulls, which is the honest shape of "not measured yet". The distinction was verified live: an idle cluster reported null success rate and zero counts, and after three jobs completed the same endpoint reported a rate of 1.0 with an `execution` average of 20.2 seconds against a 20-second sleep workload.
 
 Affected Components:
-- `backend/src/modules/monitoring/monitoring.metrics.ts`
-- `backend/src/modules/monitoring/monitoring.service.ts`
+- `backend/src/modules/monitoring/monitoring.metrics.js`
+- `backend/src/modules/monitoring/monitoring.service.js`
 
 ## Decision: Keep the dashboard read-only and draw charts without a charting library
 
@@ -1001,8 +1001,8 @@ Consequences:
 This decision is superseded by the browser-control facade above. The sparkline remains dependency-free and the monitoring panel itself remains observation-only; the new orchestrator panel owns user actions and calls backend APIs. The sparkline still degrades to an explanatory message when fewer than two points exist, so an empty history reads as empty rather than broken.
 
 Affected Components:
-- `frontend/src/MonitoringPanel.tsx`
-- `frontend/src/api.ts`
+- `frontend/src/MonitoringPanel.jsx`
+- `frontend/src/api.js`
 - `frontend/src/styles.css`
 
 
@@ -1029,14 +1029,14 @@ Alternatives Considered:
 - Add a generic workflow engine or message queue
 
 Reasoning:
-Better instructions do not solve the product problem: command sequencing is an implementation detail, not a user workflow. Moving logic into React would create a second source of truth that would inevitably drift from PostgreSQL and would make row-locking and Docker safety unenforceable. Having React issue the four stage calls would still couple it to sequencing, leave half-advanced jobs easy to strand, and make error handling a frontend concern. A workflow engine is unnecessary for a local single-process prototype when the existing services already expose the needed boundaries. The facade keeps the behavior in the backend while giving the browser one meaningful action.
+Better instructions do not solve the product problem: command sequencing is an implementation detail, not a user workflow. Moving logic into React would create a second source of truth that would inevitably drift from MySQL and would make row-locking and Docker safety unenforceable. Having React issue the four stage calls would still couple it to sequencing, leave half-advanced jobs easy to strand, and make error handling a frontend concern. A workflow engine is unnecessary for a local single-process prototype when the existing services already expose the needed boundaries. The facade keeps the behavior in the backend while giving the browser one meaningful action.
 
 Consequences:
 The UI can demonstrate the real system end to end without PowerShell. A facade response includes stage outcomes (`OK`, `SKIPPED`, `FAILED`) with the actual backend detail, which the activity log renders. The UI's automatic run is deliberately only a loop that asks the backend to advance a bounded batch; it stops on backend-reported idle/full conditions and never assumes a click advanced a job. This is not an autoscaler or a new scheduler.
 
 Affected Components:
 - `backend/src/modules/orchestrator/`
-- `frontend/src/OrchestratorConsole.tsx`
+- `frontend/src/OrchestratorConsole.jsx`
 - `frontend/src/components/`
 
 ## Decision: Use a valid all-zero CUSTOM batch for the browser's Immediate demo preset
@@ -1066,9 +1066,9 @@ Consequences:
 Immediate batches are deterministic for the same seed and make all jobs eligible as soon as the batch transaction commits. The UI labels the preset as `CUSTOM`, so it never pretends it is a new predefined pattern. Predefined patterns still display the time until a queued job becomes eligible.
 
 Affected Components:
-- `frontend/src/api.ts`
-- `frontend/src/components/ControlPanel.tsx`
-- `backend/src/modules/workloads/workload.schemas.ts`
+- `frontend/src/api.js`
+- `frontend/src/components/ControlPanel.jsx`
+- `backend/src/modules/workloads/workload.schemas.js`
 
 ## Decision: Make terminal-only cleanup a backend transaction
 
@@ -1097,9 +1097,9 @@ Consequences:
 Clearing history removes terminal job results and their batch records, so it is a local demonstration convenience rather than an audit-retention feature. Running jobs and their resource accounting always survive. Tests verify that an active reservation and its worker counters remain after cleanup.
 
 Affected Components:
-- `backend/src/modules/orchestrator/orchestrator.repository.ts`
-- `backend/src/modules/orchestrator/orchestrator.routes.ts`
-- `frontend/src/OrchestratorConsole.tsx`
+- `backend/src/modules/orchestrator/orchestrator.repository.js`
+- `backend/src/modules/orchestrator/orchestrator.routes.js`
+- `frontend/src/OrchestratorConsole.jsx`
 
 ## Decision: Run database integration tests serially
 
@@ -1110,7 +1110,7 @@ Status:
 Accepted
 
 Context:
-The Node test runner runs test files concurrently by default. This repository's integration tests intentionally share one PostgreSQL database and several services, including a global scheduler that considers every eligible job and a placement service that considers every worker. A new terminal-cleanup test also removes finished jobs globally by design.
+The Node test runner runs test files concurrently by default. This repository's integration tests intentionally share one MySQL database and several services, including a global scheduler that considers every eligible job and a placement service that considers every worker. A new terminal-cleanup test also removes finished jobs globally by design.
 
 Decision:
 Set the backend test script to `--test-concurrency=1`. Unit tests remain fast enough, and database/Docker integration tests execute against a deterministic shared state.
@@ -1118,15 +1118,34 @@ Set the backend test script to `--test-concurrency=1`. Unit tests remain fast en
 Alternatives Considered:
 - Keep concurrent files and rely on randomly prefixed names alone
 - Give every test file a separate database/schema
-- Mock PostgreSQL for integration tests
+- Mock MySQL for integration tests
 - Disable the cleanup test
 
 Reasoning:
 Prefixes isolate most rows but cannot isolate intentionally global domain operations such as "next eligible job", "least loaded worker", or terminal cleanup. Concurrent test files exposed exactly that: one file could validly schedule another file's job or reserve another file's worker before its cleanup ran. Separate databases are better at larger scale but significantly complicate local Compose setup. Serial execution takes roughly 105 seconds with Docker, which is acceptable for a college prototype and gives reliable proof rather than intermittent failures.
 
 Consequences:
-`npm test` is deterministic and slower when database integration is enabled. Test fakes remain used for pure orchestration behavior, while real PostgreSQL and Docker tests still prove the critical path.
+`npm test` is deterministic and slower when database integration is enabled. Test fakes remain used for pure orchestration behavior, while real MySQL and Docker tests still prove the critical path.
 
 Affected Components:
 - `backend/package.json`
-- `backend/src/modules/orchestrator/orchestrator.integration.test.ts`
+- `backend/src/modules/orchestrator/orchestrator.integration.test.js`
+
+
+## Decision: JavaScript runtime and a fresh MySQL baseline
+
+Date: 2026-10-05
+
+Status: Accepted
+
+The application, seed, tests, and Vite configuration run as JavaScript. React components use JSX. Node runs the backend and test suite directly; Vite builds the frontend. The root check command verifies backend JavaScript syntax, and npm ci installs the pinned workspace dependencies.
+
+The only datasource is MySQL. The migration history is consolidated into 20261005000000_mysql_initial for a new MySQL database. Compose runs MySQL 8.4 with an authenticated health check, a persistent volume, and a dedicated application account. Host credentials belong in the ignored .env file.
+
+UUID identifiers use CHAR(36), structured results use JSON, and all resource, lifecycle, output, and execution identity constraints remain database-enforced. A functional unique index on CASE WHEN status = 'RESERVED' THEN jobId ELSE NULL END permits allocation history while rejecting a second live reservation. This expression index is maintained in SQL because it cannot be expressed in the Prisma schema; preserve it when reviewing future migrations. Use migrate deploy/setup rather than db push so SQL-only invariants are installed.
+
+Identifiers use restrictive update actions. Deleting a worker referenced by a job is also restricted, keeping the placement constraint valid. MySQL does not allow cascading foreign-key actions on columns used by check constraints; see the [MySQL check-constraint documentation](https://dev.mysql.com/doc/refman/8.4/en/create-table-check-constraints.html).
+
+Monitoring uses TIMESTAMPDIFF at microsecond precision and window functions to linearly interpolate p95. Numeric aggregates are converted to JavaScript numbers before reaching the API. Conditional counts and a no-op duplicate-key update preserve activity totals and sampling idempotency.
+
+Validation: the fresh baseline and idempotent seed ran on MySQL 8.0.46 and the MySQL 8.4 Compose service. All 130 tests passed with both database and Docker execution enabled, including direct unique-index violations and fractional/tied percentile cases. The frontend production build and backend syntax checks passed.

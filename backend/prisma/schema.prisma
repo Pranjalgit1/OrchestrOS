@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -77,16 +77,16 @@ enum ExecutionStatus {
 }
 
 model WorkloadBatch {
-  id               String            @id @default(uuid()) @db.Uuid
+  id               String            @id @default(uuid()) @db.Char(36)
   seed             Int
   jobCount         Int
   pattern          WorkloadPattern
   generatorVersion String            @db.VarChar(16)
   parameters       Json
   startsAt         DateTime
-  sourceBatchId    String?           @db.Uuid
+  sourceBatchId    String?           @db.Char(36)
   createdAt        DateTime          @default(now())
-  sourceBatch      WorkloadBatch?    @relation("BatchReuse", fields: [sourceBatchId], references: [id], onDelete: Restrict)
+  sourceBatch      WorkloadBatch?    @relation("BatchReuse", fields: [sourceBatchId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   reusedBatches    WorkloadBatch[]   @relation("BatchReuse")
   jobs             Job[]
 
@@ -96,7 +96,7 @@ model WorkloadBatch {
 }
 
 model Job {
-  id                       String             @id @default(uuid()) @db.Uuid
+  id                       String             @id @default(uuid()) @db.Char(36)
   name                     String             @db.VarChar(100)
   workloadType             WorkloadType
   workloadSize             Int                @default(1)
@@ -105,7 +105,7 @@ model Job {
   memoryRequiredMiB        Int
   estimatedDurationSeconds Int
   priority                 Int                @default(5)
-  workloadBatchId          String?            @db.Uuid
+  workloadBatchId          String?            @db.Char(36)
   batchSequence            Int?
   arrivalOffsetSeconds     Int                @default(0)
   arrivalAt                DateTime           @default(now())
@@ -120,12 +120,12 @@ model Job {
   startedAt                DateTime?
   completedAt              DateTime?
   cancelledAt              DateTime?
-  assignedWorkerId         String?            @db.Uuid
+  assignedWorkerId         String?            @db.Char(36)
   containerId              String?            @unique @db.VarChar(128)
   result                   Json?
-  failureReason            String?
-  workloadBatch            WorkloadBatch?     @relation(fields: [workloadBatchId], references: [id], onDelete: Restrict)
-  assignedWorker           Worker?            @relation("AssignedJobs", fields: [assignedWorkerId], references: [id], onDelete: SetNull)
+  failureReason            String? @db.Text
+  workloadBatch            WorkloadBatch?     @relation(fields: [workloadBatchId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assignedWorker           Worker?            @relation("AssignedJobs", fields: [assignedWorkerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   allocations              ResourceAllocation[]
   executions               JobExecution[]
 
@@ -136,11 +136,12 @@ model Job {
   @@index([status, schedulingRounds, arrivalAt, id])
   @@index([workloadBatchId])
   @@index([assignedWorkerId])
+  @@index([assignedWorkerId, status])
   @@map("jobs")
 }
 
 model Worker {
-  id                      String               @id @default(uuid()) @db.Uuid
+  id                      String               @id @default(uuid()) @db.Char(36)
   name                    String               @unique @db.VarChar(64)
   cpuCapacityMillicores   Int
   memoryCapacityMiB       Int
@@ -165,8 +166,8 @@ model Worker {
 /// derived after the fact. These rows are the one metric OrchestrOS stores;
 /// every other metric is computed from the authoritative records on read.
 model WorkerSample {
-  id                     String       @id @default(uuid()) @db.Uuid
-  workerId               String       @db.Uuid
+  id                     String       @id @default(uuid()) @db.Char(36)
+  workerId               String       @db.Char(36)
   /// Every worker written by one sampling pass shares this timestamp.
   capturedAt             DateTime
   cpuCapacityMillicores  Int
@@ -178,7 +179,7 @@ model WorkerSample {
   reservedAllocations    Int          @default(0)
   createdAt              DateTime     @default(now())
   // Samples are observational, not authoritative, so they follow the worker.
-  worker                 Worker       @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  worker                 Worker       @relation(fields: [workerId], references: [id], onDelete: Cascade, onUpdate: Restrict)
 
   @@unique([workerId, capturedAt])
   @@index([capturedAt])
@@ -186,9 +187,9 @@ model WorkerSample {
 }
 
 model ResourceAllocation {
-  id              String           @id @default(uuid()) @db.Uuid
-  jobId           String           @db.Uuid
-  workerId        String           @db.Uuid
+  id              String           @id @default(uuid()) @db.Char(36)
+  jobId           String           @db.Char(36)
+  workerId        String           @db.Char(36)
   cpuMillicores   Int
   memoryMiB       Int
   status          AllocationStatus @default(RESERVED)
@@ -196,8 +197,8 @@ model ResourceAllocation {
   releasedAt      DateTime?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
-  job             Job              @relation(fields: [jobId], references: [id], onDelete: Restrict)
-  worker          Worker           @relation(fields: [workerId], references: [id], onDelete: Restrict)
+  job             Job              @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  worker          Worker           @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   execution       JobExecution?
 
   // Supports a composite execution foreign key that guarantees job/worker identity.
@@ -208,24 +209,24 @@ model ResourceAllocation {
 }
 
 model JobExecution {
-  id            String             @id @default(uuid()) @db.Uuid
-  jobId         String             @db.Uuid
-  workerId      String             @db.Uuid
-  allocationId  String             @unique @db.Uuid
+  id            String             @id @default(uuid()) @db.Char(36)
+  jobId         String             @db.Char(36)
+  workerId      String             @db.Char(36)
+  allocationId  String             @unique @db.Char(36)
   attempt       Int
   status        ExecutionStatus    @default(PENDING)
   containerId   String?            @unique @db.VarChar(128)
   startedAt     DateTime?
   completedAt   DateTime?
   exitCode      Int?
-  stdout        String?
-  stderr        String?
-  failureReason String?
+  stdout        String? @db.MediumText
+  stderr        String? @db.MediumText
+  failureReason String? @db.Text
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
-  job           Job                @relation(fields: [jobId], references: [id], onDelete: Restrict)
-  worker        Worker             @relation(fields: [workerId], references: [id], onDelete: Restrict)
-  allocation    ResourceAllocation @relation(fields: [allocationId, jobId, workerId], references: [id, jobId, workerId], onDelete: Restrict)
+  job           Job                @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  worker        Worker             @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  allocation    ResourceAllocation @relation(fields: [allocationId, jobId, workerId], references: [id, jobId, workerId], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([jobId, attempt])
   @@unique([allocationId, jobId, workerId])

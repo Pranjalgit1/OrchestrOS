@@ -2,13 +2,13 @@
 
 ## 1. Purpose and boundary
 
-OrchestrOS is a Kubernetes-inspired local container orchestration prototype. It runs on one physical development machine and will schedule controlled workloads, place them across logical workers, execute them in Docker, protect resource accounting with PostgreSQL transactions, recover interrupted work, and use forecasting to assist scaling.
+OrchestrOS is a Kubernetes-inspired local container orchestration prototype. It runs on one physical development machine and will schedule controlled workloads, place them across logical workers, execute them in Docker, protect resource accounting with MySQL transactions, recover interrupted work, and use forecasting to assist scaling.
 
 Logical workers are database-backed capacity records, not physical computers, VMs, cloud nodes, or Docker hosts. Kubernetes, cloud provisioning, arbitrary commands/images, Redis, Kafka, GPU orchestration, complex service discovery, and production multi-tenancy are outside scope.
 
 ## 2. Architectural style and current implementation
 
-The system is an npm-workspace monorepo with a React/Vite frontend, modular Express backend, Prisma persistence adapter, and local PostgreSQL supplied by Compose. Backend features use route, service, repository, and pure-domain boundaries inside one process.
+The system is an npm-workspace monorepo with a React/Vite frontend, modular Express backend, Prisma persistence adapter, and local MySQL supplied by Compose. Backend features use route, service, repository, and pure-domain boundaries inside one process.
 
 The current implementation includes foundation startup, job/worker management, deterministic workload generation, scheduling, placement, transactional resource reservation, controlled Docker execution, operational monitoring, and a browser-first orchestration control interface. Autoscaling, failure recovery, experiments, and ML remain future increments unless `docs/flow.md` says otherwise.
 
@@ -32,13 +32,13 @@ The current implementation includes foundation startup, job/worker management, d
 
 ## 4. Job lifecycle and queue
 
-Required job states are `CREATED`, `QUEUED`, `WAITING`, `SCHEDULED`, `RUNNING`, `COMPLETED`, `FAILED`, `INTERRUPTED`, and `CANCELLED`. Valid edges are centralized in `job.transitions.ts`. Manual and generated jobs enter PostgreSQL as `QUEUED`. Execution drives `SCHEDULED -> RUNNING` and then `RUNNING -> COMPLETED`, `FAILED`, or `INTERRUPTED`. Only queued cancellation is active; cancelling a running job waits for a later increment.
+Required job states are `CREATED`, `QUEUED`, `WAITING`, `SCHEDULED`, `RUNNING`, `COMPLETED`, `FAILED`, `INTERRUPTED`, and `CANCELLED`. Valid edges are centralized in `job.transitions.js`. Manual and generated jobs enter MySQL as `QUEUED`. Execution drives `SCHEDULED -> RUNNING` and then `RUNNING -> COMPLETED`, `FAILED`, or `INTERRUPTED`. Only queued cancellation is active; cancelling a running job waits for a later increment.
 
-PostgreSQL is the only queue source of truth. There is no in-memory queue or Redis. `arrivalAt` and `arrivalOffsetSeconds` gate eligibility: the scheduler only considers queued jobs whose planned arrival has passed. No timer releases jobs on its own; every stage of the chain is driven by an explicit request.
+MySQL is the only queue source of truth. There is no in-memory queue or Redis. `arrivalAt` and `arrivalOffsetSeconds` gate eligibility: the scheduler only considers queued jobs whose planned arrival has passed. No timer releases jobs on its own; every stage of the chain is driven by an explicit request.
 
 ## 5. Deterministic workload generation
 
-`workload.generator.ts` is pure: it does not call Prisma, clocks, UUIDs, `Math.random`, or external services. Generator version `v1` uses a local Mulberry32 PRNG. Determinism covers the ordered workload specifications and arrival offsets for the same version, seed, count, canonical pattern, and custom configuration. Database IDs and default batch start times are intentionally not deterministic.
+`workload.generator.js` is pure: it does not call Prisma, clocks, UUIDs, `Math.random`, or external services. Generator version `v1` uses a local Mulberry32 PRNG. Determinism covers the ordered workload specifications and arrival offsets for the same version, seed, count, canonical pattern, and custom configuration. Database IDs and default batch start times are intentionally not deterministic.
 
 Allowed batch sizes are exactly 10, 25, 50, and 100. Each job independently samples its workload type, CPU, memory, estimated duration, and priority from the pattern's pools, so batches vary without short repeating cycles. Batches of 25 or more cover all five controlled workload types; a 10-job batch may omit one. The five controlled types are:
 
@@ -84,7 +84,7 @@ Worker states are `STARTING`, `ACTIVE`, `IDLE`, `BUSY`, `STOPPING`, and `FAILED`
 
 ## 7. Database and consistency
 
-PostgreSQL contains `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, `JobExecution`, and `WorkerSample`. All six are written by running code. The first five are authoritative; `WorkerSample` is observational and is the only table monitoring writes. SQL constraints enforce resource bounds, valid batch sizes/offsets, complete batch identity, unique sequence, one active reservation per job, matching execution/allocation job-worker identity, one execution per allocation, one execution per job attempt, bounded captured output, byte-range exit codes, hex container ids, and the rule that a terminal execution records when it completed.
+MySQL contains `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, `JobExecution`, and `WorkerSample`. All six are written by running code. The first five are authoritative; `WorkerSample` is observational and is the only table monitoring writes. SQL constraints enforce resource bounds, valid batch sizes/offsets, complete batch identity, unique sequence, one active reservation per job, matching execution/allocation job-worker identity, one execution per allocation, one execution per job attempt, bounded captured output, byte-range exit codes, hex container ids, and the rule that a terminal execution records when it completed.
 
 Compose runs deployment migrations and the worker seed before backend startup. Readiness queries the five authoritative models; it deliberately excludes `WorkerSample`, because losing observational history is not a reason to call the orchestrator unhealthy. Published ports are loopback-only.
 
@@ -94,7 +94,7 @@ Resource reservation is implemented and detailed in section 10: it begins a tran
 
 The scheduler answers only **which job runs next**. It never chooses a worker, reserves resources, or starts containers. Placement, reservation, and execution are separate components with their own endpoints, described in sections 9, 10, and 11.
 
-`scheduler.policies.ts` is pure: it takes candidate jobs, a policy, and the current time, and returns an ordering. Persistence and claiming live in the repository and service.
+`scheduler.policies.js` is pure: it takes candidate jobs, a policy, and the current time, and returns an ordering. Persistence and claiming live in the repository and service.
 
 ### Eligibility
 
@@ -123,7 +123,7 @@ Policy is supplied per request rather than stored as global state, so the same w
 
 Placement answers only **which worker runs an already-scheduled job**. It never selects the job, changes job lifecycle state, or starts a container.
 
-`placement.accounting.ts` is pure: it turns workers and their current load into capacity snapshots, evaluates eligibility, scores candidates, and selects one.
+`placement.accounting.js` is pure: it turns workers and their current load into capacity snapshots, evaluates eligibility, scores candidates, and selects one.
 
 ### Advisory decisions
 
@@ -187,7 +187,7 @@ COMMIT
 
 The recheck happens **inside** the transaction while the lock is held. A placement decision made earlier is advisory and may be stale, so reservation never trusts it. Concurrent reservations for the same worker serialise on the lock: the first commits, the second re-reads the updated counters and is refused with `INSUFFICIENT_RESOURCES`.
 
-The duplicate check deliberately precedes the capacity check. A job that already holds a reservation is itself counted in the worker's allocated total, so checking capacity first would report a shortfall that does not exist and hide the real cause. The partial unique index still guards the insert, so a concurrent duplicate that passes the check is mapped to the same `ALREADY_RESERVED` outcome.
+The duplicate check deliberately precedes the capacity check. A job that already holds a reservation is itself counted in the worker's allocated total, so checking capacity first would report a shortfall that does not exist and hide the real cause. The functional unique index still guards the insert, so a concurrent duplicate that passes the check is mapped to the same `ALREADY_RESERVED` outcome.
 
 The amount reserved is always the job's own `cpuRequiredMillicores` and `memoryRequiredMiB`. Clients cannot choose an amount or a worker.
 
@@ -210,7 +210,7 @@ Release is idempotent: releasing an already released job returns the existing re
 Three independent mechanisms prevent over-allocation:
 
 1. **Row lock plus in-transaction recheck** serialises competing reservations.
-2. **A partial unique index** allows only one `RESERVED` allocation per job.
+2. **A functional unique index** allows only one `RESERVED` allocation per job.
 3. **A SQL `CHECK` constraint** (`allocated <= capacity`) is the last line of defence if application logic is ever wrong.
 
 Atomicity means a failure at any step rolls back the allocation row, the counter update, and the worker status together, so no capacity is ever half-claimed.
@@ -227,7 +227,7 @@ Execution is the only component that talks to Docker. It runs a reserved job as 
 
 ### The controlled workload image
 
-`workload-runner/` builds a single image, `orchestros/workload-runner:v1`, whose entrypoint is one fixed program. The image name is a constant in `execution.contract.ts`, not configuration, so there is no code path that can run any other image. The program accepts no command, script, or formula; its entire input is four environment variables the backend constructs itself:
+`workload-runner/` builds a single image, `orchestros/workload-runner:v1`, whose entrypoint is one fixed program. The image name is a constant in `execution.contract.js`, not configuration, so there is no code path that can run any other image. The program accepts no command, script, or formula; its entire input is four environment variables the backend constructs itself:
 
 | Variable | Meaning |
 | --- | --- |
@@ -258,7 +258,7 @@ The seed is a 32-bit hash of the job name. Generated names encode the batch seed
 
 ### Container restrictions
 
-Every container is created with the same locked-down specification, all of it decided by `execution.runtime.ts`:
+Every container is created with the same locked-down specification, all of it decided by `execution.runtime.js`:
 
 - CPU and memory limits set to exactly what the job reserved, with swap equal to memory
 - `NetworkMode: none` and networking disabled
@@ -318,7 +318,7 @@ Five stage durations come from a job's own timestamps:
 | `execution` | `completedAt - startedAt` |
 | `turnaround` | `completedAt - arrivalAt` |
 
-Each reports count, average, minimum, maximum, and p95. Prisma cannot aggregate the difference between two columns, so the durations are normalised into `(metric, seconds)` pairs in SQL and aggregated once, letting PostgreSQL compute the percentile instead of loading every row into the process. A stage nothing has reached yet reports a zero count rather than being absent, so a caller never has to distinguish "missing" from "nothing measured".
+Each reports count, average, minimum, maximum, and p95. Prisma cannot aggregate the difference between two columns, so the durations are normalised into `(metric, seconds)` pairs in SQL and aggregated once, letting MySQL compute the percentile instead of loading every row into the process. A stage nothing has reached yet reports a zero count rather than being absent, so a caller never has to distinguish "missing" from "nothing measured".
 
 Timings cover jobs created inside the window; completion counts are anchored on when a job finished, which is what a rate should measure. The window start is echoed in the response so the denominator is never ambiguous.
 
@@ -330,7 +330,7 @@ Samples are observational, so they cascade with their worker instead of blocking
 
 ### The only background loop
 
-The sampler is the project's single timer. Everything else in OrchestrOS is driven by an explicit request. It is deliberately confined to observation, and it is started by `server.ts` rather than `app.ts`, so importing the Express app — as every test does — never starts a timer. Its interval is configurable and zero disables it, in which case history becomes opt-in through `POST /api/monitoring/sample`.
+The sampler is the project's single timer. Everything else in OrchestrOS is driven by an explicit request. It is deliberately confined to observation, and it is started by `server.js` rather than `app.js`, so importing the Express app — as every test does — never starts a timer. Its interval is configurable and zero disables it, in which case history becomes opt-in through `POST /api/monitoring/sample`.
 
 A pass already in flight blocks the next one, so a slow database cannot cause passes to pile up. A failed pass is logged and skipped: a missed observation must never take the orchestrator down. Pruning runs inside each pass, so history cannot grow without bound whether sampling is periodic or on demand.
 
@@ -432,7 +432,7 @@ Job and worker management endpoints remain available. A start request carries on
 ## 16. Target data flow
 
 ```text
-Workload Generator -> PostgreSQL-backed Queue -> Scheduler -> Placement
+Workload Generator -> MySQL-backed Queue -> Scheduler -> Placement
   -> Transactional Reservation -> Docker Execution -> Monitoring -> Release
 ```
 

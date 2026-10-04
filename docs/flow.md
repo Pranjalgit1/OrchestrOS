@@ -4,17 +4,17 @@ This document describes code that currently executes. The current implementation
 
 ## Flow: Startup and readiness
 
-1. `compose.yaml` starts PostgreSQL and waits for `pg_isready`.
+1. `compose.yaml` starts MySQL and waits for an authenticated `SELECT 1` health check.
 2. The one-shot `database-setup` service runs all committed Prisma migrations and idempotently seeds three workers.
 3. Backend starts only after setup succeeds; frontend starts only after backend health succeeds.
-4. `health.service.ts` queries `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, and `JobExecution` in one Prisma transaction.
+4. `health.service.js` queries `WorkloadBatch`, `Job`, `Worker`, `ResourceAllocation`, and `JobExecution` in one Prisma transaction.
 5. A reachable complete schema returns HTTP 200; a database/schema failure returns structured HTTP 503.
 6. Health checks the database only. Docker reachability is reported separately by `GET /api/executions/runtime`, so an absent daemon does not make the stack look unhealthy.
-7. `server.ts` then starts the monitoring sampler and logs its interval and retention. This happens outside `app.ts` on purpose, so importing the Express app never starts a timer.
+7. `server.js` then starts the monitoring sampler and logs its interval and retention. This happens outside `app.js` on purpose, so importing the Express app never starts a timer.
 
 The backend container mounts the host Docker socket, which it needs to run workload containers. Building the workload image is a separate step: `npm run docker:images`, which `npm run docker:up` runs first.
 
-Direct development remains: start PostgreSQL, run `npm run db:setup`, then run backend and frontend in separate terminals. On the host the backend reaches Docker through the platform default socket path (a named pipe on Windows).
+Direct development remains: start MySQL, run `npm run db:setup`, then run backend and frontend in separate terminals. On the host the backend reaches Docker through the platform default socket path (a named pipe on Windows).
 
 ## Flow: Generate workload batch
 
@@ -23,13 +23,13 @@ Entry Point:
 
 Sequence:
 
-1. `backend/src/modules/workloads/workload.routes.ts`
-2. `generateWorkloadSchema` in `workload.schemas.ts`
-3. `WorkloadService.generate()` in `workload.service.ts`
-4. `generateWorkloadSpecs()` in `workload.generator.ts`
-5. `prismaWorkloadRepository.createBatch()` in `workload.repository.ts`
+1. `backend/src/modules/workloads/workload.routes.js`
+2. `generateWorkloadSchema` in `workload.schemas.js`
+3. `WorkloadService.generate()` in `workload.service.js`
+4. `generateWorkloadSpecs()` in `workload.generator.js`
+5. `prismaWorkloadRepository.createBatch()` in `workload.repository.js`
 6. Prisma interactive transaction
-7. PostgreSQL `workload_batches` and `jobs`
+7. MySQL `workload_batches` and `jobs`
 
 Detailed Flow:
 
@@ -105,11 +105,11 @@ Entry Point:
 
 Sequence:
 
-1. `backend/src/modules/scheduler/scheduler.routes.ts`
-2. `previewQuerySchema` in `scheduler.schemas.ts`
-3. `SchedulerService.preview()` in `scheduler.service.ts`
-4. `prismaSchedulerRepository.findEligible()` in `scheduler.repository.ts`
-5. `orderByPolicy()` in `scheduler.policies.ts`
+1. `backend/src/modules/scheduler/scheduler.routes.js`
+2. `previewQuerySchema` in `scheduler.schemas.js`
+3. `SchedulerService.preview()` in `scheduler.service.js`
+4. `prismaSchedulerRepository.findEligible()` in `scheduler.repository.js`
+5. `orderByPolicy()` in `scheduler.policies.js`
 
 Detailed Flow:
 
@@ -127,13 +127,13 @@ Entry Point:
 
 Sequence:
 
-1. `scheduler.routes.ts`
-2. `dispatchSchema` in `scheduler.schemas.ts`
+1. `scheduler.routes.js`
+2. `dispatchSchema` in `scheduler.schemas.js`
 3. `SchedulerService.dispatch()`
 4. `orderByPolicy()`
-5. `assertJobTransition()` in `../jobs/job.transitions.ts`
+5. `assertJobTransition()` in `../jobs/job.transitions.js`
 6. `prismaSchedulerRepository.claim()`
-7. PostgreSQL `jobs`
+7. MySQL `jobs`
 
 Detailed Flow:
 
@@ -153,10 +153,10 @@ Entry Point:
 
 Sequence:
 
-1. `backend/src/modules/placement/placement.routes.ts`
-2. `PlacementService.capacity()` in `placement.service.ts`
+1. `backend/src/modules/placement/placement.routes.js`
+2. `PlacementService.capacity()` in `placement.service.js`
 3. `prismaPlacementRepository.listWorkers()` and `assignedLoadByWorker()`
-4. `buildSnapshot()` in `placement.accounting.ts`
+4. `buildSnapshot()` in `placement.accounting.js`
 
 Detailed Flow:
 
@@ -184,12 +184,12 @@ Entry Point:
 
 Sequence:
 
-1. `placement.routes.ts`
-2. `assignPlacementSchema` in `placement.schemas.ts`
+1. `placement.routes.js`
+2. `assignPlacementSchema` in `placement.schemas.js`
 3. `PlacementService.assign()`
 4. `evaluatePlacement()`
 5. `prismaPlacementRepository.assign()`
-6. PostgreSQL `jobs`
+6. MySQL `jobs`
 
 Detailed Flow:
 
@@ -210,11 +210,11 @@ Entry Point:
 
 Sequence:
 
-1. `backend/src/modules/resources/resource.routes.ts`
-2. `reserveResourcesSchema` in `resource.schemas.ts`
-3. `ResourceService.reserve()` in `resource.service.ts`
-4. `prismaResourceRepository.reserve()` in `resource.repository.ts`
-5. PostgreSQL transaction with `SELECT ... FOR UPDATE`
+1. `backend/src/modules/resources/resource.routes.js`
+2. `reserveResourcesSchema` in `resource.schemas.js`
+3. `ResourceService.reserve()` in `resource.service.js`
+4. `prismaResourceRepository.reserve()` in `resource.repository.js`
+5. MySQL transaction with `SELECT ... FOR UPDATE`
 6. `resource_allocations` and `workers`
 
 Detailed Flow:
@@ -229,7 +229,7 @@ Detailed Flow:
 8. Capacity and allocated counters are re-read inside the transaction; the earlier placement decision is not trusted.
 9. If `capacity - allocated` is short on CPU or memory, the transaction returns without writing and the route responds HTTP 409 `INSUFFICIENT_RESOURCES` with the observed free capacity.
 10. Otherwise a `RESERVED` allocation row is inserted, the worker counters are incremented, and the worker is set `BUSY`.
-11. A concurrent duplicate that slips past step 7 violates the partial unique index and is mapped to the same HTTP 409 `ALREADY_RESERVED`, leaving counters unchanged.
+11. A concurrent duplicate that slips past step 7 violates the functional unique index and is mapped to the same HTTP 409 `ALREADY_RESERVED`, leaving counters unchanged.
 12. On commit the route returns HTTP 201 with the allocation, the updated worker, and `lockWaitMs`.
 13. Any failure before commit rolls back the allocation row, the counter update, and the worker status together.
 14. Job status stays `SCHEDULED`; no container is started.
@@ -271,12 +271,12 @@ Entry Point:
 
 Sequence:
 
-1. `backend/src/modules/executions/execution.routes.ts`
-2. `startExecutionSchema` in `execution.schemas.ts`
-3. `ExecutionService.start()` in `execution.service.ts`
-4. `prismaExecutionRepository.claim()` in `execution.repository.ts`
-5. `DockerContainerRuntime.start()` in `execution.runtime.ts`
-6. `DockerEngineClient` in `docker.client.ts`, over the daemon socket
+1. `backend/src/modules/executions/execution.routes.js`
+2. `startExecutionSchema` in `execution.schemas.js`
+3. `ExecutionService.start()` in `execution.service.js`
+4. `prismaExecutionRepository.claim()` in `execution.repository.js`
+5. `DockerContainerRuntime.start()` in `execution.runtime.js`
+6. `DockerEngineClient` in `docker.client.js`, over the daemon socket
 7. `job_executions`, `jobs`, `resource_allocations`, and `workers`
 
 Detailed Flow:
@@ -335,9 +335,9 @@ Entry Point:
 
 Sequence:
 
-1. `backend/src/modules/monitoring/monitoring.routes.ts`
-2. `MonitoringService.overview()` in `monitoring.service.ts`
-3. `prismaMonitoringRepository.overview()` and `.workerActivity()` in `monitoring.repository.ts`
+1. `backend/src/modules/monitoring/monitoring.routes.js`
+2. `MonitoringService.overview()` in `monitoring.service.js`
+3. `prismaMonitoringRepository.overview()` and `.workerActivity()` in `monitoring.repository.js`
 4. `workers`, `jobs`, `job_executions`, `resource_allocations`, and `worker_samples`
 
 Detailed Flow:
@@ -356,7 +356,7 @@ Entry Point:
 `GET /api/monitoring/jobs?windowMinutes=<1..10080>`
 
 1. The window is validated and defaults to 60 minutes; zero, an unbounded value, or an unknown query key is rejected with HTTP 400.
-2. One raw SQL query normalises five stage durations into `(metric, seconds)` pairs and aggregates them once, so PostgreSQL computes the p95 rather than the process loading every row. Prisma cannot aggregate the difference between two columns, which is why this query is raw.
+2. One raw SQL query normalises five stage durations into `(metric, seconds)` pairs and aggregates them once, so MySQL computes the p95 rather than the process loading every row. Prisma cannot aggregate the difference between two columns, which is why this query is raw.
 3. Durations are anchored on jobs created inside the window. Negative durations are not filtered out, so a clock anomaly would surface rather than hide.
 4. Every one of the five stages is reported. A stage nothing has reached yet returns a zero count with null statistics, not an absent key.
 5. Completion counts are anchored on `completedAt` inside the window, because that is what a rate should measure. The window start is echoed so the denominator is never ambiguous.
@@ -365,10 +365,10 @@ Entry Point:
 ## Flow: Record a utilization sample
 
 Entry Points:
-The periodic sampler started by `server.ts`, or `POST /api/monitoring/sample`
+The periodic sampler started by `server.js`, or `POST /api/monitoring/sample`
 
 1. One `INSERT ... SELECT` writes one row per worker, all sharing a single `capturedAt`, copying each worker's capacity, reservations, and status plus its live execution and reservation counts.
-2. A unique index on `(workerId, capturedAt)` with `ON CONFLICT DO NOTHING` makes a repeated pass at the same instant a no-op instead of a double count.
+2. A unique index on `(workerId, capturedAt)` with `ON DUPLICATE KEY UPDATE` with a no-op assignment makes a repeated pass at the same instant a no-op instead of a double count.
 3. `CHECK` constraints reject any sample that contradicts real accounting: capacity must be positive, allocated must fall within capacity, and counts cannot be negative.
 4. Retention pruning then deletes samples older than the configured window, so history cannot grow without bound whether sampling is periodic or on demand. A retention of zero keeps everything.
 5. The periodic path skips a pass while one is already in flight, so a slow database cannot make passes pile up, and a failure is logged and skipped rather than propagated.
@@ -391,7 +391,7 @@ The browser is the normal control interface. It polls `GET /api/orchestrator/sta
 ## Flow: Generate a workload from the browser
 
 Entry Point:
-The **Generate Workload** button in `frontend/src/components/ControlPanel.tsx`
+The **Generate Workload** button in `frontend/src/components/ControlPanel.jsx`
 
 1. The UI collects an allowed count (10, 25, 50, or 100), arrival pattern, deterministic seed, and controlled profile.
 2. The browser maps the controls onto the existing `POST /api/workloads/generate` contract; it does not generate a job itself.
@@ -410,11 +410,11 @@ API Entry Point:
 Sequence:
 
 1. The browser sends only the scheduling policy, placement strategy, optional Round Robin quantum, and a bounded job count. It cannot choose a job id, worker id, CPU/memory amount, image, command, or container settings.
-2. `orchestrator.routes.ts` validates that request with strict Zod schemas and calls `OrchestratorService.run()`.
+2. `orchestrator.routes.js` validates that request with strict Zod schemas and calls `OrchestratorService.run()`.
 3. For each requested job, `runNext()` first looks for an earlier `SCHEDULED` job with no live execution. If one exists, it resumes it instead of leaving a half-advanced job stranded.
 4. Otherwise it calls the existing `SchedulerService.dispatch()` to select and claim one eligible queued job according to FCFS, SJF, Priority, or Round Robin. A job whose planned arrival is still future is not eligible.
 5. It calls the existing `PlacementService.assign()` with the chosen strategy. An insufficient worker returns a recorded `INSUFFICIENT_RESOURCES` stop; it is not treated as a frontend error.
-6. It calls the existing `ResourceService.reserve()`, which locks the selected worker row and rechecks capacity inside the PostgreSQL transaction before inserting the `RESERVED` allocation and incrementing the counters.
+6. It calls the existing `ResourceService.reserve()`, which locks the selected worker row and rechecks capacity inside the MySQL transaction before inserting the `RESERVED` allocation and incrementing the counters.
 7. It calls the existing `ExecutionService.start()`, which claims `SCHEDULED -> RUNNING`, starts the fixed Docker runner, and settles it asynchronously. Settlement writes the outcome and releases capacity in the same transaction.
 8. The facade returns one `StageOutcome` per stage, including `OK`, `SKIPPED`, or `FAILED`, with the actual backend detail and stable error code. The browser's activity log displays these facts directly.
 9. Auto mode repeats the bounded request every two seconds. It stops when the backend reports no eligible job or the cluster is currently full; React never assumes an action succeeded merely because a button was clicked.
