@@ -1,28 +1,30 @@
+import { Icon } from "./Icon.jsx";
+
 const COUNTS = [10, 25, 50, 100];
 const ARRIVALS = [
   {
     value: "IMMEDIATE",
-    label: "Immediate — all jobs eligible at once (Custom)",
+    label: "Immediate - all jobs ready at once",
   },
-  { value: "LIGHT", label: "Light — 20–40s apart" },
-  { value: "MEDIUM", label: "Medium — 8–16s apart" },
-  { value: "HEAVY", label: "Heavy — 2–6s apart" },
-  { value: "CONSTANT", label: "Constant — every 10s" },
-  { value: "BURST", label: "Burst — groups of 5, 30s apart" },
-  { value: "INCREASING", label: "Increasing — ramping up" },
-  { value: "DECREASING", label: "Decreasing — ramping down" },
-  { value: "PERIODIC", label: "Periodic — repeating profile" },
+  { value: "LIGHT", label: "Light - 20-40s apart" },
+  { value: "MEDIUM", label: "Medium - 8-16s apart" },
+  { value: "HEAVY", label: "Heavy - 2-6s apart" },
+  { value: "CONSTANT", label: "Constant - every 10s" },
+  { value: "BURST", label: "Burst - groups of 5, 30s apart" },
+  { value: "INCREASING", label: "Increasing - ramping up" },
+  { value: "DECREASING", label: "Decreasing - ramping down" },
+  { value: "PERIODIC", label: "Periodic - repeating profile" },
 ];
 const POLICIES = [
-  { value: "FCFS", label: "FCFS — first come, first served" },
-  { value: "SJF", label: "SJF — shortest job first" },
-  { value: "PRIORITY", label: "Priority — highest priority, with aging" },
-  { value: "ROUND_ROBIN", label: "Round Robin — rotate by quantum" },
+  { value: "FCFS", label: "FCFS - first come, first served" },
+  { value: "SJF", label: "SJF - shortest job first" },
+  { value: "PRIORITY", label: "Priority - highest priority, with aging" },
+  { value: "ROUND_ROBIN", label: "Round Robin - rotate by quantum" },
 ];
 const STRATEGIES = [
-  { value: "FIRST_FIT", label: "First Fit — first worker that fits" },
-  { value: "LEAST_LOADED", label: "Least Loaded — lowest current load" },
-  { value: "RESOURCE_AWARE", label: "Resource-Aware — best balanced fit" },
+  { value: "FIRST_FIT", label: "First Fit - first worker that fits" },
+  { value: "LEAST_LOADED", label: "Least Loaded - lowest current load" },
+  { value: "RESOURCE_AWARE", label: "Resource-Aware - best balanced fit" },
 ];
 export function ControlPanel(props) {
   const {
@@ -34,8 +36,6 @@ export function ControlPanel(props) {
     onStrategyChange,
     timeQuantumSeconds,
     onTimeQuantumChange,
-    batchSize,
-    onBatchSizeChange,
     autoRunning,
     busy,
   } = props;
@@ -51,16 +51,16 @@ export function ControlPanel(props) {
           type="button"
           className="btn btn-demo"
           onClick={props.onDemo}
-          disabled={disabled}
+          disabled={disabled || autoRunning}
         >
-          Demo Mode — generate 10 and run
+          <Icon name="play" />Demo Mode - generate 10 and run
         </button>
       </header>
 
       <div className="control-grid">
         {/* 1. Workload generator */}
         <fieldset className="control-block">
-          <legend>1 · Workload generator</legend>
+          <legend><span className="step-number">1</span>Workload generator</legend>
 
           <label htmlFor="job-count">Number of jobs</label>
           <select
@@ -97,74 +97,32 @@ export function ControlPanel(props) {
             ))}
           </select>
 
-          {form.arrival === "IMMEDIATE" ? (
-            <>
-              <label htmlFor="profile">Workload type</label>
-              <select
-                id="profile"
-                value={form.profile}
-                disabled={disabled}
-                onChange={(event) =>
-                  onFormChange({
-                    ...form,
-                    profile: event.target.value,
-                  })
-                }
-              >
-                <option value="SLEEP">Sleep — 4–10s each, easy to watch</option>
-                <option value="MIXED_COMPUTE">
-                  Mixed compute — CPU, matrix, sort, data
-                </option>
-              </select>
+          <label htmlFor="profile">Workload type</label>
+          <select
+            id="profile"
+            value={form.profile}
+            disabled={disabled}
+            onChange={(event) =>
+              onFormChange({
+                ...form,
+                profile: event.target.value,
+              })
+            }
+          >
+            <option value="SLEEP">Sleep - short pauses, easy to watch</option>
+            <option value="MIXED_COMPUTE">
+              Mixed compute - CPU, matrix, sort, data
+            </option>
+            <option value="CPU_INTENSIVE">CPU - bounded calculations</option>
+            <option value="SORTING">Sorting - small number arrays</option>
+            <option value="DATA_PROCESSING">Data - small record sets</option>
+            <option value="MATRIX_MULTIPLICATION">Matrix - small matrix products</option>
+          </select>
+          <p className="hint">Generated jobs use 64-256 MiB and short, bounded workloads. Resources are sized automatically.</p>
 
-              <div className="control-row">
-                <span>
-                  <label htmlFor="cpu">CPU per job (m)</label>
-                  <input
-                    id="cpu"
-                    type="number"
-                    min={100}
-                    max={6000}
-                    step={100}
-                    value={form.cpuMillicores}
-                    disabled={disabled}
-                    onChange={(event) =>
-                      onFormChange({
-                        ...form,
-                        cpuMillicores: Number(event.target.value),
-                      })
-                    }
-                  />
-                </span>
-                <span>
-                  <label htmlFor="mem">Memory per job (MiB)</label>
-                  <input
-                    id="mem"
-                    type="number"
-                    min={64}
-                    max={8192}
-                    step={64}
-                    value={form.memoryMiB}
-                    disabled={disabled}
-                    onChange={(event) =>
-                      onFormChange({
-                        ...form,
-                        memoryMiB: Number(event.target.value),
-                      })
-                    }
-                  />
-                </span>
-              </div>
-            </>
-          ) : (
-            <p className="hint">
-              This pattern spaces arrivals over time, so jobs become eligible
-              gradually. The queue shows how long each one still has to wait.
-            </p>
-          )}
-
-          <label htmlFor="seed">Deterministic seed</label>
-          <div className="control-row">
+          <details className="control-details">
+            <summary>Reproducibility</summary>
+            <label htmlFor="seed">Deterministic seed</label>
             <input
               id="seed"
               type="number"
@@ -176,23 +134,10 @@ export function ControlPanel(props) {
                 onFormChange({ ...form, seed: Number(event.target.value) })
               }
             />
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={disabled}
-              onClick={() =>
-                onFormChange({
-                  ...form,
-                  seed: Math.floor(Math.random() * 2_000_000),
-                })
-              }
-            >
-              Shuffle
-            </button>
-          </div>
-          <p className="hint">
-            The same seed always produces the same jobs and the same results.
-          </p>
+            <p className="hint">
+              The same seed and settings reproduce job specifications and workload checksums. Timing can vary.
+            </p>
+          </details>
 
           <button
             type="button"
@@ -200,14 +145,17 @@ export function ControlPanel(props) {
             onClick={props.onGenerate}
             disabled={disabled}
           >
+            <Icon name="plus" />
             {busy === "generate" ? "Generating…" : "Generate Workload"}
           </button>
         </fieldset>
 
         {/* 2 & 3. Scheduler and placement */}
         <fieldset className="control-block">
-          <legend>2 · Scheduling policy</legend>
+          <legend><span className="step-number">2</span>Scheduling policy</legend>
+          <label htmlFor="policy">Policy</label>
           <select
+            id="policy"
             aria-label="Scheduling policy"
             value={policy}
             disabled={disabled}
@@ -237,9 +185,10 @@ export function ControlPanel(props) {
             </>
           ) : null}
 
-          <legend className="legend-spaced">3 · Placement strategy</legend>
+          <p className="control-subtitle"><span className="step-number">3</span>Placement strategy</p>
+          <label htmlFor="strategy">Strategy</label>
           <select
-            aria-label="Placement strategy"
+            id="strategy"
             value={strategy}
             disabled={disabled}
             onChange={(event) => onStrategyChange(event.target.value)}
@@ -250,64 +199,50 @@ export function ControlPanel(props) {
               </option>
             ))}
           </select>
-          <p className="hint">
-            The backend applies both of these. Placement is advisory until
-            reservation commits the capacity in a transaction.
+          <p className="hint scheduling-note">
+            <Icon name="info" />
+            Choose how jobs are ordered and which worker receives each job.
+            The backend schedules and reserves capacity.
           </p>
         </fieldset>
 
         {/* 4. Execution */}
         <fieldset className="control-block">
-          <legend>4 · Run the orchestrator</legend>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={props.onRunNext}
-            disabled={disabled || autoRunning}
-          >
-            {busy === "run-next" ? "Running…" : "Run Next Job"}
-          </button>
-
-          <label htmlFor="batch">Jobs per batch</label>
-          <input
-            id="batch"
-            type="number"
-            min={1}
-            max={25}
-            value={batchSize}
-            disabled={disabled}
-            onChange={(event) => onBatchSizeChange(Number(event.target.value))}
-          />
-          <button
-            type="button"
-            className="btn"
-            onClick={props.onRunBatch}
-            disabled={disabled || autoRunning}
-          >
-            {busy === "run-batch" ? "Running…" : `Run ${batchSize} Now`}
-          </button>
+          <legend><span className="step-number">4</span>Run the orchestrator</legend>
 
           <button
             type="button"
             className={autoRunning ? "btn btn-stop" : "btn btn-primary"}
             onClick={props.onToggleAuto}
+            disabled={disabled}
           >
-            {autoRunning ? "Pause Orchestrator" : "Run Orchestrator (auto)"}
+            <Icon name={autoRunning ? "pause" : "play"} />
+            {autoRunning ? "Pause Orchestrator" : "Run Orchestrator"}
           </button>
           <p className="hint">
-            Auto keeps asking the backend for the next job until the queue
-            drains. Each decision is still made by the backend.
+            Runs eligible jobs until the queue drains. Pause stops new starts;
+            running jobs finish normally.
           </p>
-
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={props.onReset}
-            disabled={disabled || autoRunning}
-          >
-            {busy === "reset" ? "Clearing…" : "Clear finished jobs"}
+          <p className="hint">Three study workers: 512 MiB, 1 GiB, and 1.5 GiB. Combined logical memory budget: 3 GiB.</p>
+          <button type="button" className="btn btn-stop" onClick={props.onKillAll}
+            disabled={disabled}>
+            <Icon name="stop" />
+            {busy === "kill-all" ? "Stopping workloads…" : "Kill all workloads"}
           </button>
+          <p className="hint">Pauses auto-run, stops OrchestrOS containers, cancels pending jobs, and releases reservations.</p>
+          <details className="control-details">
+            <summary>Cleanup</summary>
+            <button type="button" className="btn btn-ghost" onClick={props.onClearGenerated}
+              disabled={disabled || autoRunning}>
+              {busy === "clear-generated" ? "Clearing…" : "Clear generated workload"}
+            </button>
+            <p className="hint">Removes generated jobs that have not started scheduling, including future arrivals.</p>
+            <button type="button" className="btn btn-ghost" onClick={props.onReset}
+              disabled={disabled || autoRunning}>
+              {busy === "reset" ? "Clearing…" : "Clear finished jobs"}
+            </button>
+            <p className="hint">Removes completed, failed, interrupted, and cancelled jobs. Pause the orchestrator before cleanup.</p>
+          </details>
         </fieldset>
       </div>
     </section>

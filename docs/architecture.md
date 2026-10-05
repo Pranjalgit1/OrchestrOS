@@ -100,9 +100,11 @@ The setup script creates these workers if they are missing:
 
 | Worker | CPU in millicores | Memory in MiB |
 | --- | ---: | ---: |
-| `worker-1` | 2000 | 2048 |
-| `worker-2` | 4000 | 4096 |
-| `worker-3` | 6000 | 8192 |
+| `worker-1` | 500 | 512 |
+| `worker-2` | 1000 | 1024 |
+| `worker-3` | 1500 | 1536 |
+
+These built-in budgets total 3 GiB. They are scheduling limits, not preallocated physical memory or separate machines. Container memory limits are ceilings; actual Windows/WSL memory use includes other applications and the Docker VM. The dashboard reports free memory on the backend host separately from reservations. Setup and backend startup apply the budgets to idle default workers automatically; active reservations are preserved. Recovery also applies them when old executions finish.
 
 New workers start `IDLE` with nothing reserved. A worker with a reservation becomes `BUSY`; it becomes `IDLE` again when its reserved CPU and memory reach zero. The model also supports `STARTING`, `ACTIVE`, `STOPPING`, and `FAILED`.
 
@@ -112,10 +114,13 @@ The generator supports batches of exactly 10, 25, 50, or 100 jobs. A seed is a n
 
 For the same generator version, seed, count, pattern, and custom settings, it produces the same job specifications and arrival offsets. New database IDs and default start times will still differ.
 
-The current generator version is `v1`. Tests pin its output, so a deliberate change to its choices should use a new version.
+The current generator version is `v2`. Tests pin its output, so a deliberate change to its choices should use a new version. Historical batches keep their saved version and specifications.
+
+All predefined profiles are small by design. Light uses 100-250m CPU, 64-128 MiB, and 2-6 second estimates; medium uses 250-500m, 96-192 MiB, and 4-8 seconds; heavy uses 500-1000m, 128-256 MiB, and 6-10 seconds. Heavy is relative to this study scale. Every job fits at least one built-in worker. Actual compute duration varies with hardware and container CPU limits.
 
 | Pattern | Meaning |
 | --- | --- |
+| `IMMEDIATE` | All jobs are eligible together, using the medium resource profile |
 | `LIGHT` | Small resource requests, with 20-40 second arrival gaps |
 | `MEDIUM` | Medium requests, with 8-16 second gaps |
 | `HEAVY` | Larger requests, with 2-6 second gaps |
@@ -128,7 +133,7 @@ The current generator version is `v1`. Tests pin its output, so a deliberate cha
 
 `SUDDEN_BURST` is accepted as another input name for `BURST`.
 
-Each job has a type, size, CPU request, memory request, duration estimate, priority, and arrival time. For standard patterns, size is based on the duration and CPU estimate. For sleep jobs, size is seconds. Custom batches use the requested size range.
+Each job has a type, size, CPU request, memory request, duration estimate, priority, and arrival time. The optional type selection applies to every predefined arrival pattern. Size is based on the duration and CPU estimate: seconds for sleep, iterations for CPU, elements for sorting, records for data, and dimension for matrix multiplication. Custom generation also enforces study limits, including a separate size ceiling for each selected type.
 
 The batch and all its jobs are saved together. Reusing a batch copies its saved job specifications instead of generating new choices.
 
@@ -228,8 +233,8 @@ A stage with no data has count 0. Success rate is `null` when there are no compl
 
 ## 11. What is unfinished
 
-Automatic scaling, crash recovery, runtime cancellation, actual Round Robin preemption, machine learning, and full experiment comparison are still planned. Closing the browser stops its auto-run requests, but already started work continues while the backend runs.
+Automatic scaling, worker-level failure recovery, individual runtime cancellation, actual Round Robin preemption, machine learning, and full experiment comparison are still planned. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
 
-If the backend crashes, a job can remain marked running and keep its reservation. The manual settle endpoint can record a finished or missing container; it is not a replacement for the planned automatic recovery process.
+After a backend crash, startup recovery and a 30-second reconciliation pass settle untracked exited/missing containers and resume tracking live executions against their original deadline. The manual settle endpoint remains available. Completion uses the Docker finish timestamp when available, so stale recovery does not inflate execution duration.
 
 Read [the job flow](flow.md) for the steps in order, or [the design choices](decision.md) for why these decisions were made.

@@ -193,8 +193,10 @@ The recorded migration check on 5 October 2026 passed all 130 tests with both fl
 | Prisma client is missing or out of date | Run `npm ci`, then `npm run prisma:generate` |
 | Docker unavailable | Open Docker Desktop and wait for the Linux engine to start |
 | Workload image missing | Run `npm run docker:images` |
-| Job stays queued | Check its planned arrival time, then use Run Next or auto mode |
+| Job stays queued | Check its planned arrival time, then use Run Orchestrator |
 | Job cannot get a worker | Its CPU/memory request may not fit; wait for capacity to return or use a smaller workload |
 | Paused auto mode but jobs still run | Pause stops new start requests; existing containers continue |
-| Job stays running after a backend crash | Automatic crash recovery is unfinished; inspect the execution and use the settle endpoint once its container has finished |
+| Job stays running after a backend crash | Restart the backend for automatic reconciliation, or use Kill all workloads to stop work and release reservations |
+| Worker rings show full capacity | Rings show CPU/memory reservations, not measured physical RAM; use Kill all workloads to stop jobs and release capacity. Small worker budgets are automatic |
+| Windows RAM remains high with no workloads | Check other applications and Docker/WSL memory separately; stopped workload reservations do not represent live RAM use |
 | Port already in use | Stop the other instance or choose a free published port and update the related connection settings |

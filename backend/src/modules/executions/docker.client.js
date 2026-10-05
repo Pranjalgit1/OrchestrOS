@@ -240,6 +240,11 @@ export class DockerEngineClient {
     }
     return created.Id;
   }
+  async listManagedContainers(label) {
+    const base = await this.prefix();
+    const filters = encodeURIComponent(JSON.stringify({ label: [`${label}=true`] }));
+    return this.call("GET", `${base}/containers/json?all=1&filters=${filters}`);
+  }
   async startContainer(containerId) {
     const base = await this.prefix();
     await this.call("POST", `${base}/containers/${containerId}/start`);
@@ -263,6 +268,7 @@ export class DockerEngineClient {
     );
     const state = payload?.State ?? {};
     return {
+      labels: payload?.Config?.Labels ?? {},
       status: state.Status ?? "unknown",
       exitCode: state.Running ? null : (state.ExitCode ?? null),
       oomKilled: state.OOMKilled === true,

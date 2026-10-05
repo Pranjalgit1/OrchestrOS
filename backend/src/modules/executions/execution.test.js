@@ -31,7 +31,93 @@ import {
   startExecutionSchema,
 } from "./execution.schemas.js";
 import { ExecutionService } from "./execution.service.js";
-import { buildContainerSpec } from "./execution.runtime.js";
+import { buildContainerSpec, DockerContainerRuntime } from "./execution.runtime.js";
+test("runtime stop refuses containers without the ownership label", async () => {
+  let stopped = false;
+  const runtime = new DockerContainerRuntime({
+    inspectContainer: async () => ({ status: "running", labels: {} }),
+    stopContainer: async () => { stopped = true; },
+  });
+  await assert.rejects(runtime.stopManaged("unrelated-container"), /not managed by OrchestrOS/);
+  assert.equal(stopped, false);
+});
+test("kill all waits for launches, rejects new starts, and keeps failed stops reserved", async () => {
+  const open = [makeExecution({ id: "stopped", containerId: "owned" }),
+    makeExecution({ id: "failed", containerId: "blocked" })];
+  const finalized = [];
+  const stopped = [];
+  const repository = {
+    findOpenExecutions: async () => open,
+    finalize: async (request) => {
+      finalized.push(request);
+      return { status: "FINALIZED", execution: { status: request.executionStatus },
+        job: { status: JobStatus.CANCELLED }, released: true };
+    },
+    cancelNonExecutingJobs: async () => ({ cancelledJobs: 2, releasedReservations: 1 }),
+  };
+  let finishLaunch;
+  const service = new ExecutionService(repository, {
+    listManaged: async () => [{ Id: "owned" }, { Id: "orphan" }],
+    stopManaged: async (id) => {
+      stopped.push(id);
+      if (id === "blocked") throw new Error("Cannot stop container");
+    },
+    remove: async () => {},
+  });
+  service.starting.add(new Promise((resolve) => { finishLaunch = resolve; }));
+  const stopping = service.killAll();
+  await assert.rejects(service.start("new-job"), { code: "WORKLOADS_STOPPING" });
+  assert.deepEqual(stopped, [], "do not take a snapshot until launches finish");
+  finishLaunch();
+  const result = await stopping;
+  assert.deepEqual(finalized.map((entry) => entry.executionId), ["stopped"]);
+  assert.equal(finalized[0].executionStatus, ExecutionStatus.CANCELLED);
+  assert.ok(stopped.includes("orphan"));
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.releasedReservations, 2);
+  assert.equal(service.stoppingAll, false);
+});
+
+test("restart recovery records an exited container using its actual finish time", async () => {
+  const execution = makeExecution({ status: ExecutionStatus.RUNNING, containerId: "a".repeat(64) });
+  const repository = new StubRepository(null, {
+    status: "FINALIZED", execution: makeExecution({ status: ExecutionStatus.COMPLETED }),
+    job: makeJob({ status: JobStatus.COMPLETED }), released: true,
+  }, execution);
+  repository.findOpenExecutions = async () => [execution];
+  const exit = makeExit({ stdout: runnerLine() });
+  const runtime = new StubRuntime({ exit });
+  const service = new ExecutionService(repository, runtime);
+  const recovered = await service.recover();
+  assert.deepEqual(recovered, { checked: 1, failures: [] });
+  assert.equal(repository.finalizations[0].executionStatus, ExecutionStatus.COMPLETED);
+  assert.equal(repository.finalizations[0].completedAt.toISOString(), exit.finishedAt);
+  assert.equal(runtime.removed.length, 1);
+});
+
+test("restart recovery uses the original deadline and does not duplicate tracking", async () => {
+  const execution = makeExecution({ status: ExecutionStatus.RUNNING,
+    containerId: "a".repeat(64), startedAt: new Date(Date.now() - 310_000) });
+  const repository = new StubRepository(null, {
+    status: "FINALIZED", execution: makeExecution({ status: ExecutionStatus.INTERRUPTED }),
+    job: makeJob({ status: JobStatus.INTERRUPTED }), released: true,
+  }, execution);
+  repository.findOpenExecutions = async () => [execution];
+  const runtime = new StubRuntime({ running: true });
+  let finishWait;
+  const timeouts = [];
+  runtime.waitForExit = async (_id, timeout) => {
+    timeouts.push(timeout);
+    return new Promise((resolve) => { finishWait = resolve; });
+  };
+  const service = new ExecutionService(repository, runtime, 300);
+  await service.recover();
+  await service.recover();
+  assert.deepEqual(timeouts, [1], "an overdue container is stopped immediately");
+  finishWait({ timedOut: true });
+  await service.awaitPendingSettlements();
+  assert.equal(repository.finalizations[0].executionStatus, ExecutionStatus.INTERRUPTED);
+});
 const now = new Date("2026-09-22T12:00:00.000Z");
 function makeWorker(overrides = {}) {
   return {

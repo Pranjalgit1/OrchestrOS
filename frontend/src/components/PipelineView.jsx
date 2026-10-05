@@ -1,3 +1,5 @@
+import { Icon } from "./Icon.jsx";
+
 const STAGES = [
   { stage: "QUEUE", label: "Job Queue", note: "Persisted in MySQL" },
   { stage: "SCHEDULER", label: "Scheduler", note: "Which job runs next" },
@@ -27,7 +29,7 @@ const STAGES = [
 export function PipelineView({ stageCounts, selected }) {
   const activeStage = selected?.stage ?? null;
   return (
-    <section className="panel" aria-label="Pipeline">
+    <section id="pipeline" className="panel pipeline-panel" aria-label="Pipeline">
       <header className="panel-head">
         <div>
           <p className="eyebrow">Pipeline</p>
@@ -36,7 +38,7 @@ export function PipelineView({ stageCounts, selected }) {
         {selected ? (
           <p className="hint hint-inline">
             Highlighting <strong>{selected.name}</strong>
-            {selected.stage === "TERMINATED" ? " — ended early" : ""}
+            {selected.stage === "TERMINATED" ? " - ended early" : ""}
           </p>
         ) : (
           <p className="hint hint-inline">Select a job below to trace it.</p>
@@ -62,8 +64,8 @@ export function PipelineView({ stageCounts, selected }) {
       </ol>
 
       {stageCounts.TERMINATED > 0 ? (
-        <p className="hint">
-          {stageCounts.TERMINATED} job(s) ended as failed, interrupted, or
+        <p className="pipeline-warning">
+          <Icon name="info" />{stageCounts.TERMINATED} job(s) ended as failed, interrupted, or
           cancelled.
         </p>
       ) : null}

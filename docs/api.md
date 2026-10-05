@@ -11,9 +11,11 @@ Send JSON with `Content-Type: application/json` for requests that have a body. R
 | Method | Path | What it does |
 | --- | --- | --- |
 | POST | `/workloads/generate` | Create a batch of queued jobs |
+| POST | `/workloads/clear-generated` | Remove generated jobs that have never been scheduled |
 | POST | `/orchestrator/run` | Advance jobs through scheduling, placement, reservation, and execution |
 | GET | `/orchestrator/state` | Read jobs, workers, and their current stages |
 | POST | `/orchestrator/clear-finished` | Remove finished job records and their related execution/allocation records |
+| POST | `/orchestrator/kill-all` | Stop labeled OrchestrOS containers, cancel pending jobs, and release reservations; inspect `failures` for incomplete cleanup |
 
 Example run request:
 
@@ -83,9 +85,14 @@ Worker names allow letters, numbers, hyphens, and underscores, start with a lett
 
 ## 3. Workload batches
 
+Generator `v2` always creates study-sized jobs: 100-1000m CPU, 64-256 MiB, and duration estimates of 2-10 seconds for predefined patterns. There is no `lightweight` flag or worker preset endpoint. Default worker budgets are applied automatically during setup and backend startup when workers are idle.
+
+Use optional `workloadTypes`, such as `["SORTING"]`, with any predefined pattern. Omitting it samples all five types. `IMMEDIATE` makes all jobs eligible at once; it is stored under the existing `CUSTOM` enum with `parameters.arrivalPattern: "IMMEDIATE"`. Each compute type gets its own derived work size.
+
 | Method | Path | What it does |
 | --- | --- | --- |
 | POST | `/workloads/generate` | Generate and save a batch and its jobs together |
+| POST | `/workloads/clear-generated` | Clear unstarted generated jobs, including future arrivals; returns `{ "deletedJobs": 10 }` |
 | GET | `/workloads/:id` | Read a batch and its jobs in sequence |
 | POST | `/workloads/:id/reuse` | Copy saved specifications into a new batch |
 
@@ -122,9 +129,9 @@ A custom request includes all these fields:
 }
 ```
 
-Each range uses `min` and `max`, with `min <= max`, within the job limits above. Arrival offsets are integers from 0-86,400. There must be one offset per job, and they must be in nondecreasing order. `custom` is required only for `CUSTOM` and rejected for other patterns.
+Each range uses `min` and `max`, with `min <= max`. Custom generation accepts CPU 100-1000m, memory 64-256 MiB, estimated duration 1-10 seconds, and priority 1-10. Maximum size is type-specific: CPU 2,000,000 iterations; sorting 1,200,000 numbers; data 20,000 records; matrix dimension 271; sleep 10 seconds. A shared size must fit every selected type. Arrival offsets are integers from 0-86,400. There must be one offset per job, and they must be in nondecreasing order. `custom` is required only for `CUSTOM` and rejected for other patterns; put types inside `custom` for this mode.
 
-A reuse request can be `{}` or contain only `startAt`. It copies stored specifications, not the source jobs' current states or results.
+A reuse request can be `{}` or contain only `startAt`. It copies stored specifications and generator version, not the source jobs' current states or results. Historical `v1` batches retain their original resources; generate a new batch to use the study profiles.
 
 ## 4. Individual scheduling and placement steps
 

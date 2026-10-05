@@ -61,43 +61,15 @@ const MIXED_COMPUTE_TYPES = [
   "SORTING",
   "DATA_PROCESSING",
 ];
-/**
- * Builds the existing generate request from form values.
- *
- * The generator itself stays in the backend; this only fills in the request the
- * API already accepts. `IMMEDIATE` is the CUSTOM pattern with every arrival
- * offset set to zero, so nothing has to wait before it is eligible.
- */
+/** The backend owns resource profiles and derives work units for each type. */
 export function generateWorkload(request) {
-  if (request.arrival !== "IMMEDIATE") {
-    return postJson("/api/workloads/generate", {
-      seed: request.seed,
-      count: request.count,
-      pattern: request.arrival,
-    });
-  }
-  const sleeping = request.profile === "SLEEP";
   return postJson("/api/workloads/generate", {
     seed: request.seed,
     count: request.count,
-    pattern: "CUSTOM",
-    custom: {
-      workloadTypes: sleeping ? ["SLEEP"] : MIXED_COMPUTE_TYPES,
-      // For SLEEP the runner reads size as seconds; for compute types it is work units.
-      workloadSize: sleeping
-        ? { min: 4, max: 10 }
-        : { min: 150_000, max: 300_000 },
-      cpuRequiredMillicores: {
-        min: request.cpuMillicores,
-        max: request.cpuMillicores,
-      },
-      memoryRequiredMiB: { min: request.memoryMiB, max: request.memoryMiB },
-      estimatedDurationSeconds: sleeping
-        ? { min: 4, max: 10 }
-        : { min: 3, max: 8 },
-      priority: { min: 1, max: 10 },
-      arrivalOffsetsSeconds: Array.from({ length: request.count }, () => 0),
-    },
+    pattern: request.arrival,
+    workloadTypes: request.profile === "MIXED_COMPUTE"
+      ? MIXED_COMPUTE_TYPES
+      : [request.profile],
   });
 }
 /* Individual pipeline stages, kept available for step-by-step demonstration. */
@@ -127,4 +99,10 @@ export function cancelJob(jobId) {
 }
 export function clearFinishedJobs() {
   return postJson("/api/orchestrator/clear-finished", {});
+}
+export function clearGeneratedWorkload() {
+  return postJson("/api/workloads/clear-generated", {});
+}
+export function killAllWorkloads() {
+  return postJson("/api/orchestrator/kill-all", {});
 }

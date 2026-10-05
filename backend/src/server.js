@@ -3,6 +3,19 @@ import { env } from "./config/env.js";
 import { prisma } from "./lib/prisma.js";
 import { executionService } from "./modules/executions/execution.service.js";
 import { monitoringSampler } from "./modules/monitoring/monitoring.sampler.js";
+import { ensureStudyWorkers } from "./modules/workers/worker.defaults.js";
+// Reconcile containers before accepting new start requests after a restart.
+try {
+  const recovery = await executionService.recover();
+  if (recovery.checked) console.log("Execution recovery:", recovery);
+} catch (error) {
+  console.error("Execution recovery failed:", error.message);
+}
+try {
+  await ensureStudyWorkers(prisma);
+} catch (error) {
+  console.error("Study worker setup failed:", error.message);
+}
 const server = app.listen(env.PORT, env.HOST, () => {
   console.log(`OrchestrOS backend listening on http://${env.HOST}:${env.PORT}`);
 });
@@ -19,11 +32,27 @@ if (monitoringSampler.enabled) {
   );
 }
 let shuttingDown = false;
+let recovering = false;
+const recoveryTimer = setInterval(async () => {
+  if (recovering || shuttingDown) return;
+  recovering = true;
+  try {
+    const recovery = await executionService.recover();
+    if (recovery.failures.length) console.error("Execution recovery:", recovery.failures);
+    await ensureStudyWorkers(prisma);
+  } catch (error) {
+    console.error("Execution recovery failed:", error.message);
+  } finally {
+    recovering = false;
+  }
+}, 30_000);
+recoveryTimer.unref();
 async function shutdown(signal) {
   if (shuttingDown) {
     return;
   }
   shuttingDown = true;
+  clearInterval(recoveryTimer);
   console.log(`${signal} received; shutting down OrchestrOS backend`);
   monitoringSampler.stop();
   server.close(async (error) => {

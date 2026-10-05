@@ -32,7 +32,7 @@ Published ports bind to the local computer by default. Database and Docker healt
 
 ## 5. Create missing workers without resetting existing ones
 
-The seed script looks up workers by name. It creates `worker-1`, `worker-2`, and `worker-3` if they are missing and leaves existing records unchanged.
+The seed script looks up workers by name. It creates `worker-1`, `worker-2`, and `worker-3` if missing and applies built-in study budgets of 512/1024/1536 MiB to idle defaults. Row locks protect active reservations from capacity changes. Backend startup and periodic recovery use the same setup helper.
 
 This allows setup to run again without resetting a worker's status or reservation counters.
 
@@ -106,7 +106,7 @@ Claiming locks the job record so two start requests do not launch the same job t
 
 A time limit produces `INTERRUPTED`. A bad exit or invalid result produces `FAILED`. A missing container produces an explicit failure. None of these paths invents a successful result.
 
-Manual settle exists for finished work that was not recorded correctly after an interruption. Automatic recovery still needs to be built.
+Manual settle exists for finished work that was not recorded correctly after an interruption. Startup and periodic reconciliation now recover untracked open executions; the Kill all workloads action handles explicit cancellation and orphan container cleanup.
 
 ## 14. Calculate current metrics from the actual records
 

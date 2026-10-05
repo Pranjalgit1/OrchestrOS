@@ -1,0 +1,76 @@
+/* Palette from the supplied console reference; status colors retain their meaning. */
+:root {
+  color-scheme: dark;
+  --page: #0f1117;
+  --surface: #161b27;
+  --surface-subtle: #0f1117;
+  --surface-hover: #202633;
+  --text: #f1f5f9;
+  --muted: #94a3b8;
+  --quiet: #8290a8;
+  --border: #242b39;
+  --accent: #6366f1;
+  --action: #6062ec;
+  --accent-text: #a5b4fc;
+  --accent-hover: #595ce1;
+  --accent-soft: #202d49;
+  --on-accent: #ffffff;
+  --success: #4ade80;
+  --success-soft: #123d27;
+  --warning: #fbbf24;
+  --warning-soft: #302514;
+  --danger: #fb7185;
+  --danger-soft: #351a25;
+  --chart-secondary: #06b6d4;
+  --shadow: none;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page: #f4f5f9;
+  --surface: #ffffff;
+  --surface-subtle: #f5f6fa;
+  --surface-hover: #e9ecf4;
+  --text: #192235;
+  --muted: #53627a;
+  --quiet: #53627a;
+  --border: #dbe0eb;
+  --accent: #5154d8;
+  --action: #5154d8;
+  --accent-text: #4649b9;
+  --accent-hover: #4245c4;
+  --accent-soft: #eceeff;
+  --success: #176b3d;
+  --success-soft: #e3f4e9;
+  --warning: #805408;
+  --warning-soft: #fff3d6;
+  --danger: #b62a43;
+  --danger-soft: #fce8ed;
+  --chart-secondary: #08758c;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    color-scheme: light;
+    --page: #f4f5f9;
+    --surface: #ffffff;
+    --surface-subtle: #f5f6fa;
+    --surface-hover: #e9ecf4;
+    --text: #192235;
+    --muted: #53627a;
+    --quiet: #53627a;
+    --border: #dbe0eb;
+    --accent: #5154d8;
+    --action: #5154d8;
+    --accent-text: #4649b9;
+    --accent-hover: #4245c4;
+    --accent-soft: #eceeff;
+    --success: #176b3d;
+    --success-soft: #e3f4e9;
+    --warning: #805408;
+    --warning-soft: #fff3d6;
+    --danger: #b62a43;
+    --danger-soft: #fce8ed;
+    --chart-secondary: #08758c;
+  }
+}

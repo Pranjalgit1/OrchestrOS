@@ -1,5 +1,6 @@
 import { JobStatus } from "@prisma/client";
-import { AppError } from "../../errors/app-error.js";
+import { freemem, totalmem } from "node:os";
+import { AppError, ConflictError } from "../../errors/app-error.js";
 import { executionService } from "../executions/execution.service.js";
 import { placementService } from "../placement/placement.service.js";
 import { resourceService } from "../resources/resource.service.js";
@@ -32,6 +33,8 @@ export class OrchestratorService {
   resources;
   executions;
   clock;
+  stopping = false;
+  activeRuns = new Set();
   constructor(
     repository = prismaOrchestratorRepository,
     scheduler = schedulerService,
@@ -55,10 +58,21 @@ export class OrchestratorService {
    * means the next job waits for a running one to release its capacity.
    */
   async run(input) {
+    if (this.stopping) throw new ConflictError("Workloads are being stopped", "WORKLOADS_STOPPING");
+    const request = this.runBatch(input);
+    this.activeRuns.add(request);
+    try {
+      return await request;
+    } finally {
+      this.activeRuns.delete(request);
+    }
+  }
+  async runBatch(input) {
     const steps = [];
     let startedCount = 0;
     let stoppedBecause = null;
     for (let index = 0; index < input.maxJobs; index += 1) {
+      if (this.stopping) { stoppedBecause = "WORKLOADS_STOPPING"; break; }
       const step = await this.runNext(input);
       steps.push(step);
       if (step.execution) {
@@ -277,6 +291,16 @@ export class OrchestratorService {
   clearFinished() {
     return this.repository.deleteFinishedJobs();
   }
+  async killAll() {
+    if (this.stopping) throw new ConflictError("Workloads are already being stopped", "WORKLOADS_STOPPING");
+    this.stopping = true;
+    try {
+      await Promise.allSettled([...this.activeRuns]);
+      return await this.executions.killAll();
+    } finally {
+      this.stopping = false;
+    }
+  }
   /** One read that gives the dashboard everything it needs to render. */
   async state(query) {
     const now = this.clock();
@@ -384,6 +408,11 @@ export class OrchestratorService {
     });
     return {
       capturedAt: now.toISOString(),
+      hostMemory: {
+        totalMiB: Math.round(totalmem() / 1024 / 1024),
+        freeMiB: Math.round(freemem() / 1024 / 1024),
+        workerBudgetMiB: workers.reduce((sum, worker) => sum + worker.memoryCapacityMiB, 0),
+      },
       jobs,
       workers: workers.map((entry) => ({
         id: entry.id,

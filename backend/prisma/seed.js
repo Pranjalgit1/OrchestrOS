@@ -1,37 +1,12 @@
-import { PrismaClient, WorkerStatus } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
+import { ensureStudyWorkers, STUDY_WORKERS } from "../src/modules/workers/worker.defaults.js";
 const prisma = new PrismaClient();
-const initialWorkers = [
-  {
-    name: "worker-1",
-    cpuCapacityMillicores: 2_000,
-    memoryCapacityMiB: 2_048,
-  },
-  {
-    name: "worker-2",
-    cpuCapacityMillicores: 4_000,
-    memoryCapacityMiB: 4_096,
-  },
-  {
-    name: "worker-3",
-    cpuCapacityMillicores: 6_000,
-    memoryCapacityMiB: 8_192,
-  },
-];
 export async function seedInitialWorkers() {
-  for (const worker of initialWorkers) {
-    await prisma.worker.upsert({
-      where: { name: worker.name },
-      update: {},
-      create: {
-        ...worker,
-        status: WorkerStatus.IDLE,
-      },
-    });
-  }
+  await ensureStudyWorkers(prisma);
 }
 async function main() {
   await seedInitialWorkers();
-  console.log(`Ensured ${initialWorkers.length} initial logical workers exist`);
+  console.log(`Ensured ${STUDY_WORKERS.length} study workers use the built-in budgets when idle`);
 }
 main()
   .catch((error) => {

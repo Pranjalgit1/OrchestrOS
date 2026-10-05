@@ -4,6 +4,29 @@ const jobsBySequence = {
   orderBy: { batchSequence: "asc" },
 };
 export const prismaWorkloadRepository = {
+  async deleteGeneratedJobs() {
+    return prisma.$transaction(async (transaction) => {
+      // Keep the eligibility checks in the DELETE itself: the scheduler may
+      // claim a queued job while this request is in flight.
+      const jobs = await transaction.job.deleteMany({
+        where: {
+          workloadBatchId: { not: null },
+          status: JobStatus.QUEUED,
+          scheduledAt: null,
+          schedulingRounds: 0,
+          assignedWorkerId: null,
+          containerId: null,
+          allocations: { none: {} },
+          executions: { none: {} },
+        },
+      });
+      // Preserve batches referenced by reused workloads.
+      await transaction.workloadBatch.deleteMany({
+        where: { jobs: { none: {} }, reusedBatches: { none: {} } },
+      });
+      return { deletedJobs: jobs.count };
+    });
+  },
   createBatch(input) {
     return prisma.$transaction(async (transaction) => {
       const batch = await transaction.workloadBatch.create({

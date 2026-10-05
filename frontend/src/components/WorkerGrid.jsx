@@ -1,85 +1,56 @@
-function percent(value) {
-  return `${Math.round(value * 1000) / 10}%`;
-}
-/**
- * Logical workers with their committed capacity.
- *
- * The numbers are the workers' own counters, which only transactional
- * reservation and release ever change.
- */
-export function WorkerGrid({ workers, onSelectJob }) {
+import { CapacityGauge } from "./CapacityGauge.jsx";
+
+/** Worker counters reflect capacity committed by transactional reservations. */
+export function WorkerGrid({ workers, hostMemory, onSelectJob }) {
   return (
-    <section className="panel" aria-label="Workers">
+    <section className="panel worker-panel" aria-label="Workers">
       <header className="panel-head">
         <div>
           <p className="eyebrow">Logical workers</p>
           <h2>Capacity and running containers</h2>
         </div>
       </header>
-
+      <p className="hint worker-explanation">
+        Workers are scheduling slots on the same computer. Rings show reserved
+        limits, not actual RAM usage. Jobs run in Docker containers.
+      </p>
+      {hostMemory ? (
+        <p className="host-memory mono">
+          Backend host: {(hostMemory.totalMiB / 1024).toFixed(1)} GiB RAM,
+          {" "}{(hostMemory.freeMiB / 1024).toFixed(1)} GiB free
+          {" · "}Worker budget: {(hostMemory.workerBudgetMiB / 1024).toFixed(1)} GiB
+        </p>
+      ) : null}
       <div className="worker-grid">
         {workers.map((worker) => (
           <article key={worker.id} className="worker-card">
             <header>
-              <strong>{worker.name}</strong>
+              <strong className="mono">{worker.name}</strong>
               <span className={`badge badge-${worker.status.toLowerCase()}`}>
                 {worker.status}
               </span>
             </header>
-
-            <div className="worker-meter">
-              <div className="meter-head">
-                <span>CPU</span>
-                <strong>{percent(worker.cpuUtilization)}</strong>
+            <CapacityGauge cpu={worker.cpuUtilization} memory={worker.memoryUtilization}
+              label={`${worker.name} capacity`} caption={worker.status === "IDLE" ? "idle" : "reserved"} />
+            <dl className="capacity-legend">
+              <div>
+                <dt><span className="metric-dot cpu-dot" />CPU reserved</dt>
+                <dd>{worker.cpuAllocatedMillicores} / {worker.cpuCapacityMillicores} m</dd>
               </div>
-              <div className="meter-track">
-                <div
-                  className="meter-fill"
-                  style={{
-                    width: `${Math.min(100, worker.cpuUtilization * 100)}%`,
-                  }}
-                />
+              <div>
+                <dt><span className="metric-dot memory-dot" />Memory reserved</dt>
+                <dd>{worker.memoryAllocatedMiB} / {worker.memoryCapacityMiB} MiB</dd>
               </div>
-              <small>
-                {worker.cpuAllocatedMillicores} / {worker.cpuCapacityMillicores}{" "}
-                m
-              </small>
-            </div>
-
-            <div className="worker-meter">
-              <div className="meter-head">
-                <span>Memory</span>
-                <strong>{percent(worker.memoryUtilization)}</strong>
-              </div>
-              <div className="meter-track">
-                <div
-                  className="meter-fill"
-                  style={{
-                    width: `${Math.min(100, worker.memoryUtilization * 100)}%`,
-                  }}
-                />
-              </div>
-              <small>
-                {worker.memoryAllocatedMiB} / {worker.memoryCapacityMiB} MiB
-              </small>
-            </div>
-
+            </dl>
             <div className="worker-running">
               {worker.runningJobs.length === 0 ? (
                 <small className="muted">No container running</small>
-              ) : (
-                worker.runningJobs.map((job) => (
-                  <button
-                    key={job.jobId}
-                    type="button"
-                    className="chip chip-live"
-                    onClick={() => onSelectJob(job.jobId)}
-                  >
-                    {job.jobName}
-                    {job.containerShortId ? ` · ${job.containerShortId}` : ""}
-                  </button>
-                ))
-              )}
+              ) : worker.runningJobs.map((job) => (
+                <button key={job.jobId} type="button" className="chip chip-live"
+                  onClick={() => onSelectJob(job.jobId)}>
+                  {job.jobName}{job.containerShortId ? ` · ${job.containerShortId}` : ""}
+                </button>
+              ))}
             </div>
           </article>
         ))}

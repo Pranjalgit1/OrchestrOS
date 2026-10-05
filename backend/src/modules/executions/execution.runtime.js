@@ -6,7 +6,7 @@ import {
   buildRunnerEnvironment,
   containerNameFor,
 } from "./execution.contract.js";
-import { DockerEngineClient, DockerTimeoutError } from "./docker.client.js";
+import { DockerApiError, DockerEngineClient, DockerTimeoutError } from "./docker.client.js";
 /**
  * Builds the container specification.
  *
@@ -89,7 +89,27 @@ export class DockerContainerRuntime {
   }
   async isRunning(containerId) {
     const state = await this.client.inspectContainer(containerId);
-    return state.status === "running" || state.status === "created";
+    return ["running", "created", "paused", "restarting"].includes(state.status);
+  }
+  listManaged() {
+    return this.client.listManagedContainers(CONTAINER_LABEL_MANAGED);
+  }
+  async stopManaged(containerId) {
+    let state;
+    try {
+      state = await this.client.inspectContainer(containerId);
+    } catch (error) {
+      if (error instanceof DockerApiError && error.statusCode === 404) return;
+      throw error;
+    }
+    if (state.labels[CONTAINER_LABEL_MANAGED] !== "true") {
+      throw new Error("Refusing to stop a container not managed by OrchestrOS");
+    }
+    await this.client.stopContainer(containerId, 0);
+    if (await this.isRunning(containerId).catch((error) => {
+      if (error instanceof DockerApiError && error.statusCode === 404) return false;
+      throw error;
+    })) throw new Error("Docker container is still active after stop");
   }
   async waitForExit(containerId, timeoutMs) {
     try {

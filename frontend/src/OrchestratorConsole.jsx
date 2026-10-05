@@ -3,8 +3,10 @@ import {
   assignPlacement,
   cancelJob,
   clearFinishedJobs,
+  clearGeneratedWorkload,
   fetchOrchestratorState,
   generateWorkload,
+  killAllWorkloads,
   releaseResources,
   reserveResources,
   runOrchestrator,
@@ -16,7 +18,7 @@ import { JobDetail } from "./components/JobDetail.jsx";
 import { JobQueue } from "./components/JobQueue.jsx";
 import { PipelineView } from "./components/PipelineView.jsx";
 import { WorkerGrid } from "./components/WorkerGrid.jsx";
-const POLL_MS = 1_500;
+const POLL_MS = 3_000;
 const AUTO_TICK_MS = 2_000;
 /** Codes that mean "nothing to do right now" rather than a real problem. */
 const BENIGN_STOPS = new Set(["NOTHING_ELIGIBLE", "INSUFFICIENT_RESOURCES"]);
@@ -25,8 +27,6 @@ const DEFAULT_FORM = {
   arrival: "IMMEDIATE",
   seed: 42,
   profile: "SLEEP",
-  cpuMillicores: 800,
-  memoryMiB: 256,
 };
 export function OrchestratorConsole() {
   const [state, setState] = useState(null);
@@ -36,7 +36,6 @@ export function OrchestratorConsole() {
   const [policy, setPolicy] = useState("FCFS");
   const [strategy, setStrategy] = useState("LEAST_LOADED");
   const [timeQuantumSeconds, setTimeQuantumSeconds] = useState(10);
-  const [batchSize, setBatchSize] = useState(5);
   const [autoRunning, setAutoRunning] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [filter, setFilter] = useState("ALL");
@@ -44,8 +43,8 @@ export function OrchestratorConsole() {
   const mounted = useRef(true);
   const logId = useRef(0);
   // Kept in a ref so the auto-run timer always sees the current selections.
-  const settings = useRef({ policy, strategy, timeQuantumSeconds, batchSize });
-  settings.current = { policy, strategy, timeQuantumSeconds, batchSize };
+  const settings = useRef({ policy, strategy, timeQuantumSeconds });
+  settings.current = { policy, strategy, timeQuantumSeconds };
   const log = useCallback((kind, label, detail) => {
     logId.current += 1;
     const entry = {
@@ -97,7 +96,7 @@ export function OrchestratorConsole() {
             stage.status === "FAILED" ? "error" : "stage",
             `${step.jobName} · ${stage.stage}`,
             stage.status === "SKIPPED"
-              ? `skipped — ${stage.detail}`
+              ? `skipped - ${stage.detail}`
               : stage.detail,
           );
         }
@@ -131,16 +130,39 @@ export function OrchestratorConsole() {
       log(
         "info",
         "Workload generated",
-        `${batch.jobCount} jobs · pattern ${batch.pattern} · seed ${batch.seed}`,
+        `${batch.jobCount} jobs · pattern ${batch.parameters.arrivalPattern ?? batch.pattern} · seed ${batch.seed}`,
       );
     });
+  const onClearGenerated = () =>
+    act("clear-generated", "Clear generated workload", async () => {
+      const result = await clearGeneratedWorkload();
+      log(
+        "info",
+        "Cleared generated workload",
+        `${result.deletedJobs} unstarted generated job(s) removed`,
+      );
+      setSelectedJobId(null);
+    });
+  const onKillAll = () => {
+    setAutoRunning(false);
+    return act("kill-all", "Kill all workloads", async () => {
+      const result = await killAllWorkloads();
+      log(result.failures.length ? "error" : "info", "Kill all workloads",
+        `${result.stoppedContainers} container(s) removed; ${result.cancelledExecutions} execution(s) and ${result.cancelledJobs} queued/scheduled job(s) cancelled; ${result.releasedReservations} reservation(s) released`);
+      if (result.failures.length) {
+        throw new Error(result.failures.map((failure) => failure.message).join("; "));
+      }
+      setSelectedJobId(null);
+    });
+  };
   const runOnce = useCallback(
-    async (maxJobs) => {
+    async () => {
       const current = settings.current;
       const result = await runOrchestrator({
         policy: current.policy,
         strategy: current.strategy,
-        maxJobs,
+        // One start per tick keeps study runs easy to follow and limits bursts.
+        maxJobs: 1,
         ...(current.policy === "ROUND_ROBIN"
           ? { timeQuantumSeconds: current.timeQuantumSeconds }
           : {}),
@@ -150,18 +172,16 @@ export function OrchestratorConsole() {
     },
     [logRun],
   );
-  const onRunNext = () =>
-    act("run-next", "Run next", async () => void (await runOnce(1)));
-  const onRunBatch = () =>
-    act("run-batch", "Run batch", async () => void (await runOnce(batchSize)));
   // Auto-run: React only decides to keep asking; the backend decides what happens.
   useEffect(() => {
     if (!autoRunning) return;
     let cancelled = false;
+    let inFlight = false;
     const tick = async () => {
-      if (cancelled) return;
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
-        const result = await runOnce(settings.current.batchSize);
+        const result = await runOnce();
         if (cancelled || !mounted.current) return;
         await refresh();
         const snapshot = await fetchOrchestratorState();
@@ -185,6 +205,8 @@ export function OrchestratorConsole() {
         const message =
           reason instanceof Error ? reason.message : String(reason);
         log("error", "Auto run stopped", message);
+      } finally {
+        inFlight = false;
       }
     };
     void tick();
@@ -230,13 +252,11 @@ export function OrchestratorConsole() {
         onStrategyChange={setStrategy}
         timeQuantumSeconds={timeQuantumSeconds}
         onTimeQuantumChange={setTimeQuantumSeconds}
-        batchSize={batchSize}
-        onBatchSizeChange={setBatchSize}
         autoRunning={autoRunning}
         busy={busy}
         onGenerate={onGenerate}
-        onRunNext={onRunNext}
-        onRunBatch={onRunBatch}
+        onKillAll={onKillAll}
+        onClearGenerated={onClearGenerated}
         onToggleAuto={() => setAutoRunning((value) => !value)}
         onReset={onReset}
         onDemo={onDemo}
@@ -246,7 +266,7 @@ export function OrchestratorConsole() {
 
       {autoRunning ? (
         <p className="running-banner">
-          Orchestrator is running automatically — asking the backend for the
+          Orchestrator is running automatically - asking the backend for the
           next job every {AUTO_TICK_MS / 1000}s.
         </p>
       ) : null}
@@ -258,6 +278,7 @@ export function OrchestratorConsole() {
           <div className="split">
             <WorkerGrid
               workers={state.workers}
+              hostMemory={state.hostMemory}
               onSelectJob={setSelectedJobId}
             />
             <JobDetail

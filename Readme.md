@@ -37,12 +37,12 @@ For a new computer, the all-Docker option, environment settings, and common prob
 2. Choose **Immediate** arrival so all jobs can start now.
 3. Choose **Sleep**, which is easy to watch because each job takes a few seconds.
 4. Choose a scheduling policy and a placement strategy.
-5. Click **Demo Mode**, or use **Generate Workload** followed by **Run Orchestrator (auto)**.
+5. Click **Demo Mode**, or use **Generate Workload** followed by **Run Orchestrator**.
 6. Watch jobs move through the pipeline and workers become busy.
 7. Click a job to see its worker, reserved resources, container, and result.
-8. Use **Clear finished jobs** to remove finished demo records. Queued and running jobs remain.
+8. Expand **Cleanup** and use **Clear finished jobs** to remove finished demo records. Use **Kill all workloads** to stop active work and cancel pending jobs.
 
-Pause in auto mode stops the browser from asking for more work to start. It does not stop containers that are already running.
+Pause stops the browser from asking for more work to start. Running containers finish normally. Workers use built-in memory budgets of **512 MiB, 1 GiB, and 1.5 GiB**; generated workloads use **64-256 MiB per job**. All arrival patterns support the workload type selector. See [the app flow](docs/flow.md) for how the controls work.
 
 ## Understand the project in one minute
 

@@ -1,3 +1,5 @@
+import { Icon } from "./Icon.jsx";
+
 /**
  * What happened to one job, and the per-stage controls for demonstrating the
  * pipeline one call at a time. Every value shown is reported by the backend.
@@ -6,16 +8,17 @@ export function JobDetail(props) {
   const { job, busy } = props;
   if (!job) {
     return (
-      <section className="panel" aria-label="Job detail">
+      <section className="panel job-detail-panel" aria-label="Job detail">
         <header className="panel-head">
           <div>
             <p className="eyebrow">Job detail</p>
             <h2>Nothing selected</h2>
           </div>
         </header>
-        <p className="muted">
-          Pick a job from the queue to see exactly what happened to it.
-        </p>
+        <div className="empty-state job-empty">
+          <span className="empty-icon"><Icon name="cursor" /></span>
+          <p>Pick a job from the queue to see exactly what happened to it.</p>
+        </div>
       </section>
     );
   }
@@ -27,7 +30,7 @@ export function JobDetail(props) {
   const canRelease = !!job.reservation;
   const canCancel = job.status === "QUEUED";
   return (
-    <section className="panel" aria-label="Job detail">
+    <section className="panel job-detail-panel" aria-label="Job detail">
       <header className="panel-head">
         <div>
           <p className="eyebrow">Job detail</p>

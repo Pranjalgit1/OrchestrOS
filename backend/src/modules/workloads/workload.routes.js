@@ -6,6 +6,9 @@ import {
 } from "./workload.schemas.js";
 import { workloadService } from "./workload.service.js";
 export const workloadRouter = Router();
+workloadRouter.post("/clear-generated", async (_request, response) => {
+  response.json(await workloadService.clearGenerated());
+});
 workloadRouter.post("/generate", async (request, response) => {
   const input = generateWorkloadSchema.parse(request.body);
   const batch = await workloadService.generate(input);

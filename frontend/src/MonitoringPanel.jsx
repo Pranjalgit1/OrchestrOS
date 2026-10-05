@@ -5,6 +5,9 @@ import {
   fetchOverview,
   fetchSampleHistory,
 } from "./api";
+import { CapacityGauge } from "./components/CapacityGauge.jsx";
+import { Icon } from "./components/Icon.jsx";
+
 const REFRESH_SECONDS = 5;
 const WINDOW_MINUTES = 60;
 /** Job states shown in the queue breakdown, in lifecycle order. */
@@ -30,33 +33,9 @@ function percent(value) {
   return `${Math.round(value * 1000) / 10}%`;
 }
 function seconds(value) {
-  if (value === null) return "—";
+  if (value === null) return "-";
   if (value < 1) return `${Math.round(value * 1000)}ms`;
   return `${Math.round(value * 100) / 100}s`;
-}
-function Bar({ label, used, capacity, utilization, unit }) {
-  return (
-    <div className="meter">
-      <div className="meter-head">
-        <span>{label}</span>
-        <strong>{percent(utilization)}</strong>
-      </div>
-      <div className="meter-track">
-        <div
-          className="meter-fill"
-          style={{ width: `${Math.min(100, utilization * 100)}%` }}
-          role="progressbar"
-          aria-label={`${label} utilization`}
-          aria-valuenow={Math.round(utilization * 100)}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        />
-      </div>
-      <small>
-        {used.toLocaleString()} / {capacity.toLocaleString()} {unit} reserved
-      </small>
-    </div>
-  );
 }
 /** Inline sparkline of recorded cluster utilization, drawn without a chart library. */
 function Sparkline({ history }) {
@@ -91,15 +70,15 @@ function Sparkline({ history }) {
         role="img"
         aria-label={`Cluster utilization over the last ${history.windowMinutes} minutes`}
       >
+        <g className="spark-grid">
+          {[0, 22.5, 45, 67.5, 90].map((y) => <line key={y} x1="0" x2={width} y1={y} y2={y} />)}
+        </g>
         <path d={cpuPath} className="spark-cpu" />
         <path d={memoryPath} className="spark-memory" />
       </svg>
       <figcaption>
         <span className="key key-cpu">CPU</span>
         <span className="key key-memory">Memory</span>
-        <span className="muted">
-          {points.length} samples over {history.windowMinutes} min
-        </span>
       </figcaption>
     </figure>
   );
@@ -156,6 +135,12 @@ export function MonitoringPanel() {
       setBusy(false);
     }
   };
+  return <MonitoringView overview={overview} jobs={jobs} history={history}
+    error={error} busy={busy} onRefresh={() => void load()} onCapture={() => void onCapture()} />;
+}
+
+/** Display metrics independently of polling so every loading/data state can be reviewed. */
+export function MonitoringView({ overview, jobs, history, error, busy, onRefresh, onCapture }) {
   return (
     <section className="monitor" aria-label="Live monitoring">
       <header className="monitor-head">
@@ -164,15 +149,15 @@ export function MonitoringPanel() {
           <h2>Cluster state</h2>
         </div>
         <div className="monitor-actions">
-          <button type="button" onClick={() => void load()} disabled={busy}>
-            Refresh
+          <button type="button" onClick={onRefresh} disabled={busy}>
+            <Icon name="refresh" />Refresh
           </button>
           <button
             type="button"
-            onClick={() => void onCapture()}
+            onClick={onCapture}
             disabled={busy}
           >
-            {busy ? "Capturing…" : "Capture sample"}
+            <Icon name="camera" />{busy ? "Capturing…" : "Capture sample"}
           </button>
         </div>
       </header>
@@ -182,21 +167,20 @@ export function MonitoringPanel() {
       {overview ? (
         <>
           <div className="monitor-grid">
-            <article className="tile">
-              <Bar
-                label="CPU"
-                used={overview.cluster.cpuAllocatedMillicores}
-                capacity={overview.cluster.cpuCapacityMillicores}
-                utilization={overview.cluster.cpuUtilization}
-                unit="millicores"
-              />
-              <Bar
-                label="Memory"
-                used={overview.cluster.memoryAllocatedMiB}
-                capacity={overview.cluster.memoryCapacityMiB}
-                utilization={overview.cluster.memoryUtilization}
-                unit="MiB"
-              />
+            <article className="tile reserved-tile">
+              <h3>Reserved capacity</h3>
+              <CapacityGauge cpu={overview.cluster.cpuUtilization}
+                memory={overview.cluster.memoryUtilization} label="Cluster capacity" />
+              <dl className="capacity-legend">
+                <div>
+                  <dt><span className="metric-dot cpu-dot" />CPU</dt>
+                  <dd>{overview.cluster.cpuAllocatedMillicores.toLocaleString()} / {overview.cluster.cpuCapacityMillicores.toLocaleString()} m</dd>
+                </div>
+                <div>
+                  <dt><span className="metric-dot memory-dot" />Memory</dt>
+                  <dd>{overview.cluster.memoryAllocatedMiB.toLocaleString()} / {overview.cluster.memoryCapacityMiB.toLocaleString()} MiB</dd>
+                </div>
+              </dl>
             </article>
 
             <article className="tile">
@@ -223,7 +207,7 @@ export function MonitoringPanel() {
                 {QUEUE_ORDER.filter(
                   (status) => overview.queue.byStatus[status],
                 ).map((status) => (
-                  <span className="chip" key={status}>
+                  <span className={`chip status-${status.toLowerCase()}`} key={status}>
                     {status} {overview.queue.byStatus[status]}
                   </span>
                 ))}
@@ -246,9 +230,9 @@ export function MonitoringPanel() {
                 </div>
                 <div>
                   <dt>Success rate</dt>
-                  <dd>
+                  <dd className="healthy">
                     {jobs?.successRate === null || jobs === null
-                      ? "—"
+                      ? "-"
                       : percent(jobs.successRate)}
                   </dd>
                 </div>
@@ -261,88 +245,98 @@ export function MonitoringPanel() {
           </div>
 
           <article className="tile wide">
-            <h3>Recorded utilization</h3>
+            <div className="chart-heading">
+              <h3>Recorded utilization</h3>
+              {history ? <span className="mono">{history.pointCount} samples over {history.windowMinutes} min</span> : null}
+            </div>
             <Sparkline history={history} />
           </article>
 
           <article className="tile wide">
             <h3>Workers</h3>
-            <table className="grid">
-              <thead>
-                <tr>
-                  <th scope="col">Worker</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">CPU</th>
-                  <th scope="col">Memory</th>
-                  <th scope="col">Reserved</th>
-                  <th scope="col">Running</th>
-                  <th scope="col">Completed</th>
-                  <th scope="col">Failed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {overview.workers.map((worker) => (
-                  <tr key={worker.workerId}>
-                    <td>{worker.name}</td>
-                    <td
-                      className={
-                        worker.status === "BUSY" ? "pending" : "healthy"
-                      }
-                    >
-                      {worker.status}
-                    </td>
-                    <td>
-                      {worker.cpuAllocatedMillicores}/
-                      {worker.cpuCapacityMillicores}m
-                      <small> ({percent(worker.cpuUtilization)})</small>
-                    </td>
-                    <td>
-                      {worker.memoryAllocatedMiB}/{worker.memoryCapacityMiB} MiB
-                      <small> ({percent(worker.memoryUtilization)})</small>
-                    </td>
-                    <td>{worker.reservedAllocations}</td>
-                    <td>{worker.runningExecutions}</td>
-                    <td>{worker.jobsCompleted}</td>
-                    <td>{worker.jobsFailed}</td>
+            <div className="table-scroll">
+              <table className="grid">
+                <thead>
+                  <tr>
+                    <th scope="col">Worker</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">CPU</th>
+                    <th scope="col">Memory</th>
+                    <th scope="col">Reserved</th>
+                    <th scope="col">Running</th>
+                    <th scope="col">Completed</th>
+                    <th scope="col">Failed</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {overview.workers.map((worker) => (
+                    <tr key={worker.workerId}>
+                      <td>{worker.name}</td>
+                      <td
+                        className={
+                          worker.status === "BUSY" ? "pending" : "healthy"
+                        }
+                      >
+                        {worker.status}
+                      </td>
+                      <td>
+                        {worker.cpuAllocatedMillicores}/
+                        {worker.cpuCapacityMillicores}m
+                        <small> ({percent(worker.cpuUtilization)})</small>
+                      </td>
+                      <td>
+                        {worker.memoryAllocatedMiB}/{worker.memoryCapacityMiB} MiB
+                        <small> ({percent(worker.memoryUtilization)})</small>
+                      </td>
+                      <td>{worker.reservedAllocations}</td>
+                      <td>{worker.runningExecutions}</td>
+                      <td>{worker.jobsCompleted}</td>
+                      <td>{worker.jobsFailed}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </article>
 
           <div className="monitor-grid two">
             <article className="tile">
               <h3>Lifecycle timings</h3>
-              <table className="grid">
-                <thead>
-                  <tr>
-                    <th scope="col">Stage</th>
-                    <th scope="col">n</th>
-                    <th scope="col">avg</th>
-                    <th scope="col">p95</th>
-                    <th scope="col">max</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(jobs?.timings ?? {}).map(
-                    ([metric, stats]) => (
-                      <tr key={metric}>
-                        <td>{TIMING_LABELS[metric] ?? metric}</td>
-                        <td>{stats.count}</td>
-                        <td>{seconds(stats.averageSeconds)}</td>
-                        <td>{seconds(stats.p95Seconds)}</td>
-                        <td>{seconds(stats.maximumSeconds)}</td>
-                      </tr>
-                    ),
-                  )}
-                </tbody>
-              </table>
+              <div className="table-scroll">
+                <table className="grid">
+                  <thead>
+                    <tr>
+                      <th scope="col">Stage</th>
+                      <th scope="col">n</th>
+                      <th scope="col">avg</th>
+                      <th scope="col">p95</th>
+                      <th scope="col">max</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(jobs?.timings ?? {}).map(
+                      ([metric, stats]) => (
+                        <tr key={metric}>
+                          <td>{TIMING_LABELS[metric] ?? metric}</td>
+                          <td>{stats.count}</td>
+                          <td>{seconds(stats.averageSeconds)}</td>
+                          <td>{seconds(stats.p95Seconds)}</td>
+                          <td>{seconds(stats.maximumSeconds)}</td>
+                        </tr>
+                      ),
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </article>
 
             <article className="tile">
               <h3>Running now</h3>
               {overview.executions.running.length === 0 ? (
-                <p className="muted">No containers running.</p>
+                <div className="empty-state running-empty">
+                  <Icon name="box" />
+                  <p>No containers running.</p>
+                </div>
               ) : (
                 <ul className="runlist">
                   {overview.executions.running.map((execution) => (

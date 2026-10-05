@@ -1,3 +1,5 @@
+import { Icon } from "./Icon.jsx";
+
 /**
  * A running narration of what the backend reported for each action.
  *
@@ -6,7 +8,7 @@
  */
 export function ActivityLog({ entries, onClear }) {
   return (
-    <section className="panel" aria-label="Activity log">
+    <section className="panel activity-panel" aria-label="Activity log">
       <header className="panel-head">
         <div>
           <p className="eyebrow">Activity</p>
@@ -18,7 +20,7 @@ export function ActivityLog({ entries, onClear }) {
       </header>
 
       {entries.length === 0 ? (
-        <p className="muted">No actions yet.</p>
+        <p className="activity-empty muted"><Icon name="chevron" />No actions yet.</p>
       ) : (
         <ul className="log">
           {entries.map((entry) => (

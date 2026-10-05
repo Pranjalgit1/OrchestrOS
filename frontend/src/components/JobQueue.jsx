@@ -8,7 +8,7 @@ const STATUS_FILTERS = [
   "INTERRUPTED",
 ];
 function containerLabel(job) {
-  if (!job.execution) return "—";
+  if (!job.execution) return "-";
   const status = job.execution.status;
   const short = job.execution.containerShortId;
   if (status === "RUNNING") {
@@ -29,25 +29,26 @@ export function JobQueue({
   const visible =
     filter === "ALL" ? jobs : jobs.filter((job) => job.status === filter);
   return (
-    <section className="panel" aria-label="Job queue">
+    <section id="job-queue" className="panel queue-panel" aria-label="Job queue">
       <header className="panel-head">
         <div>
           <p className="eyebrow">Live job queue</p>
           <h2>{jobs.length} job(s) in the database</h2>
         </div>
-        <div className="filters">
-          {STATUS_FILTERS.map((option) => (
-            <button
-              key={option}
-              type="button"
-              className={`chip${filter === option ? " chip-on" : ""}`}
-              onClick={() => onFilterChange(option)}
-            >
-              {option === "ALL" ? "All" : option}
-            </button>
-          ))}
-        </div>
       </header>
+      <div className="filters" aria-label="Filter jobs by status">
+        {STATUS_FILTERS.map((option) => (
+          <button
+            key={option}
+            type="button"
+            className={`chip${filter === option ? " chip-on" : ""}`}
+            aria-pressed={filter === option}
+            onClick={() => onFilterChange(option)}
+          >
+            {option === "ALL" ? "All" : option}
+          </button>
+        ))}
+      </div>
 
       {visible.length === 0 ? (
         <p className="muted">
@@ -101,7 +102,7 @@ export function JobQueue({
                       {job.status}
                     </span>
                   </td>
-                  <td>{job.assignedWorkerName ?? "—"}</td>
+                  <td>{job.assignedWorkerName ?? "-"}</td>
                   <td className="mono">{containerLabel(job)}</td>
                 </tr>
               ))}

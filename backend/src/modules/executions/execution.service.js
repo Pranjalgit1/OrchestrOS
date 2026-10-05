@@ -8,6 +8,7 @@ import {
 import { DockerApiError, DockerUnavailableError } from "./docker.client.js";
 import {
   WORKLOAD_IMAGE,
+  containerNameFor,
   describeExitCode,
   deriveWorkloadSeed,
   parseRunnerResult,
@@ -24,6 +25,9 @@ export class ExecutionService {
   /** Background settlements, so shutdown and tests can wait for them. */
   pending = new Map();
   imageVerified = false;
+  stoppingAll = false;
+  starting = new Set();
+  cancelling = new Set();
   constructor(
     repository = prismaExecutionRepository,
     runtime = dockerContainerRuntime,
@@ -46,6 +50,18 @@ export class ExecutionService {
    * completion and a manual recovery call.
    */
   async start(jobId) {
+    if (this.stoppingAll) {
+      throw new ConflictError("Workloads are being stopped", "WORKLOADS_STOPPING");
+    }
+    const request = this.startClaimed(jobId);
+    this.starting.add(request);
+    try {
+      return await request;
+    } finally {
+      this.starting.delete(request);
+    }
+  }
+  async startClaimed(jobId) {
     await this.requireWorkloadImage();
     const outcome = await this.repository.claim({ jobId });
     switch (outcome.status) {
@@ -216,6 +232,102 @@ export class ExecutionService {
     };
     return this.repository.list(filter);
   }
+  /** Stop only labeled workload containers, then return committed capacity. */
+  async killAll() {
+    if (this.stoppingAll) {
+      throw new ConflictError("Workloads are already being stopped", "WORKLOADS_STOPPING");
+    }
+    this.stoppingAll = true;
+    const failures = [];
+    let cancelledExecutions = 0;
+    let stoppedContainers = 0;
+    let releasedReservations = 0;
+    try {
+      await Promise.allSettled([...this.starting]);
+      // If Docker is unreachable, do not pretend that live reservations are free.
+      const containers = await this.runtime.listManaged().catch((error) => {
+        throw ExecutionService.toRuntimeError(error);
+      });
+      const executions = await this.repository.findOpenExecutions();
+      for (const execution of executions) this.cancelling.add(execution.id);
+      const processed = new Set();
+      for (const execution of executions) {
+        const containerId = execution.containerId ?? containerNameFor(execution.id);
+        try {
+          await this.runtime.stopManaged(containerId);
+          const result = await this.finalize(execution.id, {
+            executionStatus: ExecutionStatus.CANCELLED,
+            failureReason: "Stopped by Kill all workloads",
+            result: null,
+          }, null);
+          if (!result.alreadySettled) cancelledExecutions += 1;
+          if (result.released) releasedReservations += 1;
+          await this.runtime.remove(containerId);
+          processed.add(containerId);
+        } catch (error) {
+          failures.push({ id: execution.id, message: error.message });
+        } finally {
+          this.cancelling.delete(execution.id);
+        }
+      }
+      // Also clean up labeled containers orphaned before their id was saved.
+      for (const container of containers) {
+        try {
+          if (!processed.has(container.Id)) {
+            await this.runtime.stopManaged(container.Id);
+            await this.runtime.remove(container.Id);
+          }
+          stoppedContainers += 1;
+        } catch (error) {
+          failures.push({ id: container.Id, message: error.message });
+        }
+      }
+      const queued = await this.repository.cancelNonExecutingJobs();
+      return {
+        stoppedContainers, cancelledExecutions,
+        cancelledJobs: queued.cancelledJobs,
+        releasedReservations: releasedReservations + queued.releasedReservations,
+        failures,
+      };
+    } finally {
+      this.stoppingAll = false;
+    }
+  }
+  /** Restore completion tracking after a backend restart. */
+  async recover() {
+    const executions = await this.repository.findOpenExecutions();
+    const failures = [];
+    for (const execution of executions) {
+      if (this.pending.has(execution.id) || this.stoppingAll) continue;
+      try {
+        let containerId = execution.containerId;
+        if (!containerId) {
+          // Container creation may have succeeded before markStarted committed.
+          const containers = await this.runtime.listManaged();
+          containerId = containers.find((item) => item.Labels?.["orchestros.execution.id"] === execution.id)?.Id;
+          if (containerId) await this.repository.markStarted(execution.id, containerId);
+          if (!containerId) {
+            await this.settle(execution.id);
+            continue;
+          }
+        }
+        if (await this.runtime.isRunning(containerId)) {
+          const elapsed = Date.now() - (execution.startedAt ?? execution.createdAt).getTime();
+          this.track(execution.id, containerId, Math.max(1, this.timeoutSeconds * 1000 - elapsed));
+        } else {
+          await this.settle(execution.id);
+        }
+      } catch (error) {
+        try {
+          if (ExecutionService.isMissingContainer(error)) await this.settle(execution.id);
+          else failures.push({ id: execution.id, message: error.message });
+        } catch (settleError) {
+          failures.push({ id: execution.id, message: settleError.message });
+        }
+      }
+    }
+    return { checked: executions.length, failures };
+  }
   /** Waits for every in-flight background settlement. Used by tests and shutdown. */
   async awaitPendingSettlements() {
     while (this.pending.size > 0) {
@@ -235,18 +347,22 @@ export class ExecutionService {
     this.imageVerified = true;
   }
   /** Awaits the container in the background and settles it once it exits. */
-  track(executionId, containerId) {
+  track(executionId, containerId, timeoutMs = this.timeoutSeconds * 1_000) {
     const settlement = (async () => {
       try {
         const { timedOut } = await this.runtime.waitForExit(
           containerId,
-          this.timeoutSeconds * 1_000,
+          timeoutMs,
         );
         const exit = await this.runtime.collect(containerId);
         const execution = await this.repository.findById(executionId);
         await this.finalize(
           executionId,
-          ExecutionService.classify(
+          this.cancelling.has(executionId) ? {
+            executionStatus: ExecutionStatus.CANCELLED,
+            failureReason: "Stopped by Kill all workloads",
+            result: null,
+          } : ExecutionService.classify(
             exit,
             timedOut,
             this.timeoutSeconds,
@@ -256,6 +372,8 @@ export class ExecutionService {
         );
         await this.removeContainer(containerId);
       } catch (error) {
+        const recorded = await this.repository.findById(executionId).catch(() => null);
+        if (recorded && TERMINAL_EXECUTION_STATUSES.has(recorded.status)) return;
         // The execution stays RUNNING and its reservation stays held. `settle`
         // is the documented recovery path; nothing is silently marked complete.
         console.error(
@@ -269,6 +387,10 @@ export class ExecutionService {
     this.pending.set(executionId, settlement);
   }
   async finalize(executionId, outcome, exit) {
+    const finishedAt = exit?.finishedAt ? new Date(exit.finishedAt) : null;
+    const completedAt = finishedAt && Number.isFinite(finishedAt.getTime()) &&
+      finishedAt.getTime() > 0 && finishedAt.getTime() <= Date.now()
+      ? finishedAt : new Date();
     const result = await this.repository.finalize({
       executionId,
       executionStatus: outcome.executionStatus,
@@ -281,7 +403,7 @@ export class ExecutionService {
         : null,
       failureReason: outcome.failureReason,
       result: outcome.result,
-      completedAt: new Date(),
+      completedAt,
     });
     if (result.status === "EXECUTION_NOT_FOUND") {
       throw new NotFoundError("Execution");

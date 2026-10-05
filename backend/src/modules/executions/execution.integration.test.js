@@ -14,12 +14,60 @@ import { prisma } from "../../lib/prisma.js";
 import { prismaResourceRepository } from "../resources/resource.repository.js";
 import { WORKLOAD_IMAGE, parseRunnerResult } from "./execution.contract.js";
 import { prismaExecutionRepository } from "./execution.repository.js";
-import { DockerContainerRuntime } from "./execution.runtime.js";
+import { buildContainerSpec, DockerContainerRuntime } from "./execution.runtime.js";
 import { ExecutionService } from "./execution.service.js";
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true";
 const dockerTestsEnabled =
   process.env.RUN_DATABASE_TESTS === "true" &&
   process.env.RUN_DOCKER_TESTS === "true";
+test("kill all stops live and orphan workloads but leaves unrelated containers alone", { skip: !dockerTestsEnabled }, async () => {
+  const prefix = `kill-${randomUUID().slice(0, 8)}`;
+  const runtime = new DockerContainerRuntime();
+  const containers = [];
+  try {
+    const { job, worker } = await reservedFixture(prefix, {
+      cpuMillicores: 100, memoryMiB: 128, workloadType: WorkloadType.SLEEP, workloadSize: 30,
+    });
+    const claimed = await prismaExecutionRepository.claim({ jobId: job.id });
+    const execution = claimed.claimed.execution;
+    const plan = { executionId: execution.id, jobId: job.id, jobName: job.name,
+      workerId: worker.id, allocationId: execution.allocationId,
+      workloadType: WorkloadType.SLEEP, workloadSize: 30, cpuMillicores: 100, memoryMiB: 128, seed: 1 };
+    const live = await runtime.start(plan);
+    containers.push(live.containerId);
+    await prismaExecutionRepository.markStarted(execution.id, live.containerId);
+    const orphan = await runtime.start({ ...plan, executionId: randomUUID(), jobName: `${prefix}-orphan` });
+    containers.push(orphan.containerId);
+    const unrelated = await runtime.client.createContainer(`${prefix}-unrelated`, {
+      ...buildContainerSpec({ ...plan, executionId: randomUUID() }), Labels: { purpose: "cancellation-test" },
+    });
+    containers.push(unrelated);
+    await runtime.client.startContainer(unrelated);
+    const listManaged = runtime.listManaged.bind(runtime);
+    runtime.listManaged = async () => (await listManaged())
+      .filter((item) => item.Labels?.["orchestros.job.name"]?.startsWith(prefix));
+    const service = new ExecutionService(prismaExecutionRepository, runtime);
+    const result = await service.killAll();
+    assert.deepEqual(result.failures, []);
+    assert.equal(result.stoppedContainers, 2);
+    assert.equal(await runtime.isRunning(unrelated), true);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    assert.equal(stored.status, JobStatus.CANCELLED);
+    const freed = await prisma.worker.findUniqueOrThrow({ where: { id: worker.id } });
+    assert.equal(freed.memoryAllocatedMiB, 0);
+    assert.equal(freed.cpuAllocatedMillicores, 0);
+    const repeated = await service.killAll();
+    assert.equal(repeated.stoppedContainers, 0);
+    assert.equal(repeated.cancelledExecutions, 0);
+  } finally {
+    for (const id of containers) {
+      await runtime.client.stopContainer(id, 0);
+      await runtime.remove(id);
+    }
+    await cleanup(prefix);
+    await prisma.$disconnect();
+  }
+});
 /** Creates a worker plus a job that is scheduled, placed, and already reserved. */
 async function reservedFixture(prefix, overrides = {}) {
   const cpuMillicores = overrides.cpuMillicores ?? 1_000;
@@ -84,6 +132,34 @@ async function withServer(run) {
     });
   }
 }
+test("concurrent cancellation releases once and prevents a late reservation", { skip: !databaseTestsEnabled }, async () => {
+  const prefix = `exec-cancel-${randomUUID()}`;
+  try {
+    const { job, worker } = await reservedFixture(prefix);
+    const claimed = await prismaExecutionRepository.claim({ jobId: job.id });
+    const executionId = claimed.claimed.execution.id;
+    const request = { executionId, executionStatus: ExecutionStatus.CANCELLED,
+      completedAt: new Date(), exitCode: null, stdout: null, stderr: null,
+      failureReason: "Stopped by Kill all workloads", result: null };
+    const results = await Promise.all([
+      prismaExecutionRepository.finalize(request),
+      prismaExecutionRepository.finalize(request),
+    ]);
+    assert.equal(results.filter((item) => item.status === "FINALIZED").length, 1);
+    const stored = await prisma.job.findUniqueOrThrow({ where: { id: job.id } });
+    assert.equal(stored.status, JobStatus.CANCELLED);
+    assert.ok(stored.cancelledAt);
+    const freed = await prisma.worker.findUniqueOrThrow({ where: { id: worker.id } });
+    assert.equal(freed.memoryAllocatedMiB, 0);
+    assert.equal(freed.cpuAllocatedMillicores, 0);
+    const late = await prismaResourceRepository.reserve({ jobId: job.id, workerId: worker.id,
+      cpuMillicores: 1000, memoryMiB: 512 });
+    assert.equal(late.status, "JOB_NOT_RESERVABLE");
+  } finally {
+    await cleanup(prefix);
+    await prisma.$disconnect();
+  }
+});
 test(
   "claiming an execution is exclusive and requires a live reservation",
   { skip: !databaseTestsEnabled },

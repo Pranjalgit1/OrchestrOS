@@ -1,5 +1,6 @@
 import { WorkloadType } from "@prisma/client";
 import { z } from "zod";
+import { derivedWorkloadSize, STUDY_LIMITS } from "./workload.generator.js";
 export const workloadCountSchema = z.union([
   z.literal(10),
   z.literal(25),
@@ -7,6 +8,7 @@ export const workloadCountSchema = z.union([
   z.literal(100),
 ]);
 export const inputPatternSchema = z.enum([
+  "IMMEDIATE",
   "LIGHT",
   "MEDIUM",
   "HEAVY",
@@ -33,21 +35,32 @@ export const customWorkloadConfigSchema = z
   .object({
     workloadTypes: z.array(z.nativeEnum(WorkloadType)).min(1).max(5),
     workloadSize: integerRange(1, 100_000_000),
-    cpuRequiredMillicores: integerRange(100, 64_000),
-    memoryRequiredMiB: integerRange(64, 131_072),
-    estimatedDurationSeconds: integerRange(1, 86_400),
+    cpuRequiredMillicores: integerRange(100, STUDY_LIMITS.cpuMillicores),
+    memoryRequiredMiB: integerRange(64, STUDY_LIMITS.memoryMiB),
+    estimatedDurationSeconds: integerRange(1, STUDY_LIMITS.durationSeconds),
     priority: integerRange(1, 10),
     arrivalOffsetsSeconds: z
       .array(z.number().int().min(0).max(86_400))
       .min(10)
       .max(100),
   })
-  .strict();
+  .strict()
+  .superRefine((custom, context) => {
+    // A shared custom size must be safe for every selected workload type.
+    for (const type of custom.workloadTypes) {
+      const ceiling = derivedWorkloadSize(type, STUDY_LIMITS.durationSeconds, STUDY_LIMITS.cpuMillicores);
+      if (custom.workloadSize.max > ceiling) {
+        context.addIssue({ code: "custom", path: ["workloadSize", "max"],
+          message: `${type} study workloads must not exceed ${ceiling} work units` });
+      }
+    }
+  });
 export const generateWorkloadSchema = z
   .object({
     seed: z.number().int().min(0).max(2_147_483_647),
     count: workloadCountSchema,
     pattern: inputPatternSchema,
+    workloadTypes: z.array(z.nativeEnum(WorkloadType)).min(1).max(5).optional(),
     startAt: z.string().datetime({ offset: true }).optional(),
     custom: customWorkloadConfigSchema.optional(),
   })
@@ -71,6 +84,10 @@ export const generateWorkloadSchema = z
     }
     if (!input.custom) {
       return;
+    }
+    if (input.workloadTypes) {
+      context.addIssue({ code: "custom", path: ["workloadTypes"],
+        message: "For CUSTOM, specify workload types inside custom configuration" });
     }
     if (input.custom.arrivalOffsetsSeconds.length !== input.count) {
       context.addIssue({

@@ -1,25 +1,27 @@
 import { WorkloadPattern, WorkloadType } from "@prisma/client";
-export const GENERATOR_VERSION = "v1";
+export const GENERATOR_VERSION = "v2";
+// Study limits are inherent in generation, rather than an optional mode.
+export const STUDY_LIMITS = { cpuMillicores: 1_000, memoryMiB: 256, durationSeconds: 10 };
 const MIN_WORKLOAD_SIZE = 1;
 const MAX_WORKLOAD_SIZE = 100_000_000;
 const workloadTypes = Object.values(WorkloadType);
 const profiles = {
   LIGHT: {
-    cpu: [100, 250, 500],
-    memory: [64, 128, 256, 512],
-    duration: [1, 5, 10],
+    cpu: [100, 200, 250],
+    memory: [64, 96, 128],
+    duration: [2, 4, 6],
     priority: [1, 2, 3, 4, 5],
   },
   MEDIUM: {
-    cpu: [500, 1_000, 1_500, 2_000],
-    memory: [256, 512, 1_024, 2_048],
-    duration: [10, 20, 30, 45],
+    cpu: [250, 350, 500],
+    memory: [96, 128, 192],
+    duration: [4, 6, 8],
     priority: [2, 4, 6, 8],
   },
   HEAVY: {
-    cpu: [2_000, 3_000, 4_000],
-    memory: [2_048, 3_072, 4_096],
-    duration: [30, 45, 60, 90],
+    cpu: [500, 750, 1_000],
+    memory: [128, 192, 256],
+    duration: [6, 8, 10],
     priority: [5, 7, 9, 10],
   },
 };
@@ -66,7 +68,7 @@ export function derivedWorkloadSize(
       return clampSize(Math.round(cpuSeconds * 2_000));
     case WorkloadType.MATRIX_MULTIPLICATION:
       return clampSize(
-        Math.max(2, Math.round(Math.cbrt(cpuSeconds * 50_000_000))),
+        Math.max(2, Math.round(Math.cbrt(cpuSeconds * 2_000_000))),
       );
     default:
       return clampSize(Math.round(cpuSeconds * 1_000));
@@ -92,6 +94,7 @@ function profileFor(pattern, index, count) {
   return "MEDIUM";
 }
 function arrivalOffsets(pattern, count, random, custom) {
+  if (pattern === "IMMEDIATE") return Array(count).fill(0);
   if (pattern === WorkloadPattern.CUSTOM) {
     if (!custom)
       throw new Error("CUSTOM pattern requires custom configuration");
@@ -134,7 +137,7 @@ export function generateWorkloadSpecs(input) {
     random,
     input.custom,
   );
-  const typePool = input.custom?.workloadTypes ?? workloadTypes;
+  const typePool = input.custom?.workloadTypes ?? input.workloadTypes ?? workloadTypes;
   return Array.from({ length: input.count }, (_, index) => {
     const sequence = index + 1;
     const name = `workload-${input.seed}-${String(sequence).padStart(3, "0")}`;

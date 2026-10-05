@@ -6,6 +6,7 @@ import {
 } from "./workload.generator.js";
 import { prismaWorkloadRepository } from "./workload.repository.js";
 function normalizePattern(pattern) {
+  if (pattern === "IMMEDIATE") return WorkloadPattern.CUSTOM;
   return pattern === "SUDDEN_BURST"
     ? WorkloadPattern.BURST
     : WorkloadPattern[pattern];
@@ -20,20 +21,30 @@ export class WorkloadService {
     this.repository = repository;
     this.now = now;
   }
+  clearGenerated() {
+    return this.repository.deleteGeneratedJobs();
+  }
   generate(input) {
     const pattern = normalizePattern(input.pattern);
     const jobs = generateWorkloadSpecs({
       seed: input.seed,
       count: input.count,
-      pattern,
+      pattern: input.pattern === "IMMEDIATE" ? "IMMEDIATE" : pattern,
+      ...(input.workloadTypes ? { workloadTypes: input.workloadTypes } : {}),
       ...(input.custom ? { custom: input.custom } : {}),
     });
     const parameters = input.custom
       ? { mode: "custom", custom: input.custom }
-      : { mode: "predefined", contract: GENERATOR_VERSION };
+      : {
+          mode: "predefined",
+          contract: GENERATOR_VERSION,
+          arrivalPattern: input.pattern === "IMMEDIATE" ? "IMMEDIATE" : pattern,
+          ...(input.workloadTypes ? { workloadTypes: input.workloadTypes } : {}),
+        };
     return this.repository.createBatch({
       seed: input.seed,
       jobCount: input.count,
+      // Immediate batches use the existing CUSTOM storage enum; no migration needed.
       pattern,
       generatorVersion: GENERATOR_VERSION,
       parameters,

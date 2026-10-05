@@ -24,15 +24,67 @@ const predefinedPatterns = [
   WorkloadPattern.DECREASING,
   WorkloadPattern.PERIODIC,
 ];
+test("all generated study profiles fit built-in workers without an opt-in mode", async () => {
+  for (const pattern of [...predefinedPatterns, "IMMEDIATE"]) {
+    const repository = new InMemoryWorkloadRepository();
+    const service = new WorkloadService(repository);
+    const input = { seed: 123, count: 10, pattern };
+    const batch = await service.generate(input);
+    const original = generateWorkloadSpecs(input);
+    assert.ok(batch.jobs.every((job) => job.cpuRequiredMillicores <= 1_000 && job.memoryRequiredMiB <= 256 && job.estimatedDurationSeconds <= 10));
+    assert.deepEqual(batch.jobs.map((job) => job.arrivalOffsetSeconds), original.map((job) => job.arrivalOffsetSeconds));
+    assert.equal(batch.generatorVersion, "v2");
+    const reused = await service.reuse(batch.id, {});
+    assert.deepEqual(reused.jobs.map((job) => job.memoryRequiredMiB), batch.jobs.map((job) => job.memoryRequiredMiB));
+  }
+});
 const validCustom = {
   workloadTypes: [WorkloadType.SORTING, WorkloadType.DATA_PROCESSING],
   workloadSize: { min: 1_000, max: 2_000 },
   cpuRequiredMillicores: { min: 500, max: 1_000 },
-  memoryRequiredMiB: { min: 256, max: 512 },
+  memoryRequiredMiB: { min: 128, max: 256 },
   estimatedDurationSeconds: { min: 5, max: 10 },
   priority: { min: 2, max: 8 },
   arrivalOffsetsSeconds: Array.from({ length: 10 }, (_, index) => index * 3),
 };
+
+test("selected workload types apply to every arrival pattern and retain coherent sizes", async () => {
+  for (const pattern of [...predefinedPatterns, "IMMEDIATE"]) {
+    for (const type of Object.values(WorkloadType)) {
+      const input = generateWorkloadSchema.parse({ seed: 42, count: 10, pattern, workloadTypes: [type] });
+      const service = new WorkloadService(new InMemoryWorkloadRepository());
+      const batch = await service.generate(input);
+      assert.deepEqual(batch.parameters.workloadTypes, [type]);
+      for (const job of batch.jobs) {
+        assert.equal(job.workloadType, type);
+        assert.equal(job.workloadSize, derivedWorkloadSize(type, job.estimatedDurationSeconds, job.cpuRequiredMillicores));
+        if (type === WorkloadType.MATRIX_MULTIPLICATION) assert.ok(job.workloadSize <= 271);
+        if (pattern === "IMMEDIATE") {
+          assert.equal(batch.pattern, WorkloadPattern.CUSTOM);
+          assert.equal(batch.parameters.arrivalPattern, "IMMEDIATE");
+          assert.equal(job.arrivalOffsetSeconds, 0);
+        }
+      }
+      const reused = await service.reuse(batch.id, {});
+      assert.deepEqual(reused.parameters, batch.parameters);
+    }
+  }
+});
+
+test("generation rejects oversized custom studies and removed lightweight flags", () => {
+  const request = { seed: 42, count: 10, pattern: "CUSTOM", custom: validCustom };
+  for (const override of [
+    { memoryRequiredMiB: { min: 128, max: 512 } },
+    { cpuRequiredMillicores: { min: 500, max: 2_000 } },
+    { estimatedDurationSeconds: { min: 1, max: 120 } },
+    { workloadTypes: [WorkloadType.MATRIX_MULTIPLICATION], workloadSize: { min: 2, max: 300_000 } },
+    { workloadTypes: [WorkloadType.SLEEP], workloadSize: { min: 1, max: 120 } },
+  ]) {
+    assert.equal(generateWorkloadSchema.safeParse({ ...request, custom: { ...validCustom, ...override } }).success, false);
+  }
+  assert.equal(generateWorkloadSchema.safeParse({ seed: 1, count: 10, pattern: "HEAVY", lightweight: false }).success, false);
+  assert.equal(generateWorkloadSchema.safeParse({ seed: 1, count: 10, pattern: "LIGHT", workloadTypes: [] }).success, false);
+});
 function comparableSpecs(specs) {
   return specs.map(({ sequence, ...spec }) => ({ sequence, ...spec }));
 }
@@ -313,13 +365,13 @@ test("reuse clones persisted specs instead of regenerating them", async () => {
     (error) => error instanceof AppError && error.statusCode === 404,
   );
 });
-test("generator v1 output is pinned so stored experiment inputs cannot drift", () => {
+test("generator v2 output is pinned so stored experiment inputs cannot drift", () => {
   const goldenBatches = [
-    [WorkloadPattern.MEDIUM, 12_345, 10, "fb6e4752aeca6a9f"],
-    [WorkloadPattern.CONSTANT, 34, 50, "f9ff061e2cb09b25"],
-    [WorkloadPattern.CONSTANT, 80, 50, "e19cbdc74c4a0aaf"],
-    [WorkloadPattern.BURST, 7, 25, "bf8ace1bf472d0f9"],
-    [WorkloadPattern.LIGHT, 99, 100, "afe87cd09af1b21a"],
+    [WorkloadPattern.MEDIUM, 12_345, 10, "7d11d38b6cca4a32"],
+    [WorkloadPattern.CONSTANT, 34, 50, "ff547ce025e442a0"],
+    [WorkloadPattern.CONSTANT, 80, 50, "a029a096cb82813c"],
+    [WorkloadPattern.BURST, 7, 25, "15e0ef3036e337df"],
+    [WorkloadPattern.LIGHT, 99, 100, "24144ee233cbcd3b"],
   ];
   for (const [pattern, seed, count, expected] of goldenBatches) {
     assert.equal(
@@ -421,7 +473,7 @@ test("custom generation is deterministic and respects every requested bound", ()
     custom,
   };
   const specs = generateWorkloadSpecs(input);
-  assert.equal(specHash(specs), "deffd19ee62da7a7");
+  assert.equal(specHash(specs), "0dd0f7011df0ef82");
   assert.deepEqual(
     comparableSpecs(specs),
     comparableSpecs(generateWorkloadSpecs(input)),

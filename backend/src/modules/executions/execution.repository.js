@@ -22,11 +22,48 @@ function jobStatusForExecution(executionStatus) {
       return JobStatus.COMPLETED;
     case ExecutionStatus.INTERRUPTED:
       return JobStatus.INTERRUPTED;
+    case ExecutionStatus.CANCELLED:
+      return JobStatus.CANCELLED;
     default:
       return JobStatus.FAILED;
   }
 }
 export const prismaExecutionRepository = {
+  findOpenExecutions() {
+    return prisma.jobExecution.findMany({
+      where: { status: { in: [ExecutionStatus.PENDING, ExecutionStatus.RUNNING] } },
+      orderBy: { createdAt: "asc" },
+    });
+  },
+  async cancelNonExecutingJobs() {
+    return prisma.$transaction(async (tx) => {
+      const statuses = [JobStatus.CREATED, JobStatus.QUEUED, JobStatus.WAITING,
+        JobStatus.SCHEDULED, JobStatus.RUNNING];
+      const candidates = await tx.job.findMany({
+        where: { status: { in: statuses }, executions: { none: {
+          status: { in: [ExecutionStatus.PENDING, ExecutionStatus.RUNNING] },
+        } } },
+        select: { id: true },
+        orderBy: { id: "asc" },
+      });
+      let cancelledJobs = 0;
+      let releasedReservations = 0;
+      for (const { id } of candidates) {
+        await tx.$queryRaw`SELECT \`id\` FROM \`jobs\` WHERE \`id\` = ${id} FOR UPDATE`;
+        const open = await tx.jobExecution.count({ where: { jobId: id,
+          status: { in: [ExecutionStatus.PENDING, ExecutionStatus.RUNNING] } } });
+        if (open) continue;
+        const result = await tx.job.updateMany({
+          where: { id, status: { in: statuses } },
+          data: { status: JobStatus.CANCELLED, cancelledAt: new Date(), completedAt: new Date(),
+            failureReason: "Stopped by Kill all workloads" },
+        });
+        cancelledJobs += result.count;
+        if ((await releaseAllocationWithin(tx, id)).status === "RELEASED") releasedReservations += 1;
+      }
+      return { cancelledJobs, releasedReservations };
+    }, TRANSACTION_OPTIONS);
+  },
   /**
    * Atomically takes ownership of a job's execution slot.
    *
@@ -139,6 +176,9 @@ export const prismaExecutionRepository = {
    */
   async finalize(request) {
     return prisma.$transaction(async (tx) => {
+      // Serialize manual cancellation and background completion before either
+      // can release the same allocation.
+      await tx.$queryRaw`SELECT \`id\` FROM \`job_executions\` WHERE \`id\` = ${request.executionId} FOR UPDATE`;
       const existing = await tx.jobExecution.findUnique({
         where: { id: request.executionId },
       });
@@ -167,6 +207,8 @@ export const prismaExecutionRepository = {
         data: {
           status: jobStatusForExecution(request.executionStatus),
           completedAt: request.completedAt,
+          ...(request.executionStatus === ExecutionStatus.CANCELLED
+            ? { cancelledAt: request.completedAt } : {}),
           failureReason: request.failureReason,
           ...(request.result === null ? {} : { result: request.result }),
         },

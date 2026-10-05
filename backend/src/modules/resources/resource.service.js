@@ -33,6 +33,8 @@ export class ResourceService {
       memoryMiB: job.memoryRequiredMiB,
     });
     switch (outcome.status) {
+      case "JOB_NOT_RESERVABLE":
+        throw new ConflictError("Job was cancelled or is no longer scheduled", "JOB_NOT_RESERVABLE");
       case "RESERVED":
         return {
           allocation: outcome.allocation,

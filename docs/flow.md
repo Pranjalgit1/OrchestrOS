@@ -2,6 +2,21 @@
 
 This guide follows a job from creation to completion. The backend makes the scheduling and resource decisions; the browser sends requests and displays the results.
 
+For a side-by-side code walkthrough, start with these files:
+
+| Change | Where to read |
+| --- | --- |
+| Compact header, section navigation, and theme selection | [App.jsx](../frontend/src/App.jsx) |
+| Reference palette, responsive layout, and locally hosted Inter / Roboto Mono fonts | [theme.css](../frontend/src/theme.css), [styles.css](../frontend/src/styles.css), [main.jsx](../frontend/src/main.jsx) |
+| Visible controls, collapsed cleanup and seed settings | [ControlPanel.jsx](../frontend/src/components/ControlPanel.jsx) |
+| Run/Pause timer and Demo Mode | [OrchestratorConsole.jsx](../frontend/src/OrchestratorConsole.jsx) |
+| Browser generation requests | [api.js](../frontend/src/api.js) |
+| Built-in worker capacities and safe setup | [worker.defaults.js](../backend/src/modules/workers/worker.defaults.js) |
+| Small resource profiles and type-specific work sizes | [workload.generator.js](../backend/src/modules/workloads/workload.generator.js) |
+| Limits on custom generation requests | [workload.schemas.js](../backend/src/modules/workloads/workload.schemas.js) |
+| Outer CPU / inner memory reservation rings used by workers and monitoring | [CapacityGauge.jsx](../frontend/src/components/CapacityGauge.jsx) |
+| Live metrics, utilization history, and compact monitoring tables | [MonitoringPanel.jsx](../frontend/src/MonitoringPanel.jsx) |
+
 ## 1. Start the app
 
 With the two-terminal setup, MySQL runs locally, one terminal runs the backend, and another runs the frontend.
@@ -17,7 +32,7 @@ The backend also starts the usage-history timer unless it has been disabled. The
 
 ## 2. Generate jobs
 
-You choose a seed, job count, and pattern, then click Generate Workload.
+Choose a job count, arrival pattern, and workload type, then click Generate Workload. The seed is under **Reproducibility** when you want repeatable experiments. Resource sizes are automatic and small by default.
 
 1. The browser sends `POST /api/workloads/generate`.
 2. The backend rejects missing, unknown, or out-of-range inputs.
@@ -29,7 +44,7 @@ You choose a seed, job count, and pattern, then click Generate Workload.
 
 The same generation settings reproduce the same job specifications. Their database IDs can differ.
 
-A custom batch must provide one arrival offset per job, in order from smallest to largest. The browser's Immediate preset uses ten or more zero offsets, so every generated job is eligible immediately. Its Sleep preset chooses small durations that are easy to watch.
+A custom API batch must provide one arrival offset per job, in order from smallest to largest. The browser sends the **IMMEDIATE** arrival pattern directly; the backend creates zero offsets so every job is eligible immediately. Sleep jobs take 2-10 seconds, depending on the resource profile. Compute jobs use bounded work units appropriate to their type.
 
 ## 3. Reuse an existing batch
 
@@ -39,7 +54,7 @@ It copies stored specifications rather than calling the generator again. That pr
 
 ## 4. Ask the orchestrator to run work
 
-Run Next, Run N, and auto mode call `POST /api/orchestrator/run` with the chosen policy and placement strategy.
+**Run Orchestrator** calls `POST /api/orchestrator/run` with the chosen policy and placement strategy, requesting one start every two seconds. **Demo Mode** generates ten small sleep jobs and starts the same orchestrator. There are no separate single-job or batch-run buttons.
 
 For each job, the backend:
 
@@ -138,9 +153,15 @@ The Capture sample button requests a sample immediately, even when the timer is 
 - Read job, worker, allocation, and execution records through their GET endpoints.
 - Use the selected-job stage buttons to inspect or advance a step when demonstrating how the system works.
 
-Cancelling a running container from the UI is not implemented yet.
+**Kill all workloads** pauses browser auto-run, waits for in-flight launches, stops and removes only Docker containers labeled `orchestros.managed=true`, and cancels queued/scheduled jobs. Active executions become `CANCELLED` and reservations are released transactionally. Failed stops are reported and their active execution reservations remain held. MySQL and unrelated Docker containers are kept.
+
+The three default worker budgets are built in: 512/1024/1536 MiB and 500/1000/1500m CPU. Setup and backend startup configure idle workers automatically. Generated jobs use 64-256 MiB, 100-1000m CPU, and 2-10 second duration estimates. There is no lightweight toggle or preset button.
 
 ## 12. Clear finished jobs
+
+Expand **Cleanup** in the run column for **Clear generated workload** and **Clear finished jobs**. Pause the orchestrator, then clear generated work to call `POST /api/workloads/clear-generated`. This removes queued jobs linked to workload batches that have never been scheduled, including jobs whose arrival time is still in the future. The activity log reports the number removed and the dashboard refreshes the queue.
+
+The delete checks job state in the database, so a job claimed by the scheduler is protected. Jobs with placement, allocations, or execution history are kept, including Round Robin jobs that returned to the queue. Manually created jobs are kept. Empty batches are removed only when no reused batch references them.
 
 The dashboard calls `POST /api/orchestrator/clear-finished`.
 
@@ -154,4 +175,4 @@ Input errors return a readable error code and message. Invalid JSON returns HTTP
 
 On a normal shutdown signal, the server stops its sampler, closes its listener, waits for pending execution-result work, and disconnects from MySQL.
 
-A forced stop or crash can still leave a job marked running. Once its container has finished, `POST /api/executions/:executionId/settle` can save the outcome and release resources. It refuses to settle a container that is still running. If the container is missing, it records an explicit failure rather than inventing a result. Automatic crash recovery is planned.
+A forced stop or crash can leave a job marked running. On startup and every 30 seconds, the backend reconciles untracked open executions: it settles exited/missing containers and resumes tracking live containers using their original deadline. Missing outcomes are recorded as failures. Manual recovery remains available through `POST /api/executions/:executionId/settle`; it refuses a live container.

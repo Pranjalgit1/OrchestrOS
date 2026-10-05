@@ -1,4 +1,4 @@
-import { AllocationStatus, Prisma, WorkerStatus } from "@prisma/client";
+import { AllocationStatus, JobStatus, Prisma, WorkerStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 /**
  * Reservation transactions intentionally block on a worker row lock, so the
@@ -12,6 +12,11 @@ export const TRANSACTION_OPTIONS = {
 export const prismaResourceRepository = {
   async reserve({ jobId, workerId, cpuMillicores, memoryMiB }) {
     return prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT \`id\` FROM \`jobs\` WHERE \`id\` = ${jobId} FOR UPDATE`;
+      const currentJob = await tx.job.findUnique({ where: { id: jobId } });
+      if (!currentJob || currentJob.status !== JobStatus.SCHEDULED) {
+        return { status: "JOB_NOT_RESERVABLE" };
+      }
       const lockStartedAt = Date.now();
       // Row-level lock. Any concurrent reservation for this worker waits here,
       // which is what serialises the capacity check below.
@@ -114,6 +119,7 @@ export const prismaResourceRepository = {
  * rather than duplicated.
  */
 export async function releaseAllocationWithin(tx, jobId) {
+  await tx.$queryRaw`SELECT \`id\` FROM \`jobs\` WHERE \`id\` = ${jobId} FOR UPDATE`;
   const active = await tx.resourceAllocation.findFirst({
     where: { jobId, status: AllocationStatus.RESERVED },
   });

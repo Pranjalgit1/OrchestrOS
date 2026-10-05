@@ -5,6 +5,9 @@ import {
 } from "./orchestrator.schemas.js";
 import { orchestratorService } from "./orchestrator.service.js";
 export const orchestratorRouter = Router();
+orchestratorRouter.post("/kill-all", async (_request, response) => {
+  response.json(await orchestratorService.killAll());
+});
 /**
  * Runs the pipeline for up to `maxJobs` jobs.
  *
