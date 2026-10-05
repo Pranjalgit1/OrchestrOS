@@ -372,6 +372,7 @@ export class OrchestratorService {
         status: job.status,
         stage,
         arrivalAt: job.arrivalAt.toISOString(),
+        updatedAt: job.updatedAt.toISOString(),
         eligibleNow: eligible,
         secondsUntilEligible:
           job.status === JobStatus.QUEUED

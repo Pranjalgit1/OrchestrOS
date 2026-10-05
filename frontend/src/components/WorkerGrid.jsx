@@ -1,7 +1,7 @@
 import { CapacityGauge } from "./CapacityGauge.jsx";
 
 /** Worker counters reflect capacity committed by transactional reservations. */
-export function WorkerGrid({ workers, hostMemory, onSelectJob }) {
+export function WorkerGrid({ workers, onSelectJob }) {
   return (
     <section className="panel worker-panel" aria-label="Workers">
       <header className="panel-head">
@@ -14,13 +14,6 @@ export function WorkerGrid({ workers, hostMemory, onSelectJob }) {
         Workers are scheduling slots on the same computer. Rings show reserved
         limits, not actual RAM usage. Jobs run in Docker containers.
       </p>
-      {hostMemory ? (
-        <p className="host-memory mono">
-          Backend host: {(hostMemory.totalMiB / 1024).toFixed(1)} GiB RAM,
-          {" "}{(hostMemory.freeMiB / 1024).toFixed(1)} GiB free
-          {" · "}Worker budget: {(hostMemory.workerBudgetMiB / 1024).toFixed(1)} GiB
-        </p>
-      ) : null}
       <div className="worker-grid">
         {workers.map((worker) => (
           <article key={worker.id} className="worker-card">
@@ -34,7 +27,7 @@ export function WorkerGrid({ workers, hostMemory, onSelectJob }) {
               label={`${worker.name} capacity`} caption={worker.status === "IDLE" ? "idle" : "reserved"} />
             <dl className="capacity-legend">
               <div>
-                <dt><span className="metric-dot cpu-dot" />CPU reserved</dt>
+                <dt title="Millicores: 1000m = 1 CPU core"><span className="metric-dot cpu-dot" />CPU reserved</dt>
                 <dd>{worker.cpuAllocatedMillicores} / {worker.cpuCapacityMillicores} m</dd>
               </div>
               <div>

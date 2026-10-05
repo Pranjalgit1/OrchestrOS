@@ -185,6 +185,53 @@ async function cleanup(prefix) {
   await prisma.worker.deleteMany({ where: { name: { startsWith: prefix } } });
 }
 test(
+  "dashboard shows newest job changes before its row limit without changing FCFS",
+  { skip: !databaseTestsEnabled },
+  async () => {
+    const prefix = `orch-queue-${randomUUID().slice(0, 8)}`;
+    const clock = Date.now();
+    // Put these display timestamps ahead of other fixtures in the test database.
+    const changedAt = clock + 60_000;
+    try {
+      const jobs = [];
+      for (let index = 0; index < 3; index += 1) {
+        jobs.push(await prisma.job.create({ data: {
+          name: `${prefix}-${index}`,
+          workloadType: WorkloadType.SLEEP,
+          workloadSize: 4,
+          cpuRequiredMillicores: 250,
+          memoryRequiredMiB: 128,
+          estimatedDurationSeconds: 4,
+          arrivalAt: new Date(clock - 30_000 + index * 1000),
+          createdAt: new Date(clock - 30_000 + index * 1000),
+          updatedAt: new Date(changedAt + index * 1000),
+        } }));
+      }
+      const initial = await prismaOrchestratorRepository.listJobStates(2);
+      assert.deepEqual(initial.map((row) => row.job.id), [jobs[2].id, jobs[1].id]);
+      const scheduledOrder = await scopedScheduler(prefix).preview({ policy: "FCFS", limit: 3 });
+      assert.deepEqual(scheduledOrder.jobs.map((job) => job.id), jobs.map((job) => job.id));
+
+      // An older job changes state: it must now appear above newly created jobs.
+      const cancelledAt = new Date(changedAt + 3000);
+      await prisma.job.update({ where: { id: jobs[0].id }, data: {
+        status: JobStatus.CANCELLED, cancelledAt, updatedAt: cancelledAt,
+      } });
+      const changed = await prismaOrchestratorRepository.listJobStates(2);
+      assert.deepEqual(changed.map((row) => row.job.id), [jobs[0].id, jobs[2].id]);
+      const service = new OrchestratorService();
+      const state = await service.state({ limit: 2 });
+      assert.equal(state.jobs[0].updatedAt, cancelledAt.toISOString());
+      assert.equal(state.jobs[0].status, "CANCELLED");
+      assert.ok(state.totals.jobs >= 3, "total includes jobs outside the display limit");
+      assert.ok(state.statusCounts.QUEUED >= 2, "hidden pending jobs remain counted");
+    } finally {
+      await cleanup(prefix);
+      await prisma.$disconnect();
+    }
+  },
+);
+test(
   "one orchestrator call schedules, places, and reserves a queued job",
   { skip: !databaseTestsEnabled },
   async () => {

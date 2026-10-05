@@ -750,6 +750,7 @@ test("the state snapshot groups jobs by stage and attaches workers and container
   const running = state.jobs.find((job) => job.name === "running-job");
   assert.ok(running);
   assert.equal(running.stage, "EXECUTION");
+  assert.equal(running.updatedAt, runningJob.updatedAt.toISOString());
   assert.equal(running.assignedWorkerName, "worker-2");
   assert.equal(running.reservation?.cpuMillicores, 800);
   assert.equal(running.execution?.containerShortId, "c".repeat(12));

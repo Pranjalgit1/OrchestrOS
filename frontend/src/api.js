@@ -1,3 +1,5 @@
+export const STATE_CHANGED_EVENT = "orchestros:state-changed";
+
 export async function fetchHealthStatus(signal) {
   const response = await fetch("/api/health", { signal });
   const body = await response.json();
@@ -7,7 +9,7 @@ export async function fetchHealthStatus(signal) {
   return body;
 }
 async function getJson(path, signal) {
-  const response = await fetch(path, { signal });
+  const response = await fetch(path, { signal, cache: "no-store" });
   if (!response.ok) {
     throw new Error(`${path} returned ${response.status}`);
   }
@@ -42,15 +44,19 @@ async function requestJson(path, init) {
   }
   return body;
 }
-function postJson(path, payload) {
-  return requestJson(path, {
+async function postJson(path, payload) {
+  const result = await requestJson(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(STATE_CHANGED_EVENT));
+  }
+  return result;
 }
 export function fetchOrchestratorState(signal) {
-  return requestJson("/api/orchestrator/state?limit=120", { signal });
+  return requestJson("/api/orchestrator/state?limit=120", { signal, cache: "no-store" });
 }
 export function runOrchestrator(input) {
   return postJson("/api/orchestrator/run", input);

@@ -185,12 +185,9 @@ export function OrchestratorConsole() {
         if (cancelled || !mounted.current) return;
         await refresh();
         const snapshot = await fetchOrchestratorState();
-        const pending =
-          snapshot.stageCounts.QUEUE +
-          snapshot.stageCounts.SCHEDULER +
-          snapshot.stageCounts.PLACEMENT +
-          snapshot.stageCounts.RESERVATION +
-          snapshot.stageCounts.EXECUTION;
+        // The queue displays a limited set of recent changes, not every job.
+        const pending = ["CREATED", "QUEUED", "WAITING", "SCHEDULED", "RUNNING"]
+          .reduce((total, status) => total + (snapshot.statusCounts[status] ?? 0), 0);
         if (pending === 0 && result.stoppedBecause === "NOTHING_ELIGIBLE") {
           setAutoRunning(false);
           log(
@@ -264,13 +261,6 @@ export function OrchestratorConsole() {
 
       {error ? <p className="error-banner">{error}</p> : null}
 
-      {autoRunning ? (
-        <p className="running-banner">
-          Orchestrator is running automatically - asking the backend for the
-          next job every {AUTO_TICK_MS / 1000}s.
-        </p>
-      ) : null}
-
       {state ? (
         <>
           <PipelineView stageCounts={state.stageCounts} selected={selected} />
@@ -278,7 +268,6 @@ export function OrchestratorConsole() {
           <div className="split">
             <WorkerGrid
               workers={state.workers}
-              hostMemory={state.hostMemory}
               onSelectJob={setSelectedJobId}
             />
             <JobDetail
@@ -336,6 +325,7 @@ export function OrchestratorConsole() {
 
           <JobQueue
             jobs={state.jobs}
+            totalJobs={state.totals.jobs}
             selectedJobId={selectedJobId}
             filter={filter}
             onFilterChange={setFilter}

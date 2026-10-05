@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   captureSample,
   fetchJobMetrics,
   fetchOverview,
   fetchSampleHistory,
+  STATE_CHANGED_EVENT,
 } from "./api";
+import { createMonitoringPoller } from "./monitoring.poller.js";
 import { CapacityGauge } from "./components/CapacityGauge.jsx";
 import { Icon } from "./components/Icon.jsx";
 
-const REFRESH_SECONDS = 5;
+const REFRESH_SECONDS = 2;
 const WINDOW_MINUTES = 60;
 /** Job states shown in the queue breakdown, in lifecycle order. */
 const QUEUE_ORDER = [
@@ -41,7 +43,7 @@ function seconds(value) {
 function Sparkline({ history }) {
   if (!history || history.points.length < 2) {
     return (
-      <p className="muted">
+      <p className="muted spark-placeholder">
         {history?.pointCount === 0
           ? "No samples recorded yet. The sampler writes one every few seconds."
           : "Collecting samples…"}
@@ -89,44 +91,32 @@ export function MonitoringPanel() {
   const [history, setHistory] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  const mounted = useRef(true);
-  const load = useCallback(async (signal) => {
-    try {
-      const [nextOverview, nextJobs, nextHistory] = await Promise.all([
-        fetchOverview(signal),
-        fetchJobMetrics(WINDOW_MINUTES, signal),
-        fetchSampleHistory(WINDOW_MINUTES, signal),
-      ]);
-      if (!mounted.current) return;
-      setOverview(nextOverview);
-      setJobs(nextJobs);
-      setHistory(nextHistory);
-      setError(null);
-    } catch (reason) {
-      if (signal?.aborted || !mounted.current) return;
-      setError(
-        reason instanceof Error ? reason.message : "Failed to load metrics",
-      );
-    }
-  }, []);
+  const poller = useRef(null);
   useEffect(() => {
-    mounted.current = true;
-    const controller = new AbortController();
-    void load(controller.signal);
-    const timer = setInterval(() => {
-      void load(controller.signal);
-    }, REFRESH_SECONDS * 1000);
+    const setters = { overview: setOverview, jobs: setJobs, history: setHistory };
+    const current = createMonitoringPoller({
+      sources: {
+        overview: { label: "Live state", fetch: fetchOverview, intervalMs: REFRESH_SECONDS * 1000 },
+        jobs: { label: "Job timings", fetch: (signal) => fetchJobMetrics(WINDOW_MINUTES, signal), intervalMs: 5000 },
+        history: { label: "Chart history", fetch: (signal) => fetchSampleHistory(WINDOW_MINUTES, signal), intervalMs: 5000 },
+      },
+      onData: (key, data) => setters[key](data),
+      onError: setError,
+    });
+    poller.current = current;
+    const refreshLive = () => current.refresh(["overview", "jobs"]);
+    window.addEventListener(STATE_CHANGED_EVENT, refreshLive);
     return () => {
-      mounted.current = false;
-      controller.abort();
-      clearInterval(timer);
+      window.removeEventListener(STATE_CHANGED_EVENT, refreshLive);
+      current.stop();
+      poller.current = null;
     };
-  }, [load]);
+  }, []);
   const onCapture = async () => {
     setBusy(true);
     try {
       await captureSample();
-      await load();
+      poller.current?.refresh();
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : "Sample capture failed",
@@ -136,7 +126,7 @@ export function MonitoringPanel() {
     }
   };
   return <MonitoringView overview={overview} jobs={jobs} history={history}
-    error={error} busy={busy} onRefresh={() => void load()} onCapture={() => void onCapture()} />;
+    error={error} busy={busy} onRefresh={() => poller.current?.refresh()} onCapture={() => void onCapture()} />;
 }
 
 /** Display metrics independently of polling so every loading/data state can be reviewed. */
@@ -148,18 +138,20 @@ export function MonitoringView({ overview, jobs, history, error, busy, onRefresh
           <p className="eyebrow">Live monitoring</p>
           <h2>Cluster state</h2>
         </div>
-        <div className="monitor-actions">
-          <button type="button" onClick={onRefresh} disabled={busy}>
-            <Icon name="refresh" />Refresh
-          </button>
-          <button
-            type="button"
-            onClick={onCapture}
-            disabled={busy}
-          >
-            <Icon name="camera" />{busy ? "Capturing…" : "Capture sample"}
-          </button>
-        </div>
+        <details className="monitor-tools">
+          <summary>Monitoring tools</summary>
+          <p className="hint">Live state updates automatically. Refresh reads it now; Save snapshot records worker values for the chart.</p>
+          <div className="monitor-actions">
+            <button type="button" onClick={onRefresh} disabled={busy}
+              title="Read the latest monitoring values without writing to the database">
+              <Icon name="refresh" />Refresh now
+            </button>
+            <button type="button" onClick={onCapture} disabled={busy}
+              title="Save one CPU and memory reservation snapshot per worker">
+              <Icon name="camera" />{busy ? "Saving…" : "Save snapshot"}
+            </button>
+          </div>
+        </details>
       </header>
 
       {error ? <p className="error-banner">{error}</p> : null}
@@ -173,7 +165,7 @@ export function MonitoringView({ overview, jobs, history, error, busy, onRefresh
                 memory={overview.cluster.memoryUtilization} label="Cluster capacity" />
               <dl className="capacity-legend">
                 <div>
-                  <dt><span className="metric-dot cpu-dot" />CPU</dt>
+                  <dt title="Millicores: 1000m = 1 CPU core"><span className="metric-dot cpu-dot" />CPU (m)</dt>
                   <dd>{overview.cluster.cpuAllocatedMillicores.toLocaleString()} / {overview.cluster.cpuCapacityMillicores.toLocaleString()} m</dd>
                 </div>
                 <div>
@@ -236,10 +228,6 @@ export function MonitoringView({ overview, jobs, history, error, busy, onRefresh
                       : percent(jobs.successRate)}
                   </dd>
                 </div>
-                <div>
-                  <dt>Samples stored</dt>
-                  <dd>{overview.samples.stored}</dd>
-                </div>
               </dl>
             </article>
           </div>
@@ -247,7 +235,10 @@ export function MonitoringView({ overview, jobs, history, error, busy, onRefresh
           <article className="tile wide">
             <div className="chart-heading">
               <h3>Recorded utilization</h3>
-              {history ? <span className="mono">{history.pointCount} samples over {history.windowMinutes} min</span> : null}
+              <span className="mono" title="Saved worker snapshots draw this chart. History is pruned according to the configured retention period.">
+                {history ? `${history.pointCount} chart points over ${history.windowMinutes} min · ` : ""}
+                {overview.samples.stored} saved worker snapshots
+              </span>
             </div>
             <Sparkline history={history} />
           </article>
@@ -260,7 +251,7 @@ export function MonitoringView({ overview, jobs, history, error, busy, onRefresh
                   <tr>
                     <th scope="col">Worker</th>
                     <th scope="col">Status</th>
-                    <th scope="col">CPU</th>
+                    <th scope="col" title="Millicores: 1000m = 1 CPU core">CPU (m)</th>
                     <th scope="col">Memory</th>
                     <th scope="col">Reserved</th>
                     <th scope="col">Running</th>
@@ -332,27 +323,29 @@ export function MonitoringView({ overview, jobs, history, error, busy, onRefresh
 
             <article className="tile">
               <h3>Running now</h3>
-              {overview.executions.running.length === 0 ? (
-                <div className="empty-state running-empty">
-                  <Icon name="box" />
-                  <p>No containers running.</p>
-                </div>
-              ) : (
-                <ul className="runlist">
-                  {overview.executions.running.map((execution) => (
-                    <li key={execution.executionId}>
-                      <strong>{execution.jobName}</strong>
-                      <span className="muted">
-                        {execution.workloadType} on {execution.workerName} ·{" "}
-                        {execution.elapsedSeconds}s
-                        {execution.containerId
-                          ? ` · ${execution.containerId.slice(0, 12)}`
-                          : ""}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <div className="running-viewport">
+                {overview.executions.running.length === 0 ? (
+                  <div className="empty-state running-empty">
+                    <Icon name="box" />
+                    <p>No containers running.</p>
+                  </div>
+                ) : (
+                  <ul className="runlist">
+                    {overview.executions.running.map((execution) => (
+                      <li key={execution.executionId}>
+                        <strong>{execution.jobName}</strong>
+                        <span className="muted">
+                          {execution.workloadType} on {execution.workerName} ·{" "}
+                          {execution.elapsedSeconds}s
+                          {execution.containerId
+                            ? ` · ${execution.containerId.slice(0, 12)}`
+                            : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </article>
           </div>
 

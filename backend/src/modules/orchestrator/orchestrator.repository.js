@@ -23,7 +23,9 @@ export const prismaOrchestratorRepository = {
   },
   async listJobStates(limit) {
     const jobs = await prisma.job.findMany({
-      orderBy: [{ arrivalAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      // Choose the latest changes before applying the dashboard's row limit.
+      // Scheduler ordering is independent of this display order.
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }, { batchSequence: "asc" }, { id: "asc" }],
       take: limit,
       include: {
         assignedWorker: { select: { name: true } },

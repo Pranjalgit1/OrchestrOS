@@ -219,17 +219,11 @@ export function ControlPanel(props) {
             <Icon name={autoRunning ? "pause" : "play"} />
             {autoRunning ? "Pause Orchestrator" : "Run Orchestrator"}
           </button>
-          <p className="hint">
-            Runs eligible jobs until the queue drains. Pause stops new starts;
-            running jobs finish normally.
-          </p>
-          <p className="hint">Three study workers: 512 MiB, 1 GiB, and 1.5 GiB. Combined logical memory budget: 3 GiB.</p>
           <button type="button" className="btn btn-stop" onClick={props.onKillAll}
             disabled={disabled}>
             <Icon name="stop" />
             {busy === "kill-all" ? "Stopping workloads…" : "Kill all workloads"}
           </button>
-          <p className="hint">Pauses auto-run, stops OrchestrOS containers, cancels pending jobs, and releases reservations.</p>
           <details className="control-details">
             <summary>Cleanup</summary>
             <button type="button" className="btn btn-ghost" onClick={props.onClearGenerated}

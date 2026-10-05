@@ -21,6 +21,7 @@ function containerLabel(job) {
 }
 export function JobQueue({
   jobs,
+  totalJobs = jobs.length,
   selectedJobId,
   filter,
   onFilterChange,
@@ -33,8 +34,11 @@ export function JobQueue({
       <header className="panel-head">
         <div>
           <p className="eyebrow">Live job queue</p>
-          <h2>{jobs.length} job(s) in the database</h2>
+          <h2>{totalJobs} job(s) in the database</h2>
         </div>
+        <p className="hint hint-inline">
+          Latest updates first{totalJobs > jobs.length ? ` · showing ${jobs.length}` : ""}
+        </p>
       </header>
       <div className="filters" aria-label="Filter jobs by status">
         {STATUS_FILTERS.map((option) => (
@@ -63,7 +67,7 @@ export function JobQueue({
               <tr>
                 <th scope="col">Job</th>
                 <th scope="col">Type</th>
-                <th scope="col">CPU</th>
+                <th scope="col" title="Millicores: 1000m = 1 CPU core">CPU (m)</th>
                 <th scope="col">Memory</th>
                 <th scope="col">Prio</th>
                 <th scope="col">Est.</th>

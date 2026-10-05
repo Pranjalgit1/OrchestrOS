@@ -19,19 +19,21 @@ export function ActivityLog({ entries, onClear }) {
         </button>
       </header>
 
-      {entries.length === 0 ? (
-        <p className="activity-empty muted"><Icon name="chevron" />No actions yet.</p>
-      ) : (
-        <ul className="log">
-          {entries.map((entry) => (
-            <li key={entry.id} className={`log-${entry.kind}`}>
-              <span className="log-time mono">{entry.at}</span>
-              <span className="log-label">{entry.label}</span>
-              <span className="log-detail">{entry.detail}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className="activity-viewport">
+        {entries.length === 0 ? (
+          <p className="activity-empty muted"><Icon name="chevron" />No actions yet.</p>
+        ) : (
+          <ul className="log">
+            {entries.map((entry) => (
+              <li key={entry.id} className={`log-${entry.kind}`}>
+                <span className="log-time mono">{entry.at}</span>
+                <span className="log-label">{entry.label}</span>
+                <span className="log-detail">{entry.detail}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }

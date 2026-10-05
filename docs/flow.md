@@ -139,11 +139,13 @@ Repeating an already completed settle or release returns the saved outcome. It s
 
 The dashboard regularly calls `GET /api/orchestrator/state` to display jobs, worker assignments, reservations, and execution progress.
 
+The live job queue shows the most recently updated jobs first, including jobs that just started, finished, or were cancelled. This display order does not change the scheduler's policy. The response limit applies after sorting, so new changes remain visible even with a large job history.
+
 The monitoring panel reads resource use and job timing summaries. It does not make scheduling decisions.
 
 The sampler separately saves one usage snapshot per worker at the configured interval. Rows from the same pass share a timestamp. A repeated pass at that timestamp does not add duplicates. Old samples are removed according to the retention setting.
 
-The Capture sample button requests a sample immediately, even when the timer is disabled.
+The collapsed **Monitoring tools** section contains **Refresh now** (read current metrics without saving anything) and **Save snapshot** (record one chart snapshot per worker immediately, even when the timer is disabled). Both are optional during normal automatic monitoring. The chart's saved-worker-snapshot count is historical observations, not completed jobs or an ML training dataset. CPU values use millicores: `1000m = 1 core`.
 
 ## 11. Manage individual records
 

@@ -20,7 +20,7 @@ Use Node.js 22.12+ and npm 10+. Run commands from the repository root.
 - `npm run dev:backend` and `npm run dev:frontend`: start development servers in separate terminals; dashboard runs at `http://localhost:5173`.
 - `npm run docker:images`: rebuild the workload image after runner changes.
 - `npm run build`: check backend JavaScript syntax and build the frontend.
-- `npm test`: run backend tests sequentially.
+- `npm test`: run backend tests sequentially, then frontend polling tests.
 - `npm run prisma:validate`: validate the database schema.
 
 ## Coding Style & Naming Conventions

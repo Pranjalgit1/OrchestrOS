@@ -12,6 +12,8 @@
 }
 html {
   scroll-behavior: smooth;
+  /* Live updates must not pull the document toward a browser scroll anchor. */
+  overflow-anchor: none;
 }
 body {
   margin: 0;
@@ -372,7 +374,7 @@ a {
   display: block;
   margin: 12px 0 8px;
 }
-.error-banner, .running-banner {
+.error-banner {
   margin: 16px 0;
   padding: 12px 16px;
   border: 1px solid var(--danger);
@@ -380,11 +382,6 @@ a {
   color: var(--danger);
   background: var(--danger-soft);
   font-size: 12px;
-}
-.running-banner {
-  color: var(--success);
-  border-color: var(--success);
-  background: var(--success-soft);
 }
 
 /* Pipeline keeps all six stages visible on desktop. */
@@ -470,15 +467,6 @@ a {
 .worker-explanation {
   margin: -3px 0 16px;
 }
-.host-memory {
-  padding: 9px 12px;
-  margin: 0 0 16px;
-  border-radius: 6px;
-  color: var(--muted);
-  background: var(--surface-subtle);
-  font-size: 10px;
-  line-height: 1.6;
-}
 .worker-card {
   min-width: 0;
   padding: 18px;
@@ -500,6 +488,9 @@ a {
   gap: 6px;
   margin-top: 16px;
   flex-wrap: wrap;
+  height: 64px;
+  align-content: flex-start;
+  overflow: auto;
 }
 .worker-running small {
   font-size: 10px;
@@ -752,6 +743,11 @@ a {
 }
 
 /* Inspector and honest empty states. */
+.job-detail-viewport {
+  height: 320px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
 .facts {
   display: grid;
   grid-template-columns: 1fr;
@@ -860,9 +856,12 @@ a {
   margin: 0;
   min-height: 24px;
 }
+.activity-viewport {
+  height: 180px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
 .log {
-  max-height: 300px;
-  overflow-y: auto;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -916,6 +915,17 @@ a {
 .monitor-actions {
   display: flex;
   gap: 8px;
+}
+.monitor-tools {
+  max-width: 370px;
+  font-size: 12px;
+}
+.monitor-tools summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.monitor-tools .hint {
+  margin: 12px 0;
 }
 .monitor-grid {
   display: grid;
@@ -976,6 +986,13 @@ a {
 }
 .spark {
   margin: 0;
+  height: 218px;
+}
+.spark-placeholder {
+  height: 218px;
+  margin: 0;
+  display: flex;
+  align-items: center;
 }
 .spark svg {
   width: 100%;
@@ -1048,6 +1065,11 @@ a {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+.running-viewport {
+  height: 250px;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 .runlist li {
   display: flex;
