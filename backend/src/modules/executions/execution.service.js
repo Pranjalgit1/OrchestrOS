@@ -1,0 +1,503 @@
+import { ExecutionStatus } from "@prisma/client";
+import { env } from "../../config/env.js";
+import {
+  ConflictError,
+  NotFoundError,
+  ServiceUnavailableError,
+} from "../../errors/app-error.js";
+import { DockerApiError, DockerUnavailableError } from "./docker.client.js";
+import {
+  WORKLOAD_IMAGE,
+  containerNameFor,
+  describeExitCode,
+  deriveWorkloadSeed,
+  parseRunnerResult,
+} from "./execution.contract.js";
+import {
+  TERMINAL_EXECUTION_STATUSES,
+  prismaExecutionRepository,
+} from "./execution.repository.js";
+import { dockerContainerRuntime } from "./execution.runtime.js";
+export class ExecutionService {
+  repository;
+  runtime;
+  timeoutSeconds;
+  /** Background settlements, so shutdown and tests can wait for them. */
+  pending = new Map();
+  imageVerified = false;
+  stoppingAll = false;
+  starting = new Set();
+  cancelling = new Set();
+  constructor(
+    repository = prismaExecutionRepository,
+    runtime = dockerContainerRuntime,
+    timeoutSeconds = env.EXECUTION_TIMEOUT_SECONDS,
+  ) {
+    this.repository = repository;
+    this.runtime = runtime;
+    this.timeoutSeconds = timeoutSeconds;
+  }
+  describeRuntime() {
+    return this.runtime.describe().catch((error) => {
+      throw ExecutionService.toRuntimeError(error);
+    });
+  }
+  /**
+   * Claims the job, launches its container, and returns immediately.
+   *
+   * The container is awaited in the background and settled by `settle()`, which
+   * is idempotent, so the same finalisation path serves both the automatic
+   * completion and a manual recovery call.
+   */
+  async start(jobId) {
+    if (this.stoppingAll) {
+      throw new ConflictError("Workloads are being stopped", "WORKLOADS_STOPPING");
+    }
+    const request = this.startClaimed(jobId);
+    this.starting.add(request);
+    try {
+      return await request;
+    } finally {
+      this.starting.delete(request);
+    }
+  }
+  async startClaimed(jobId) {
+    await this.requireWorkloadImage();
+    const outcome = await this.repository.claim({ jobId });
+    switch (outcome.status) {
+      case "JOB_NOT_FOUND":
+        throw new NotFoundError("Job");
+      case "JOB_NOT_RUNNABLE":
+        throw new ConflictError(
+          `Only scheduled jobs placed on a worker can execute; job is ${outcome.jobStatus}`,
+          "JOB_NOT_EXECUTABLE",
+        );
+      case "NO_RESERVATION":
+        throw new ConflictError(
+          "Job must hold a resource reservation before it can execute",
+          "NO_ACTIVE_ALLOCATION",
+        );
+      case "EXECUTION_ALREADY_CLAIMED":
+        throw new ConflictError(
+          "Another request already started this job",
+          "EXECUTION_ALREADY_STARTED",
+        );
+      default:
+        break;
+    }
+    const { execution, job, allocation } = outcome.claimed;
+    const seed = deriveWorkloadSeed(job.name);
+    let started;
+    try {
+      started = await this.runtime.start({
+        executionId: execution.id,
+        jobId: job.id,
+        jobName: job.name,
+        workerId: allocation.workerId,
+        allocationId: allocation.id,
+        workloadType: job.workloadType,
+        workloadSize: job.workloadSize,
+        cpuMillicores: allocation.cpuMillicores,
+        memoryMiB: allocation.memoryMiB,
+        seed,
+      });
+    } catch (error) {
+      // The claim already moved the job to RUNNING, so a container that never
+      // started has to be recorded as a failed execution. That also releases the
+      // reservation, leaving no capacity held for work that is not happening.
+      const message = error instanceof Error ? error.message : String(error);
+      await this.repository.finalize({
+        executionId: execution.id,
+        executionStatus: ExecutionStatus.FAILED,
+        exitCode: null,
+        stdout: null,
+        stderr: null,
+        failureReason: `container could not be started: ${message}`,
+        result: null,
+        completedAt: new Date(),
+      });
+      throw ExecutionService.toRuntimeError(error);
+    }
+    const runningExecution = await this.repository.markStarted(
+      execution.id,
+      started.containerId,
+    );
+    this.track(execution.id, started.containerId);
+    return {
+      execution: runningExecution,
+      job,
+      container: {
+        id: started.containerId,
+        name: started.containerName,
+        image: WORKLOAD_IMAGE,
+        cpuMillicores: allocation.cpuMillicores,
+        memoryMiB: allocation.memoryMiB,
+        seed,
+      },
+      timeoutSeconds: this.timeoutSeconds,
+    };
+  }
+  /**
+   * Records a finished container's outcome and releases its reservation.
+   *
+   * Safe to call repeatedly: a settled execution is returned untouched.
+   */
+  async settle(executionId) {
+    const execution = await this.repository.findById(executionId);
+    if (!execution) {
+      throw new NotFoundError("Execution");
+    }
+    // An already recorded execution is answered from the database alone. Its
+    // container has normally been removed by then, so touching the daemon would
+    // only produce a spurious failure.
+    if (TERMINAL_EXECUTION_STATUSES.has(execution.status)) {
+      const job = await this.repository.findJobForExecution(executionId);
+      return {
+        execution,
+        job,
+        worker: null,
+        released: false,
+        alreadySettled: true,
+      };
+    }
+    if (!execution.containerId) {
+      return this.finalize(
+        executionId,
+        {
+          executionStatus: ExecutionStatus.FAILED,
+          failureReason: "execution never reached a container",
+          result: null,
+        },
+        null,
+      );
+    }
+    let running;
+    try {
+      running = await this.runtime.isRunning(execution.containerId);
+    } catch (error) {
+      if (!ExecutionService.isMissingContainer(error)) {
+        throw ExecutionService.toRuntimeError(error);
+      }
+      // The container is gone while the execution is still open, so its exit
+      // code and output are unrecoverable. That is recorded as a failure rather
+      // than guessed at, and the reservation is released.
+      return this.finalize(
+        executionId,
+        {
+          executionStatus: ExecutionStatus.FAILED,
+          failureReason:
+            "container is no longer present on the Docker daemon, so its outcome cannot be recovered",
+          result: null,
+        },
+        null,
+      );
+    }
+    if (running) {
+      throw new ConflictError(
+        "Container is still running; it will settle on its own when it exits",
+        "EXECUTION_STILL_RUNNING",
+      );
+    }
+    const exit = await this.runtime
+      .collect(execution.containerId)
+      .catch((error) => {
+        throw ExecutionService.toRuntimeError(error);
+      });
+    const settled = await this.finalize(
+      executionId,
+      ExecutionService.classify(
+        exit,
+        false,
+        this.timeoutSeconds,
+        execution.attempt,
+      ),
+      exit,
+    );
+    await this.removeContainer(execution.containerId);
+    return settled;
+  }
+  async get(executionId) {
+    const execution = await this.repository.findById(executionId);
+    if (!execution) {
+      throw new NotFoundError("Execution");
+    }
+    return execution;
+  }
+  list(query) {
+    const filter = {
+      jobId: query.jobId,
+      workerId: query.workerId,
+      status: query.status,
+      limit: query.limit,
+    };
+    return this.repository.list(filter);
+  }
+  /** Stop only labeled workload containers, then return committed capacity. */
+  async killAll() {
+    if (this.stoppingAll) {
+      throw new ConflictError("Workloads are already being stopped", "WORKLOADS_STOPPING");
+    }
+    this.stoppingAll = true;
+    const failures = [];
+    let cancelledExecutions = 0;
+    let stoppedContainers = 0;
+    let releasedReservations = 0;
+    try {
+      await Promise.allSettled([...this.starting]);
+      // If Docker is unreachable, do not pretend that live reservations are free.
+      const containers = await this.runtime.listManaged().catch((error) => {
+        throw ExecutionService.toRuntimeError(error);
+      });
+      const executions = await this.repository.findOpenExecutions();
+      for (const execution of executions) this.cancelling.add(execution.id);
+      const processed = new Set();
+      for (const execution of executions) {
+        const containerId = execution.containerId ?? containerNameFor(execution.id);
+        try {
+          await this.runtime.stopManaged(containerId);
+          const result = await this.finalize(execution.id, {
+            executionStatus: ExecutionStatus.CANCELLED,
+            failureReason: "Stopped by Kill all workloads",
+            result: null,
+          }, null);
+          if (!result.alreadySettled) cancelledExecutions += 1;
+          if (result.released) releasedReservations += 1;
+          await this.runtime.remove(containerId);
+          processed.add(containerId);
+        } catch (error) {
+          failures.push({ id: execution.id, message: error.message });
+        } finally {
+          this.cancelling.delete(execution.id);
+        }
+      }
+      // Also clean up labeled containers orphaned before their id was saved.
+      for (const container of containers) {
+        try {
+          if (!processed.has(container.Id)) {
+            await this.runtime.stopManaged(container.Id);
+            await this.runtime.remove(container.Id);
+          }
+          stoppedContainers += 1;
+        } catch (error) {
+          failures.push({ id: container.Id, message: error.message });
+        }
+      }
+      const queued = await this.repository.cancelNonExecutingJobs();
+      return {
+        stoppedContainers, cancelledExecutions,
+        cancelledJobs: queued.cancelledJobs,
+        releasedReservations: releasedReservations + queued.releasedReservations,
+        failures,
+      };
+    } finally {
+      this.stoppingAll = false;
+    }
+  }
+  /** Restore completion tracking after a backend restart. */
+  async recover() {
+    const executions = await this.repository.findOpenExecutions();
+    const failures = [];
+    for (const execution of executions) {
+      if (this.pending.has(execution.id) || this.stoppingAll) continue;
+      try {
+        let containerId = execution.containerId;
+        if (!containerId) {
+          // Container creation may have succeeded before markStarted committed.
+          const containers = await this.runtime.listManaged();
+          containerId = containers.find((item) => item.Labels?.["orchestros.execution.id"] === execution.id)?.Id;
+          if (containerId) await this.repository.markStarted(execution.id, containerId);
+          if (!containerId) {
+            await this.settle(execution.id);
+            continue;
+          }
+        }
+        if (await this.runtime.isRunning(containerId)) {
+          const elapsed = Date.now() - (execution.startedAt ?? execution.createdAt).getTime();
+          this.track(execution.id, containerId, Math.max(1, this.timeoutSeconds * 1000 - elapsed));
+        } else {
+          await this.settle(execution.id);
+        }
+      } catch (error) {
+        try {
+          if (ExecutionService.isMissingContainer(error)) await this.settle(execution.id);
+          else failures.push({ id: execution.id, message: error.message });
+        } catch (settleError) {
+          failures.push({ id: execution.id, message: settleError.message });
+        }
+      }
+    }
+    return { checked: executions.length, failures };
+  }
+  /** Waits for every in-flight background settlement. Used by tests and shutdown. */
+  async awaitPendingSettlements() {
+    while (this.pending.size > 0) {
+      await Promise.allSettled([...this.pending.values()]);
+    }
+  }
+  async requireWorkloadImage() {
+    if (this.imageVerified) return;
+    const description = await this.describeRuntime();
+    if (!description.imageAvailable) {
+      throw new ServiceUnavailableError(
+        `Workload image ${WORKLOAD_IMAGE} is not present on the Docker daemon. ` +
+          "Build it with `npm run docker:images` before starting executions.",
+        "WORKLOAD_IMAGE_MISSING",
+      );
+    }
+    this.imageVerified = true;
+  }
+  /** Awaits the container in the background and settles it once it exits. */
+  track(executionId, containerId, timeoutMs = this.timeoutSeconds * 1_000) {
+    const settlement = (async () => {
+      try {
+        const { timedOut } = await this.runtime.waitForExit(
+          containerId,
+          timeoutMs,
+        );
+        const exit = await this.runtime.collect(containerId);
+        const execution = await this.repository.findById(executionId);
+        await this.finalize(
+          executionId,
+          this.cancelling.has(executionId) ? {
+            executionStatus: ExecutionStatus.CANCELLED,
+            failureReason: "Stopped by Kill all workloads",
+            result: null,
+          } : ExecutionService.classify(
+            exit,
+            timedOut,
+            this.timeoutSeconds,
+            execution?.attempt ?? 1,
+          ),
+          exit,
+        );
+        await this.removeContainer(containerId);
+      } catch (error) {
+        const recorded = await this.repository.findById(executionId).catch(() => null);
+        if (recorded && TERMINAL_EXECUTION_STATUSES.has(recorded.status)) return;
+        // The execution stays RUNNING and its reservation stays held. `settle`
+        // is the documented recovery path; nothing is silently marked complete.
+        console.error(
+          `Background settlement failed for execution ${executionId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      } finally {
+        this.pending.delete(executionId);
+      }
+    })();
+    this.pending.set(executionId, settlement);
+  }
+  async finalize(executionId, outcome, exit) {
+    const finishedAt = exit?.finishedAt ? new Date(exit.finishedAt) : null;
+    const completedAt = finishedAt && Number.isFinite(finishedAt.getTime()) &&
+      finishedAt.getTime() > 0 && finishedAt.getTime() <= Date.now()
+      ? finishedAt : new Date();
+    const result = await this.repository.finalize({
+      executionId,
+      executionStatus: outcome.executionStatus,
+      exitCode: exit ? exit.exitCode : null,
+      stdout: exit
+        ? ExecutionService.annotate(exit.stdout, exit.stdoutTruncated)
+        : null,
+      stderr: exit
+        ? ExecutionService.annotate(exit.stderr, exit.stderrTruncated)
+        : null,
+      failureReason: outcome.failureReason,
+      result: outcome.result,
+      completedAt,
+    });
+    if (result.status === "EXECUTION_NOT_FOUND") {
+      throw new NotFoundError("Execution");
+    }
+    if (result.status === "ALREADY_FINALIZED") {
+      return {
+        execution: result.execution,
+        job: result.job,
+        worker: null,
+        released: false,
+        alreadySettled: true,
+      };
+    }
+    return {
+      execution: result.execution,
+      job: result.job,
+      worker: result.worker,
+      released: result.released,
+      alreadySettled: false,
+    };
+  }
+  async removeContainer(containerId) {
+    try {
+      await this.runtime.remove(containerId);
+    } catch (error) {
+      // A leftover container is an operational annoyance, not a data problem:
+      // the exit code and logs are already committed.
+      console.error(
+        `Failed to remove container ${containerId}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+  /** Turns a container exit into a recorded execution outcome. */
+  static classify(exit, timedOut, timeoutSeconds, attempt) {
+    if (timedOut) {
+      return {
+        // Interrupted rather than failed: the workload did not misbehave, the
+        // orchestrator stopped it. Interrupted jobs stay eligible for requeue.
+        executionStatus: ExecutionStatus.INTERRUPTED,
+        failureReason: `execution exceeded the ${timeoutSeconds}s limit and the container was stopped`,
+        result: null,
+      };
+    }
+    if (exit.exitCode !== 0) {
+      return {
+        executionStatus: ExecutionStatus.FAILED,
+        failureReason: exit.daemonError
+          ? `${describeExitCode(exit.exitCode, exit.oomKilled)}: ${exit.daemonError}`
+          : describeExitCode(exit.exitCode, exit.oomKilled),
+        result: null,
+      };
+    }
+    const parsed = parseRunnerResult(exit.stdout);
+    if (!parsed) {
+      return {
+        executionStatus: ExecutionStatus.FAILED,
+        failureReason:
+          "workload runner exited successfully but produced no valid result line",
+        result: null,
+      };
+    }
+    return {
+      executionStatus: ExecutionStatus.COMPLETED,
+      failureReason: null,
+      result: {
+        runner: parsed.runner,
+        workloadType: parsed.workloadType,
+        requestedSize: parsed.workloadSize,
+        effectiveSize: parsed.effectiveSize,
+        seed: parsed.seed,
+        operations: parsed.operations,
+        checksum: parsed.checksum,
+        runnerDurationMs: parsed.durationMs,
+        exitCode: exit.exitCode,
+        attempt,
+        ...(exit.startedAt ? { containerStartedAt: exit.startedAt } : {}),
+        ...(exit.finishedAt ? { containerFinishedAt: exit.finishedAt } : {}),
+      },
+    };
+  }
+  static annotate(output, truncated) {
+    if (output.length === 0) return truncated ? "[truncated]" : null;
+    return truncated ? `${output}\n[truncated]` : output;
+  }
+  /** True when the daemon no longer knows about the container. */
+  static isMissingContainer(error) {
+    return error instanceof DockerApiError && error.statusCode === 404;
+  }
+  static toRuntimeError(error) {
+    if (error instanceof DockerUnavailableError) {
+      return new ServiceUnavailableError(error.message, "DOCKER_UNAVAILABLE");
+    }
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}
+export const executionService = new ExecutionService();

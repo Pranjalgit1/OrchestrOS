@@ -5,7 +5,6 @@ node_modules/
 dist/
 coverage/
 .vite/
-*.tsbuildinfo
 *.log
 npm-debug.log*
 
@@ -17,7 +16,9 @@ npm-debug.log*
 # Local database files and bind-mounted data
 *.db
 *.db-journal
-postgres-data/
+mysql-data/
+
+
 
 # LaTeX build artifacts
 *.aux

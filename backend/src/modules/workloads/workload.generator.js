@@ -1,0 +1,200 @@
+import { WorkloadPattern, WorkloadType } from "@prisma/client";
+export const GENERATOR_VERSION = "v2";
+// Study limits are inherent in generation, rather than an optional mode.
+export const STUDY_LIMITS = { cpuMillicores: 1_000, memoryMiB: 256, durationSeconds: 10 };
+const MIN_WORKLOAD_SIZE = 1;
+const MAX_WORKLOAD_SIZE = 100_000_000;
+const workloadTypes = Object.values(WorkloadType);
+const profiles = {
+  LIGHT: {
+    cpu: [100, 200, 250],
+    memory: [64, 96, 128],
+    duration: [2, 4, 6],
+    priority: [1, 2, 3, 4, 5],
+  },
+  MEDIUM: {
+    cpu: [250, 350, 500],
+    memory: [96, 128, 192],
+    duration: [4, 6, 8],
+    priority: [2, 4, 6, 8],
+  },
+  HEAVY: {
+    cpu: [500, 750, 1_000],
+    memory: [128, 192, 256],
+    duration: [6, 8, 10],
+    priority: [5, 7, 9, 10],
+  },
+};
+export function createMulberry32(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let value = Math.imul(state ^ (state >>> 15), 1 | state);
+    value ^= value + Math.imul(value ^ (value >>> 7), 61 | value);
+    return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+function randomInteger(random, minimum, maximum) {
+  return minimum + Math.floor(random() * (maximum - minimum + 1));
+}
+function pick(random, values) {
+  const value = values[Math.floor(random() * values.length)];
+  if (value === undefined) {
+    throw new Error("Generator pool must not be empty");
+  }
+  return value;
+}
+function clampSize(value) {
+  return Math.min(MAX_WORKLOAD_SIZE, Math.max(MIN_WORKLOAD_SIZE, value));
+}
+/**
+ * Derives workload size from the estimated duration and requested CPU so that the
+ * persisted size reflects roughly the amount of work the estimate represents.
+ */
+export function derivedWorkloadSize(
+  workloadType,
+  estimatedDurationSeconds,
+  cpuRequiredMillicores,
+) {
+  const cpuSeconds = (estimatedDurationSeconds * cpuRequiredMillicores) / 1_000;
+  switch (workloadType) {
+    case WorkloadType.SLEEP:
+      return clampSize(estimatedDurationSeconds);
+    case WorkloadType.CPU_INTENSIVE:
+      return clampSize(Math.round(cpuSeconds * 200_000));
+    case WorkloadType.SORTING:
+      return clampSize(Math.round(cpuSeconds * 120_000));
+    case WorkloadType.DATA_PROCESSING:
+      return clampSize(Math.round(cpuSeconds * 2_000));
+    case WorkloadType.MATRIX_MULTIPLICATION:
+      return clampSize(
+        Math.max(2, Math.round(Math.cbrt(cpuSeconds * 2_000_000))),
+      );
+    default:
+      return clampSize(Math.round(cpuSeconds * 1_000));
+  }
+}
+function profileFor(pattern, index, count) {
+  if (pattern === WorkloadPattern.LIGHT) return "LIGHT";
+  if (pattern === WorkloadPattern.HEAVY) return "HEAVY";
+  if (pattern === WorkloadPattern.INCREASING) {
+    const progress = index / Math.max(1, count - 1);
+    return progress < 1 / 3 ? "LIGHT" : progress < 2 / 3 ? "MEDIUM" : "HEAVY";
+  }
+  if (pattern === WorkloadPattern.DECREASING) {
+    const progress = index / Math.max(1, count - 1);
+    return progress < 1 / 3 ? "HEAVY" : progress < 2 / 3 ? "MEDIUM" : "LIGHT";
+  }
+  if (pattern === WorkloadPattern.PERIODIC) {
+    return ["LIGHT", "MEDIUM", "HEAVY", "MEDIUM"][index % 4] ?? "MEDIUM";
+  }
+  if (pattern === WorkloadPattern.BURST) {
+    return Math.floor(index / 5) % 2 === 0 ? "HEAVY" : "LIGHT";
+  }
+  return "MEDIUM";
+}
+function arrivalOffsets(pattern, count, random, custom) {
+  if (pattern === "IMMEDIATE") return Array(count).fill(0);
+  if (pattern === WorkloadPattern.CUSTOM) {
+    if (!custom)
+      throw new Error("CUSTOM pattern requires custom configuration");
+    return [...custom.arrivalOffsetsSeconds];
+  }
+  if (pattern === WorkloadPattern.BURST) {
+    return Array.from(
+      { length: count },
+      (_, index) => Math.floor(index / 5) * 30,
+    );
+  }
+  if (pattern === WorkloadPattern.CONSTANT) {
+    return Array.from({ length: count }, (_, index) => index * 10);
+  }
+  const offsets = [0];
+  const periodicGaps = [2, 2, 2, 20];
+  for (let index = 1; index < count; index += 1) {
+    let gap;
+    if (pattern === WorkloadPattern.LIGHT) gap = randomInteger(random, 20, 40);
+    else if (pattern === WorkloadPattern.MEDIUM)
+      gap = randomInteger(random, 8, 16);
+    else if (pattern === WorkloadPattern.HEAVY)
+      gap = randomInteger(random, 2, 6);
+    else if (pattern === WorkloadPattern.INCREASING) {
+      gap = Math.round(20 - (18 * index) / Math.max(1, count - 1));
+    } else if (pattern === WorkloadPattern.DECREASING) {
+      gap = Math.round(2 + (18 * index) / Math.max(1, count - 1));
+    } else {
+      gap = periodicGaps[(index - 1) % periodicGaps.length] ?? 2;
+    }
+    offsets.push((offsets[index - 1] ?? 0) + gap);
+  }
+  return offsets;
+}
+export function generateWorkloadSpecs(input) {
+  const random = createMulberry32(input.seed);
+  const offsets = arrivalOffsets(
+    input.pattern,
+    input.count,
+    random,
+    input.custom,
+  );
+  const typePool = input.custom?.workloadTypes ?? input.workloadTypes ?? workloadTypes;
+  return Array.from({ length: input.count }, (_, index) => {
+    const sequence = index + 1;
+    const name = `workload-${input.seed}-${String(sequence).padStart(3, "0")}`;
+    const workloadType = pick(random, typePool);
+    if (input.custom) {
+      const custom = input.custom;
+      return {
+        sequence,
+        name,
+        workloadType,
+        workloadSize: randomInteger(
+          random,
+          custom.workloadSize.min,
+          custom.workloadSize.max,
+        ),
+        cpuRequiredMillicores: randomInteger(
+          random,
+          custom.cpuRequiredMillicores.min,
+          custom.cpuRequiredMillicores.max,
+        ),
+        memoryRequiredMiB: randomInteger(
+          random,
+          custom.memoryRequiredMiB.min,
+          custom.memoryRequiredMiB.max,
+        ),
+        estimatedDurationSeconds: randomInteger(
+          random,
+          custom.estimatedDurationSeconds.min,
+          custom.estimatedDurationSeconds.max,
+        ),
+        priority: randomInteger(
+          random,
+          custom.priority.min,
+          custom.priority.max,
+        ),
+        arrivalOffsetSeconds: offsets[index] ?? 0,
+      };
+    }
+    const profile = profiles[profileFor(input.pattern, index, input.count)];
+    const cpuRequiredMillicores = pick(random, profile.cpu);
+    const memoryRequiredMiB = pick(random, profile.memory);
+    const estimatedDurationSeconds = pick(random, profile.duration);
+    const priority = pick(random, profile.priority);
+    return {
+      sequence,
+      name,
+      workloadType,
+      workloadSize: derivedWorkloadSize(
+        workloadType,
+        estimatedDurationSeconds,
+        cpuRequiredMillicores,
+      ),
+      cpuRequiredMillicores,
+      memoryRequiredMiB,
+      estimatedDurationSeconds,
+      priority,
+      arrivalOffsetSeconds: offsets[index] ?? 0,
+    };
+  });
+}

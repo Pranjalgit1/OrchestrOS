@@ -9,7 +9,7 @@ RUN npm ci
 
 COPY backend backend
 RUN npm run prisma:generate --workspace backend
-RUN npm run build --workspace backend
+RUN npm run check --workspace backend
 
 EXPOSE 4000
 

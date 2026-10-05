@@ -1,21 +1,23 @@
 name: orchestr-os
 
 services:
-  postgres:
-    image: postgres:17.6-alpine
+  mysql:
+    image: mysql:8.4
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-orchestr_os}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestr_os}
-      POSTGRES_DB: ${POSTGRES_DB:-orchestr_os}
+      MYSQL_USER: ${MYSQL_USER:-orchestr_os}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-orchestr_os}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-orchestr_os}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-orchestr_os_root}
     ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
     volumes:
-      - orchestr-os-postgres-data:/var/lib/postgresql/data
+      - orchestr-os-mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_PASSWORD}\" mysql --protocol=TCP -h 127.0.0.1 -u \"$${MYSQL_USER}\" \"$${MYSQL_DATABASE}\" -e 'SELECT 1'"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
     restart: unless-stopped
 
   database-setup:
@@ -24,9 +26,9 @@ services:
       dockerfile: backend/Dockerfile
     command: ["npm", "run", "db:setup", "--workspace", "backend"]
     environment:
-      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://orchestr_os:orchestr_os@postgres:5432/orchestr_os?schema=public}
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-mysql://orchestr_os:orchestr_os@mysql:3306/orchestr_os}
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
     restart: "no"
 
@@ -39,9 +41,18 @@ services:
       HOST: 0.0.0.0
       PORT: 4000
       CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-5173}
-      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://orchestr_os:orchestr_os@postgres:5432/orchestr_os?schema=public}
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-mysql://orchestr_os:orchestr_os@mysql:3306/orchestr_os}
+      DOCKER_SOCKET_PATH: /var/run/docker.sock
+      EXECUTION_TIMEOUT_SECONDS: ${EXECUTION_TIMEOUT_SECONDS:-300}
+      EXECUTION_LOG_LIMIT_BYTES: ${EXECUTION_LOG_LIMIT_BYTES:-8192}
     ports:
       - "127.0.0.1:${PORT:-4000}:4000"
+    volumes:
+      # Required to run workload containers. This grants the backend container
+      # full control of the host Docker daemon, which is root-equivalent on the
+      # host. Accepted deliberately for a local single-machine prototype and
+      # recorded in docs/decision.md; the frontend never receives this access.
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       database-setup:
         condition: service_completed_successfully
@@ -73,4 +84,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  orchestr-os-postgres-data:
+  orchestr-os-mysql-data:

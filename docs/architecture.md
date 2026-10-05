@@ -1,205 +1,240 @@
-# OrchestrOS Architecture
+# How the project is built
 
-## 1. Project purpose
+OrchestrOS runs computing jobs on one development computer. It combines a browser dashboard, a JavaScript backend, MySQL, and Docker.
 
-OrchestrOS is a Kubernetes-inspired local container orchestration prototype. It will schedule controlled computational workloads, place them on logical workers according to available resources, execute them in Docker containers, protect resource accounting with PostgreSQL transactions and row locks, monitor system state, recover interrupted work, and use workload forecasting to assist proactive autoscaling.
-
-It is an educational OS + DBMS + container-orchestration project. It is not Kubernetes, a Kubernetes API implementation, a cloud platform, or a basic scheduling simulator.
-
-## 2. System boundary
-
-The complete MVP runs on one physical development machine using local CPU and RAM. OrchestrOS manages **logical workers**: database-backed representations of orchestration capacity. A logical worker is not a VM, container host, physical node, or separate computer.
-
-Inside the boundary:
-
-- React dashboard
-- Node.js/Express modular backend
-- PostgreSQL authoritative state
-- Prisma persistence adapter
-- Docker-controlled workload execution in a later phase
-- Python/scikit-learn forecasting in a later phase
-
-Outside the boundary:
-
-- Cloud infrastructure and multi-machine clusters
-- Kubernetes installation or API compatibility
-- Arbitrary user commands and arbitrary Docker images
-- Redis, Kafka, service discovery, and complex distributed networking
-- GPU orchestration and authentication in the initial MVP
-
-## 3. Architectural style and current phase
-
-The backend is a modular monolith. Domain responsibilities are isolated by route, service, and repository boundaries while running in one Node.js process. This avoids artificial service networking on one development machine.
-
-The npm-workspace repository contains:
+The browser asks for work to happen. The backend makes the decisions. MySQL stores what happened. Docker runs each workload.
 
 ```text
-frontend/  React + Vite dashboard
-backend/   Express API, domain modules, Prisma
-postgres   Local PostgreSQL service supplied by Compose
+Browser: React dashboard
+          |
+          | API requests
+          v
+Backend: Express application
+          |                 |
+          v                 v
+       MySQL          Docker containers
+   saved records       actual workloads
 ```
 
-Phase 1 implements the persistence and management foundation: schema migration, logical-worker seed, job and worker create/read APIs, job lifecycle rules, queued-job cancellation, structured errors, and database readiness. Later components below remain intended architecture unless `docs/flow.md` identifies a real code path.
+## 1. Main parts
 
-## 4. Major components and responsibilities
-
-| Component | Responsibility | Status |
+| Part | Main job | Where to look |
 | --- | --- | --- |
-| Frontend dashboard | Display system state and call REST APIs | Foundation only |
-| Backend API | Validate requests and expose modular orchestration operations | Implemented foundation |
-| Job manager | Create/read jobs and enforce lifecycle/cancellation | Phase 1 implemented scope |
-| Job queue | Persist queued jobs in PostgreSQL; later support concurrent scheduling | Persistence implemented; scheduling pending |
-| Worker manager | Create/read logical capacity records; later manage heartbeats/state | Phase 1 implemented scope |
-| Scheduler | Select the next job using FCFS, SJF, Priority, or Round Robin | Phase 3 |
-| Placement manager | Select an eligible worker using First Fit, Least Loaded, or Balanced | Phase 4 |
-| Resource manager | Reserve/release CPU and memory under transactions and row locks | Phase 5 |
-| Container manager | Execute predefined workloads with Docker limits and capture results | Phase 6 |
-| Monitoring manager | Persist operational and experiment metrics | Phase 7 |
-| Reactive autoscaler | Adjust bounded logical-worker capacity using thresholds/cooldowns | Phase 8 |
-| Failure detector | Detect stale heartbeats and reconcile/requeue interrupted work | Phase 9 |
-| ML predictor | Forecast demand and advise the autoscaler | Phase 10–11 |
-| Workload generator | Generate controlled, deterministic workloads from a seed | Phase 2 |
-| Experiment manager | Re-run identical workloads across policies and compare results | Phase 12 |
+| Dashboard | Show controls, jobs, workers, results, and graphs | `frontend/src/` |
+| API setup | Connect routes, validate request bodies, and report errors | `backend/src/app.js` |
+| Server | Listen for requests, start monitoring, and handle shutdown | `backend/src/server.js` |
+| Orchestrator | Call scheduling, placement, reservation, and execution in order | `backend/src/modules/orchestrator/` |
+| Jobs and workers | Create and read their database records | `backend/src/modules/jobs/`, `backend/src/modules/workers/` |
+| Workload generator | Create repeatable batches of job specifications | `backend/src/modules/workloads/` |
+| Scheduler | Choose the next job | `backend/src/modules/scheduler/` |
+| Placement | Choose a worker | `backend/src/modules/placement/` |
+| Resources | Reserve and release CPU and memory | `backend/src/modules/resources/` |
+| Executions | Start Docker containers and record results | `backend/src/modules/executions/` |
+| Monitoring | Read current values and save usage history | `backend/src/modules/monitoring/` |
+| Workload program | Do the actual calculation inside a container | `workload-runner/run.js` |
 
-## 5. Technology stack
+Most backend features use the same file pattern:
 
-- Frontend: React 19, Vite 8, TypeScript
-- Backend: Node.js, Express 5, TypeScript, Zod
-- Database: PostgreSQL 17
-- ORM/database client: Prisma 6
-- Runtime isolation: Docker and Docker Desktop locally
-- ML: Python and scikit-learn, introduced after monitoring data exists
-- Package layout: npm workspaces
-- Local topology: Docker Compose
-- Tests: Node.js built-in test runner executed through TSX
+| File ending | Purpose |
+| --- | --- |
+| `.routes.js` | Connect an API URL to its handler |
+| `.schemas.js` | Check that incoming values are allowed |
+| `.service.js` | Apply the feature's rules |
+| `.repository.js` | Read and change database records |
+| `.test.js` | Check behavior with controlled inputs |
+| `.integration.test.js` | Check behavior using a real database or container |
 
-Exact versions are pinned in package manifests and the lockfile.
+Some features also have calculation-only files, such as `scheduler.policies.js` and `placement.accounting.js`. These are easier to test because they do not need a server or database.
 
-## 6. Job model and lifecycle
+## 2. What MySQL stores
 
-A job is OrchestrOS's persistent representation of a controlled workload. It records workload type, requested CPU/memory, estimated duration, priority, lifecycle timestamps, assignment/execution references, result, and failure reason. API clients cannot set status, assignment, container identity, result, or failure details when creating a job.
+The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). The initial SQL is in [the MySQL migration](../backend/prisma/migrations/20261005000000_mysql_initial/migration.sql).
 
-Required states are `CREATED`, `QUEUED`, `WAITING`, `SCHEDULED`, `RUNNING`, `COMPLETED`, `FAILED`, `INTERRUPTED`, and `CANCELLED`. Valid transitions are centralized in `job.transitions.ts`. Phase 1 creates jobs directly as `QUEUED` and exposes cancellation only for queued jobs. Repeated cancellation is idempotent. Runtime cancellation remains disabled until container termination and transactional resource release exist.
+| Table | What one row means |
+| --- | --- |
+| `workload_batches` | A saved group of generated jobs and the settings used to create them |
+| `jobs` | One job, its resource needs, current state, timing, and result |
+| `workers` | One logical worker's capacity, reserved resources, and state |
+| `resource_allocations` | A job's CPU and memory reservation, including released history |
+| `job_executions` | One attempt to run a job in a container |
+| `worker_samples` | One worker's resource-use snapshot at a particular time |
 
-Queued jobs are stored only in PostgreSQL. There is no in-memory or Redis queue.
+The queue is saved in `jobs`. There is no second queue that must be kept in sync with MySQL.
 
-## 7. Logical worker model
+Prisma is the library the backend uses for most database operations. Raw SQL is used where needed, including row locks and some monitoring calculations.
 
-Logical-worker capacity uses integer units:
+## 3. Jobs and states
 
-- CPU: millicores (`1000` = one logical CPU core)
-- Memory: MiB (`1024` = one GiB)
+Jobs created manually or by the generator start as `QUEUED`.
 
-The idempotent seed creates:
+```text
+QUEUED -> SCHEDULED -> RUNNING -> COMPLETED
+   |                       | -> FAILED
+   |                       | -> INTERRUPTED
+   v
+CANCELLED
+```
 
-| Worker | CPU | Memory |
+| State | Meaning |
+| --- | --- |
+| `QUEUED` | Waiting to be chosen; its arrival time may still be in the future |
+| `SCHEDULED` | Chosen by the scheduler; it may still need a worker or reservation |
+| `RUNNING` | Execution has been claimed; the container is starting or running |
+| `COMPLETED` | Finished successfully and returned a valid result |
+| `FAILED` | Could not start, exited with an error, or did not return a valid result |
+| `INTERRUPTED` | The system stopped the run after its time limit |
+| `CANCELLED` | Cancelled while queued |
+
+`CREATED` and `WAITING` also exist in the allowed state model, but normal job creation currently starts at `QUEUED`. State-change rules live in `job.transitions.js`.
+
+The dashboard also shows stages such as placed and reserved. These come from the job's worker and allocation records; they are not extra job-status values.
+
+## 4. Logical workers and units
+
+Workers are saved capacity budgets on the same computer. Their capacity values do not create extra physical hardware.
+
+- **CPU:** 1000 millicores equals one logical core.
+- **Memory:** 1024 MiB equals one GiB.
+
+The setup script creates these workers if they are missing:
+
+| Worker | CPU in millicores | Memory in MiB |
 | --- | ---: | ---: |
-| `worker-1` | 2000 millicores | 2048 MiB |
-| `worker-2` | 4000 millicores | 4096 MiB |
-| `worker-3` | 6000 millicores | 8192 MiB |
+| `worker-1` | 500 | 512 |
+| `worker-2` | 1000 | 1024 |
+| `worker-3` | 1500 | 1536 |
 
-Worker states are `STARTING`, `ACTIVE`, `IDLE`, `BUSY`, `STOPPING`, and `FAILED`. Phase 1 seeds and manually creates workers as `IDLE` with zero allocation. Capacity is accounting tracked by OrchestrOS, not evidence of separate hardware. The API validates bounded capacities and does not accept allocated counters or status from clients.
+These built-in budgets total 3 GiB. They are scheduling limits, not preallocated physical memory or separate machines. Container memory limits are ceilings; actual Windows/WSL memory use includes other applications and the Docker VM. The dashboard reports free memory on the backend host separately from reservations. Setup and backend startup apply the budgets to idle default workers automatically; active reservations are preserved. Recovery also applies them when old executions finish.
 
-## 8. Scheduler
+New workers start `IDLE` with nothing reserved. A worker with a reservation becomes `BUSY`; it becomes `IDLE` again when its reserved CPU and memory reach zero. The model also supports `STARTING`, `ACTIVE`, `STOPPING`, and `FAILED`.
 
-The scheduler answers only **which job should run next** and will implement FCFS, SJF, Priority, and Round Robin. It is not implemented in Phase 1. Scheduling policy selection must not contain worker-placement logic, and experiments must reuse the same generated workload seed.
+## 5. Repeatable workload generation
 
-## 9. Resource-aware placement
+The generator supports batches of exactly 10, 25, 50, or 100 jobs. A seed is a number that lets it repeat the same choices.
 
-Placement answers **which eligible worker should run the selected job**. Planned strategies are First Fit, Least Loaded, and Resource-Aware/Balanced. Eligibility requires enough available CPU and memory on a runnable worker. This component is not implemented in Phase 1.
+For the same generator version, seed, count, pattern, and custom settings, it produces the same job specifications and arrival offsets. New database IDs and default start times will still differ.
 
-Any preselection result remains advisory until capacity is rechecked while holding a database row lock.
+The current generator version is `v2`. Tests pin its output, so a deliberate change to its choices should use a new version. Historical batches keep their saved version and specifications.
 
-## 10. Database and consistency
+All predefined profiles are small by design. Light uses 100-250m CPU, 64-128 MiB, and 2-6 second estimates; medium uses 250-500m, 96-192 MiB, and 4-8 seconds; heavy uses 500-1000m, 128-256 MiB, and 6-10 seconds. Heavy is relative to this study scale. Every job fits at least one built-in worker. Actual compute duration varies with hardware and container CPU limits.
 
-PostgreSQL is the authoritative source of truth. Phase 1 introduces exactly four domain models:
+| Pattern | Meaning |
+| --- | --- |
+| `IMMEDIATE` | All jobs are eligible together, using the medium resource profile |
+| `LIGHT` | Small resource requests, with 20-40 second arrival gaps |
+| `MEDIUM` | Medium requests, with 8-16 second gaps |
+| `HEAVY` | Larger requests, with 2-6 second gaps |
+| `CONSTANT` | Varied medium requests, with a fixed 10 second gap |
+| `BURST` | Five jobs arrive together; the next group arrives 30 seconds later |
+| `INCREASING` | Requests grow larger and arrivals get closer together |
+| `DECREASING` | Requests become smaller and arrivals spread out |
+| `PERIODIC` | Repeating request patterns and gaps of 2, 2, 2, then 20 seconds |
+| `CUSTOM` | You choose allowed types, value ranges, and exact arrival offsets |
 
-- `Job`: lifecycle and controlled workload request
-- `Worker`: logical capacity and allocated counters
-- `ResourceAllocation`: durable future reservation/release history
-- `JobExecution`: durable future execution-attempt history
+`SUDDEN_BURST` is accepted as another input name for `BURST`.
 
-The allocation and execution tables are schema foundations only; production Phase 1 code does not create allocation or execution records. Foreign keys preserve audit records, indexes support stable queue/relationship access, and SQL `CHECK` constraints enforce positive requests/capacities, bounded priority, nonnegative allocations, and no worker over-allocation. A partial unique index allows only one `RESERVED` allocation per job, while a composite foreign key guarantees each execution references an allocation for the same job and worker.
+Each job has a type, size, CPU request, memory request, duration estimate, priority, and arrival time. The optional type selection applies to every predefined arrival pattern. Size is based on the duration and CPU estimate: seconds for sleep, iterations for CPU, elements for sorting, records for data, and dimension for matrix multiplication. Custom generation also enforces study limits, including a separate size ceiling for each selected type.
 
-Phase 5 resource reservation and release must begin a transaction, lock the worker with `SELECT ... FOR UPDATE`, recheck capacity inside the transaction, update allocation/worker/job state atomically, and commit before starting a container. No container may start from a stale pre-transaction check.
+The batch and all its jobs are saved together. Reusing a batch copies its saved job specifications instead of generating new choices.
 
-Compose runs `prisma migrate deploy` and the idempotent worker seed in a one-shot setup service before the backend can start. Health checks query all four Phase 1 models through Prisma, so a missing required table reports degraded readiness.
+## 6. Scheduling: which job goes next?
 
-## 11. Docker execution
+Only `QUEUED` jobs whose arrival time has passed can be selected.
 
-The future container manager will be the only component permitted to access Docker. The frontend never accesses the Docker daemon. Users will select predefined workload types and validated parameters rather than commands or image names.
+| Policy | How it chooses |
+| --- | --- |
+| `FCFS` | First arrival goes first; ties use creation time, batch position, then ID |
+| `SJF` | Shortest estimated duration goes first; ties use arrival order |
+| `PRIORITY` | Highest effective priority goes first; ties use arrival order |
+| `ROUND_ROBIN` | Fewest previous scheduling rounds goes first; ties use arrival order |
 
-Phase 1 Compose containers host the application stack; they are infrastructure containers, not workload containers managed by OrchestrOS.
+Priority ranges from 1 to 10, with 10 highest. Waiting jobs gain one effective priority level per full minute waited, up to 10. This helps old jobs get a turn.
 
-## 12. Monitoring
+Round Robin records a time slice, normally 10 seconds, and increases the job's round count. The accepted time slice is 1-3600 seconds. Actually pausing and resuming a running container is still planned.
 
-Monitoring will collect only metrics needed for operations and experiments: queue length, arrivals, job timing/outcomes, throughput, worker utilization, container state, heartbeats, scaling actions, recovery results, and transaction conflicts/waits. Important history will be stored in PostgreSQL. Monitoring is not implemented in Phase 1.
+The scheduler changes a job only if it is still queued. This stops two simultaneous scheduling requests from both selecting the same job successfully.
 
-## 13. Autoscaling
+## 7. Placement: which worker should receive it?
 
-Reactive autoscaling will be implemented before ML. It will enforce minimum/maximum logical workers, sustained thresholds, idle safety checks, cooldowns, and logged reasons. ML will forecast demand from actual historical metrics; the bounded autoscaler—not the model—will make capacity decisions. Neither mode is implemented in Phase 1.
+Placement chooses a worker for an already scheduled job. It saves the choice, strategy, and time. Reservation happens afterward.
 
-## 14. Failure recovery
+A worker must be `IDLE`, `ACTIVE`, or `BUSY`, and its calculated free CPU and memory must both fit the job. Placement considers saved reservation counters and the requirements of jobs already assigned in scheduled/running states.
 
-Workers will emit heartbeats. A stale heartbeat will eventually trigger worker failure, resource reconciliation, interruption, requeue, and traceable recovery. Controlled workloads will restart from reproducible parameters unless a later documented workload supports checkpoints. This flow is not implemented in Phase 1.
+| Strategy | How it chooses |
+| --- | --- |
+| `FIRST_FIT` | First suitable worker in name order |
+| `LEAST_LOADED` | Worker with the lowest current load, using the higher of CPU and memory usage |
+| `RESOURCE_AWARE` | Worker that would have the best balance and lowest high usage after adding the job |
 
-## 15. Frontend/backend and API boundary
+The Resource Aware score is `0.7 * peak + 0.3 * imbalance`. Here, peak is the higher of the expected CPU and memory usage fractions, and imbalance is their difference. Lower scores win. Worker names break ties.
 
-The browser communicates only with REST endpoints under `/api`, with Vite proxying to Express. Express applies a 16 KB JSON limit, strict Zod schemas, a specific CORS origin, structured validation/domain errors, and generic internal errors.
+If no worker fits, placement reports insufficient resources. A saved placement is only a plan: reservation checks the real counters again before granting capacity.
 
-Phase 1 endpoints are:
+## 8. Reservation: make the capacity claim real
 
-- `POST /api/jobs`
-- `GET /api/jobs`
-- `GET /api/jobs/:id`
-- `POST /api/jobs/:id/cancel`
-- `POST /api/workers`
-- `GET /api/workers`
-- `GET /api/workers/:id`
-- `GET /api/health`
+Suppose a worker has 1000 millicores free and two jobs each ask for 700. Both jobs cannot be granted 700.
 
-Authentication is outside the initial MVP. Published ports bind to loopback by default.
+The reservation code starts a **transaction**, locks the worker's row, checks for an existing reservation, and reads its current free capacity. It then saves the allocation and updates the worker counters together. A competing request for that worker waits, then checks the updated values.
 
-## 16. Main target data flow
+If anything fails, the transaction undoes its changes. The worker cannot be left with only half of the reservation saved.
 
-```text
-Workload Generator / User
-          |
-          v
-PostgreSQL-backed Job Queue
-          |
-          v
-Scheduler -> Placement -> Transactional Reservation
-          |
-          v
-Controlled Docker Execution
-          |
-          v
-Monitoring / Result -> Transactional Release
-```
+MySQL also checks these rules:
 
-Supporting future loops:
+- Reserved CPU and memory cannot be negative or exceed capacity.
+- A job can have only one live `RESERVED` allocation.
+- Older released or rolled-back allocations can remain as history.
+- An execution must refer to an allocation with the same job and worker.
 
-```text
-Monitoring -> Reactive or ML-assisted Autoscaler -> Logical worker capacity
-Heartbeat -> Failure Detector -> Reconciliation -> Job requeue
-Historical metrics -> ML Predictor -> Forecast -> Bounded autoscaler decision
-```
+The one-live-reservation rule uses a functional unique index: it checks the job ID only for reserved rows and ignores historical rows for uniqueness. The SQL migration contains this rule because the Prisma schema cannot describe that index directly.
 
-## 17. Constraints
+Releasing an allocation changes it to `RELEASED` and subtracts its CPU and memory from the worker. Repeating a completed release returns the existing result instead of subtracting again.
 
-- One physical development machine
-- Local CPU/RAM and Docker Desktop
-- PostgreSQL source of truth; no Redis or Kafka
-- Scheduler and placement stay separate
-- Resource checks must be repeated under transaction locks
-- Workload and resource input is strictly validated
-- Reactive scaling precedes ML-assisted scaling
-- Identical seeded workloads are reused in experiments
-- Architecture, flow, and decision documentation changes with implementation
+## 9. Docker execution
 
-## 18. Explicit exclusions
+The backend runs the fixed image `orchestros/workload-runner:v1`. API callers choose from supported workload types; they cannot provide their own image, command, script, or container environment.
 
-The project will not implement Kubernetes, cloud provisioning, physical clusters, Kubernetes API compatibility, arbitrary commands/images, Redis, Kafka, GPU scheduling, production multi-tenant security, complex service discovery, or unrelated technologies added for appearance.
+| Workload | What it does | Maximum work size |
+| --- | --- | ---: |
+| `CPU_INTENSIVE` | Repeated calculations | 50,000,000 iterations |
+| `MATRIX_MULTIPLICATION` | Multiply matrices | Dimension 320 |
+| `SORTING` | Sort generated values | 2,000,000 elements |
+| `DATA_PROCESSING` | Process generated records | 2,000,000 records |
+| `SLEEP` | Wait for a set time | 120 seconds |
 
-The original proposal visual remains at [`docs/image.png`](image.png). Actual implemented behavior is documented in [`docs/flow.md`](flow.md).
+The runner can reduce work further to fit its memory budget. It reports the size it actually used as `effectiveSize`.
+
+The backend supplies four inputs: `ORCHESTROS_WORKLOAD_TYPE`, `ORCHESTROS_WORKLOAD_SIZE`, `ORCHESTROS_SEED`, and `ORCHESTROS_MEMORY_LIMIT_MIB`. The runner's seed comes from the job name. Reusing the same work can reproduce the same checksum; elapsed time is not part of that checksum.
+
+Each container gets the job's reserved CPU and memory limits. It has no network, no host-folder mounts, a read-only root filesystem, restricted permissions, and a process-count limit.
+
+The backend talks directly to Docker's API. In Compose, only the backend receives the Docker socket. This gives it control over the host Docker engine, so this setup is intended for a local development machine.
+
+When a run finishes, the backend saves the outcome and frees its resources in one database transaction. It then removes the container. A zero exit code counts as success only if the expected result is present. Errors are `FAILED`; a time limit is `INTERRUPTED`.
+
+## 10. Monitoring
+
+Current metrics are calculated from saved jobs, executions, allocations, and workers. Monitoring does not choose or start jobs.
+
+Usage history needs its own records. The sampler saves one `worker_samples` row per worker every 15 seconds by default. Rows from one pass share a timestamp. Duplicate passes at that timestamp do not create duplicate samples. Samples older than 24 hours are removed by default.
+
+The sampler starts in `server.js`, so importing the app in a test does not start a timer. Setting the interval to 0 disables automatic sampling; the API can still capture a sample on request.
+
+| Timing | What it measures |
+| --- | --- |
+| `queueWait` | Planned arrival until scheduling |
+| `placementDelay` | Scheduling until worker placement |
+| `startDelay` | Placement until execution starts |
+| `execution` | Execution start until completion |
+| `turnaround` | Planned arrival until completion |
+
+Each timing includes count, average, minimum, maximum, and p95. MySQL calculates the timestamp differences and the percentile. p95 uses a value between neighboring sorted measurements when needed. The API converts the database's numeric results into JavaScript numbers.
+
+A stage with no data has count 0. Success rate is `null` when there are no completed outcomes to calculate it from. The API limits requested history to between 1 minute and 7 days.
+
+## 11. What is unfinished
+
+Automatic scaling, worker-level failure recovery, individual runtime cancellation, actual Round Robin preemption, machine learning, and full experiment comparison are still planned. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
+
+After a backend crash, startup recovery and a 30-second reconciliation pass settle untracked exited/missing containers and resume tracking live executions against their original deadline. The manual settle endpoint remains available. Completion uses the Docker finish timestamp when available, so stale recovery does not inflate execution duration.
+
+Read [the job flow](flow.md) for the steps in order, or [the design choices](decision.md) for why these decisions were made.
