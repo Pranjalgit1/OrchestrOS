@@ -10,9 +10,30 @@ export const TRANSACTION_OPTIONS = {
   maxWait: 15_000,
   timeout: 20_000,
 };
+const DEADLOCK_ATTEMPTS = 4;
+/**
+ * Runs a transaction, retrying when MySQL picks it as a deadlock victim.
+ *
+ * InnoDB resolves a deadlock by rolling one transaction back, so nothing was
+ * written and running it again is safe. Prisma reports that as P2034. Under a
+ * burst of starts and completions on the same worker this is expected rather
+ * than exceptional, so callers should never see it.
+ */
+export async function withDeadlockRetry(run) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      const retryable = error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2034";
+      if (!retryable || attempt >= DEADLOCK_ATTEMPTS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20 * attempt + Math.random() * 30));
+    }
+  }
+}
 export const prismaResourceRepository = {
   async reserve({ jobId, workerId, cpuMillicores, memoryMiB }) {
-    return prisma.$transaction(async (tx) => {
+    return withDeadlockRetry(() => prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT \`id\` FROM \`jobs\` WHERE \`id\` = ${jobId} FOR UPDATE`;
       const currentJob = await tx.job.findUnique({ where: { id: jobId } });
       if (!currentJob || currentJob.status !== JobStatus.SCHEDULED) {
@@ -103,13 +124,13 @@ export const prismaResourceRepository = {
         }
         throw error;
       }
-    }, TRANSACTION_OPTIONS);
+    }, TRANSACTION_OPTIONS));
   },
   async release(jobId) {
-    return prisma.$transaction(
+    return withDeadlockRetry(() => prisma.$transaction(
       (tx) => releaseAllocationWithin(tx, jobId),
       TRANSACTION_OPTIONS,
-    );
+    ));
   },
   listAllocations({ jobId, workerId, status, limit }) {
     return prisma.resourceAllocation.findMany({

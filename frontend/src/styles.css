@@ -1744,3 +1744,12 @@ a {
   margin-right: 6px;
 }
 .autoscaler-actions .btn { width: auto; }
+.autoscaler-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.autoscaler-settings label { display: grid; gap: 4px; }
+.autoscaler-settings .stage-buttons,
+.autoscaler-settings .hint { grid-column: 1 / -1; }
