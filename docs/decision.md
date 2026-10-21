@@ -142,7 +142,15 @@ The Immediate demo uses a valid custom batch with all arrival offsets set to zer
 
 Clear finished jobs is a backend transaction that removes finished job records and their related history in the required order. It leaves queued and running jobs out of the selection.
 
-## 17. Use both small tests and real-system tests
+## 17. Scale logical workers reactively, and retire instead of delete
+
+Scaling reacts to observed signals: waiting jobs and reserved capacity. It does not use forecasts, which keeps every decision explainable from one database snapshot and recorded with its reason. Requiring both a queue and high utilization avoids adding workers when jobs are only waiting for the next orchestrator pass. Separate scale-up and scale-down thresholds plus a cooldown prevent flapping.
+
+Workers are retired rather than deleted because jobs, allocations, and executions keep foreign keys to the worker that ran them. Retirement keeps that history intact, and scale-up reuses retired workers so rows do not accumulate. A host-memory ceiling keeps the combined logical budgets within what the computer can plausibly back.
+
+Runtime settings are held in memory. They are an operator's experiment knobs, while the environment holds the defaults and the event history in MySQL is the durable record.
+
+## 18. Use both small tests and real-system tests
 
 Services can receive simple in-memory replacements for database or Docker operations. This lets small tests check their rules quickly.
 

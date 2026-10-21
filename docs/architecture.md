@@ -49,7 +49,7 @@ Some features also have calculation-only files, such as `scheduler.policies.js` 
 
 ## 2. What MySQL stores
 
-The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). The initial SQL is in [the MySQL migration](../backend/prisma/migrations/20261005000000_mysql_initial/migration.sql). [A follow-up migration](../backend/prisma/migrations/20261021000000_preemption_and_requeue/migration.sql) adds the `PREEMPTED` execution status and the job preemption and retry counters.
+The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). The initial SQL is in [the MySQL migration](../backend/prisma/migrations/20261005000000_mysql_initial/migration.sql). [A follow-up migration](../backend/prisma/migrations/20261021000000_preemption_and_requeue/migration.sql) adds the `PREEMPTED` execution status and the job preemption and retry counters. [The autoscaling migration](../backend/prisma/migrations/20261021120000_reactive_autoscaling/migration.sql) adds the `RETIRED` worker status, the `autoscaled` flag, and `scaling_events`.
 
 | Table | What one row means |
 | --- | --- |
@@ -59,6 +59,7 @@ The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). T
 | `resource_allocations` | A job's CPU and memory reservation, including released history |
 | `job_executions` | One attempt to run a job in a container |
 | `worker_samples` | One worker's resource-use snapshot at a particular time |
+| `scaling_events` | One autoscaler action, the worker it changed, and the signals behind it |
 
 The queue is saved in `jobs`. There is no second queue that must be kept in sync with MySQL.
 
@@ -119,7 +120,29 @@ The setup script creates these workers if they are missing:
 
 These built-in budgets total 3 GiB. They are scheduling limits, not preallocated physical memory or separate machines. Container memory limits are ceilings; actual Windows/WSL memory use includes other applications and the Docker VM. The dashboard reports free memory on the backend host separately from reservations. Setup and backend startup apply the budgets to idle default workers automatically; active reservations are preserved. Recovery also applies them when old executions finish.
 
-New workers start `IDLE` with nothing reserved. A worker with a reservation becomes `BUSY`; it becomes `IDLE` again when its reserved CPU and memory reach zero. The model also supports `STARTING`, `ACTIVE`, `STOPPING`, and `FAILED`.
+New workers start `IDLE` with nothing reserved. A worker with a reservation becomes `BUSY`; it becomes `IDLE` again when its reserved CPU and memory reach zero. `RETIRED` marks an autoscaled worker taken out of service. The model also supports `STARTING`, `ACTIVE`, `STOPPING`, and `FAILED`.
+
+### Reactive autoscaling
+
+The autoscaler (`backend/src/modules/autoscaler`) adds and removes extra logical workers named `auto-worker-N`. It never touches the three study workers or workers created through the API. Every few seconds (`AUTOSCALE_INTERVAL_SECONDS`, default 5) it reads one database snapshot, makes one decision, and applies at most one change. The decision rules are in `autoscaler.policy.js`.
+
+| Decision | When |
+| --- | --- |
+| Scale up | At least 2 eligible jobs are queued **and** the schedulable workers are at least 75% reserved (the higher of CPU and memory) |
+| Scale down | An autoscaled worker has held nothing and had no job planned on it for 30 seconds, fewer than 2 jobs wait, **and** the cluster would stay below 40% reserved without it |
+| No change | Neither applies, the 15-second cooldown since the last change is still running, the `AUTOSCALE_MAX_WORKERS` limit (default 3) is reached, or one more worker would push the combined worker memory budgets past 75% of host memory |
+
+The 75%/40% gap and the cooldown keep the cluster from flapping between sizes. These thresholds can be changed at runtime through `PATCH /api/autoscaler`. Runtime changes last until the backend restarts.
+
+A new worker gets `AUTOSCALE_WORKER_CPU_MILLICORES` and `AUTOSCALE_WORKER_MEMORY_MIB` (default 1000m / 512 MiB). Scale-up reuses a retired autoscaled worker before creating a new one.
+
+Scale-down marks a worker `RETIRED` rather than deleting it, because past jobs and executions still reference it. Retired workers are left out of placement, the dashboard, and monitoring totals and samples. A database check refuses any reservation counters on a retired worker.
+
+Each change and its scaling event (the action, reason, waiting jobs, utilization, and resulting worker count) commit in one transaction to `scaling_events`. This keeps the history auditable.
+
+Retirement rechecks the worker under its row lock. A job placed on it in the brief gap after that check is caught at reservation. Reservation refuses any worker that is not schedulable and withdraws the placement, so the job is placed again on its next pass.
+
+Autoscaling starts off (`AUTOSCALE_ENABLED=false`) and is switched on from the dashboard. While it is off, nothing is added, but idle autoscaled workers are still retired so the cluster drains back to its base size.
 
 ## 5. Repeatable workload generation
 
@@ -253,7 +276,7 @@ A stage with no data has count 0. Success rate is `null` when there are no compl
 
 ## 11. What is unfinished
 
-Automatic scaling, worker-level failure recovery, machine learning, and full experiment comparison are still planned. Round Robin preemption does not pause and resume a container; a preempted job restarts from the beginning. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
+Worker-level failure recovery, machine learning, and full experiment comparison are still planned. Autoscaled workers are logical capacity on the same computer, like the study workers; scaling does not add physical hardware. Round Robin preemption does not pause and resume a container; a preempted job restarts from the beginning. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
 
 After a backend crash, startup recovery and a 30-second reconciliation pass settle untracked exited/missing containers and resume tracking live executions against their original deadline. The manual settle endpoint remains available. Completion uses the Docker finish timestamp when available, so stale recovery does not inflate execution duration.
 

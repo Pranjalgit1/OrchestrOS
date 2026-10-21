@@ -109,6 +109,10 @@ Actual credentials belong in the ignored `.env` file. The example file shows the
 | `EXECUTION_TIMEOUT_SECONDS` | Longest allowed run time for a workload; default 300 seconds |
 | `EXECUTION_LOG_LIMIT_BYTES` | Maximum captured output per stream; default 8192 bytes |
 | `ROUND_ROBIN_MAX_PREEMPTIONS` | Round Robin evictions allowed per job before it runs to completion; default 3, 0 disables preemption |
+| `AUTOSCALE_ENABLED` | Whether reactive autoscaling starts switched on; default `false` (toggle it in the dashboard) |
+| `AUTOSCALE_INTERVAL_SECONDS` | Time between autoscaler evaluations; default 5 seconds, 0 turns the timer off |
+| `AUTOSCALE_MAX_WORKERS` | Most autoscaled workers in service at once; default 3 |
+| `AUTOSCALE_WORKER_CPU_MILLICORES` / `AUTOSCALE_WORKER_MEMORY_MIB` | Capacity of each autoscaled worker; default 1000m / 512 MiB |
 | `EXECUTION_MAX_RETRIES` | Automatic requeues per job after an infrastructure fault (container could not start or vanished); default 2, 0 disables |
 | `MONITORING_SAMPLE_INTERVAL_SECONDS` | Time between saved usage samples; default 15 seconds, 0 disables the timer |
 | `MONITORING_SAMPLE_RETENTION_HOURS` | How long to keep samples; default 24 hours, 0 keeps them indefinitely |

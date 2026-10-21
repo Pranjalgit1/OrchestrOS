@@ -106,6 +106,23 @@ export function cancelJob(jobId) {
 export function requeueJob(jobId) {
   return postJson(`/api/jobs/${jobId}/requeue`, {});
 }
+export function fetchAutoscaler(signal) {
+  return requestJson("/api/autoscaler", { signal, cache: "no-store" });
+}
+export async function updateAutoscaler(patch) {
+  const result = await requestJson("/api/autoscaler", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(STATE_CHANGED_EVENT));
+  }
+  return result;
+}
+export function evaluateAutoscaler() {
+  return postJson("/api/autoscaler/evaluate", {});
+}
 export function clearFinishedJobs() {
   return postJson("/api/orchestrator/clear-finished", {});
 }

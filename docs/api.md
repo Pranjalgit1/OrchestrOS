@@ -203,7 +203,33 @@ Allocation lists accept optional `jobId`, `workerId`, and `status`. Execution li
 
 A successful start returns HTTP 202: the run has started, but it has not necessarily finished. Settling a container that is still running returns a conflict. Settling an already recorded outcome returns that outcome without releasing resources again.
 
-## 6. Monitoring
+## 6. Autoscaler
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| GET | `/autoscaler` | Read settings, the latest decision with its signals, and the 20 most recent scaling events |
+| PATCH | `/autoscaler` | Change runtime settings, for example `{ "enabled": true }` |
+| POST | `/autoscaler/evaluate` | Run one scaling evaluation now and return its decision |
+
+PATCH accepts any subset of the following fields:
+
+| Field | Allowed values |
+| --- | --- |
+| `enabled` | `true` or `false` |
+| `maxWorkers` | 0-20 |
+| `workerCpuMillicores` | 100-64,000 |
+| `workerMemoryMiB` | 128-131,072 |
+| `scaleUpQueueThreshold` | 1-1,000 |
+| `scaleUpUtilization` | 0.05-1 |
+| `scaleDownUtilization` | 0.05-1 |
+| `idleSeconds` | 0-3,600 |
+| `cooldownSeconds` | 0-3,600 |
+
+`scaleDownUtilization` must stay below `scaleUpUtilization`; otherwise the request returns 400 `INVALID_AUTOSCALER_CONFIG`. Settings last until the backend restarts.
+
+A decision's `action` is `SCALE_UP`, `SCALE_DOWN`, or `NONE`, with a plain-language `reason` and `applied` telling whether the change committed. `GET /workers` also lists retired autoscaled workers with status `RETIRED`. A reservation on a worker that is no longer schedulable returns 409 `WORKER_NOT_SCHEDULABLE` and withdraws the job's placement.
+
+## 7. Monitoring
 
 | Method | Path | What it does |
 | --- | --- | --- |
@@ -217,7 +243,7 @@ A successful start returns HTTP 202: the run has started, but it has not necessa
 
 These reads do not change job scheduling or resource reservations. Capturing a sample writes monitoring history only.
 
-## 7. Basic checks and errors
+## 8. Basic checks and errors
 
 | Method | Path | What it does |
 | --- | --- | --- |

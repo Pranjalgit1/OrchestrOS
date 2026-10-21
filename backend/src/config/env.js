@@ -47,6 +47,18 @@ const environmentSchema = z.object({
     .default(3),
   /** Automatic requeues allowed for executions lost to infrastructure faults. */
   EXECUTION_MAX_RETRIES: z.coerce.number().int().min(0).max(10).default(2),
+  /** Starting state of reactive autoscaling; it can be toggled at runtime. */
+  AUTOSCALE_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  /** How often the autoscaler evaluates the cluster. Zero disables the loop. */
+  AUTOSCALE_INTERVAL_SECONDS: z.coerce.number().int().min(0).max(3_600).default(5),
+  /** Most autoscaled workers that may be in service at once. */
+  AUTOSCALE_MAX_WORKERS: z.coerce.number().int().min(0).max(20).default(3),
+  /** Capacity given to each autoscaled worker. */
+  AUTOSCALE_WORKER_CPU_MILLICORES: z.coerce.number().int().min(100).max(64_000).default(1_000),
+  AUTOSCALE_WORKER_MEMORY_MIB: z.coerce.number().int().min(128).max(131_072).default(512),
   /** Per-stream cap on captured container output. */
   EXECUTION_LOG_LIMIT_BYTES: z.coerce
     .number()
