@@ -3,6 +3,7 @@ import { prisma } from "../../lib/prisma.js";
 import {
   TRANSACTION_OPTIONS,
   releaseAllocationWithin,
+  withDeadlockRetry,
 } from "../resources/resource.repository.js";
 import { RequeueReason, requeuedJobData } from "./job.requeue.js";
 /**
@@ -48,7 +49,7 @@ export const prismaJobRepository = {
    * holds, in one transaction under the job row lock.
    */
   async cancelIdle(id, cancelledAt, reason) {
-    return prisma.$transaction(async (tx) => {
+    return withDeadlockRetry(() => prisma.$transaction(async (tx) => {
       const job = await lockJob(tx, id);
       if (!job) return { status: "JOB_NOT_FOUND" };
       if (job.status === JobStatus.CANCELLED) {
@@ -76,11 +77,11 @@ export const prismaJobRepository = {
         job: cancelled,
         released: release.status === "RELEASED",
       };
-    }, TRANSACTION_OPTIONS);
+    }, TRANSACTION_OPTIONS));
   },
   /** Puts a failed or interrupted job back in the queue for another attempt. */
   async requeue(id) {
-    return prisma.$transaction(async (tx) => {
+    return withDeadlockRetry(() => prisma.$transaction(async (tx) => {
       const job = await lockJob(tx, id);
       if (!job) return { status: "JOB_NOT_FOUND" };
       if (!REQUEUEABLE.includes(job.status)) {
@@ -95,6 +96,6 @@ export const prismaJobRepository = {
         data: requeuedJobData(RequeueReason.RETRY),
       });
       return { status: "REQUEUED", job: requeued };
-    }, TRANSACTION_OPTIONS);
+    }, TRANSACTION_OPTIONS));
   },
 };

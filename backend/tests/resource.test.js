@@ -274,3 +274,30 @@ test("resource request input is strictly validated", () => {
     false,
   );
 });
+
+test("a transaction chosen as a deadlock victim is retried, other errors are not", async () => {
+  const { Prisma } = await import("@prisma/client");
+  const { withDeadlockRetry } = await import("../src/modules/resources/resource.repository.js");
+  const deadlock = () => new Prisma.PrismaClientKnownRequestError("deadlock", {
+    code: "P2034", clientVersion: "6.12.0" });
+  let calls = 0;
+  const result = await withDeadlockRetry(async () => {
+    calls += 1;
+    if (calls < 3) throw deadlock();
+    return "committed";
+  });
+  assert.equal(result, "committed");
+  assert.equal(calls, 3);
+  let attempts = 0;
+  await assert.rejects(withDeadlockRetry(async () => {
+    attempts += 1;
+    throw deadlock();
+  }), { code: "P2034" });
+  assert.equal(attempts, 4, "retries are bounded");
+  let other = 0;
+  await assert.rejects(withDeadlockRetry(async () => {
+    other += 1;
+    throw new Error("constraint violated");
+  }), /constraint violated/);
+  assert.equal(other, 1);
+});
