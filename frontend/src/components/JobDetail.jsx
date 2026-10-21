@@ -1,5 +1,8 @@
 import { Icon } from "./Icon.jsx";
 
+const CANCELLABLE = new Set(["CREATED", "QUEUED", "WAITING", "SCHEDULED", "RUNNING", "INTERRUPTED"]);
+const REQUEUEABLE = new Set(["FAILED", "INTERRUPTED"]);
+
 /**
  * What happened to one job, and the per-stage controls for demonstrating the
  * pipeline one call at a time. Every value shown is reported by the backend.
@@ -27,7 +30,11 @@ export function JobDetail(props) {
     job.status === "SCHEDULED" && !!job.assignedWorkerId && !job.reservation;
   const canExecute = job.status === "SCHEDULED" && !!job.reservation;
   const canRelease = !!job.reservation;
-  const canCancel = job.status === "QUEUED";
+  // Mirrors the backend: any unfinished job can be cancelled, and a running one
+  // has its container stopped. Failed and interrupted jobs can be requeued.
+  const canCancel = CANCELLABLE.has(job.status);
+  const canRequeue = REQUEUEABLE.has(job.status);
+  const isRunning = job.status === "RUNNING";
   return (
     <section className="panel job-detail-panel" aria-label="Job detail">
       <header className="panel-head">
@@ -77,7 +84,34 @@ export function JobDetail(props) {
             <dt>Pipeline stage</dt>
             <dd>{job.stage}</dd>
           </div>
+          <div>
+            <dt>Rounds / preempted / retries</dt>
+            <dd>
+              {job.schedulingRounds ?? 0} · {job.preemptionCount ?? 0} ·{" "}
+              {job.retryCount ?? 0}
+              {job.timeQuantumSeconds ? ` · ${job.timeQuantumSeconds}s quantum` : ""}
+            </dd>
+          </div>
         </dl>
+
+        <div className="stage-buttons job-actions">
+          <button
+            type="button"
+            className="btn btn-stop"
+            disabled={disabled || !canCancel}
+            onClick={() => props.onCancel(job.id)}
+          >
+            {isRunning ? "Stop and cancel" : "Cancel job"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={disabled || !canRequeue}
+            onClick={() => props.onRequeue(job.id)}
+          >
+            Requeue job
+          </button>
+        </div>
 
         {job.reservation ? (
           <div className="callout callout-db">
@@ -172,14 +206,6 @@ export function JobDetail(props) {
               onClick={() => props.onRelease(job.id)}
             >
               Release resources
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={disabled || !canCancel}
-              onClick={() => props.onCancel(job.id)}
-            >
-              Cancel job
             </button>
           </div>
           <p className="hint">

@@ -108,6 +108,8 @@ Actual credentials belong in the ignored `.env` file. The example file shows the
 | `FRONTEND_PORT` | Frontend port published by Compose; normally 5173 |
 | `EXECUTION_TIMEOUT_SECONDS` | Longest allowed run time for a workload; default 300 seconds |
 | `EXECUTION_LOG_LIMIT_BYTES` | Maximum captured output per stream; default 8192 bytes |
+| `ROUND_ROBIN_MAX_PREEMPTIONS` | Round Robin evictions allowed per job before it runs to completion; default 3, 0 disables preemption |
+| `EXECUTION_MAX_RETRIES` | Automatic requeues per job after an infrastructure fault (container could not start or vanished); default 2, 0 disables |
 | `MONITORING_SAMPLE_INTERVAL_SECONDS` | Time between saved usage samples; default 15 seconds, 0 disables the timer |
 | `MONITORING_SAMPLE_RETENTION_HOURS` | How long to keep samples; default 24 hours, 0 keeps them indefinitely |
 | `DOCKER_SOCKET_PATH` | Connection to Docker; normally leave it unset so the app chooses the platform default |
@@ -148,6 +150,8 @@ docker compose config --quiet
 | `docker compose config --quiet` | Whether the Compose configuration is valid, without printing credentials |
 
 The backend runs JavaScript directly, so it does not need a compiled output folder. The frontend build goes into `frontend/dist/`.
+
+Test files are kept separately in `backend/tests/` and `frontend/tests/`. Run both suites with `npm test`, or one suite with `npm test --workspace backend` or `npm test --workspace frontend`.
 
 ## 7. Run the database and Docker tests
 

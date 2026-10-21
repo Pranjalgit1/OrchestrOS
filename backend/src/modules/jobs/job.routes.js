@@ -21,8 +21,15 @@ jobRouter.get("/:id", async (request, response) => {
   const job = await jobService.getById(id);
   response.json(job);
 });
+/** Cancels a job at any unfinished stage, stopping its container if it runs. */
 jobRouter.post("/:id/cancel", async (request, response) => {
   const { id } = jobIdParamsSchema.parse(request.params);
   const job = await jobService.cancel(id);
+  response.json(job);
+});
+/** Returns a failed or interrupted job to the queue for another attempt. */
+jobRouter.post("/:id/requeue", async (request, response) => {
+  const { id } = jobIdParamsSchema.parse(request.params);
+  const job = await jobService.requeue(id);
   response.json(job);
 });

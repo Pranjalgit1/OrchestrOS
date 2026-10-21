@@ -34,6 +34,19 @@ const environmentSchema = z.object({
     .min(5)
     .max(3_600)
     .default(300),
+  /**
+   * How many times one job may be evicted by Round Robin quantum expiry. After
+   * that it runs to completion, so a long job cannot be restarted forever.
+   * Zero disables preemption.
+   */
+  ROUND_ROBIN_MAX_PREEMPTIONS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .default(3),
+  /** Automatic requeues allowed for executions lost to infrastructure faults. */
+  EXECUTION_MAX_RETRIES: z.coerce.number().int().min(0).max(10).default(2),
   /** Per-stream cap on captured container output. */
   EXECUTION_LOG_LIMIT_BYTES: z.coerce
     .number()

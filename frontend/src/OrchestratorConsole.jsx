@@ -8,6 +8,7 @@ import {
   generateWorkload,
   killAllWorkloads,
   releaseResources,
+  requeueJob,
   reserveResources,
   runOrchestrator,
   startExecution,
@@ -317,8 +318,14 @@ export function OrchestratorConsole() {
               }
               onCancel={(jobId) =>
                 act("stage", "Cancel", async () => {
-                  await cancelJob(jobId);
-                  log("stage", "Cancel", `Job ${jobId.slice(0, 8)} cancelled`);
+                  const job = await cancelJob(jobId);
+                  log("stage", "Cancel", `${job.name} cancelled; any container was stopped and its reservation released`);
+                })
+              }
+              onRequeue={(jobId) =>
+                act("stage", "Requeue", async () => {
+                  const job = await requeueJob(jobId);
+                  log("stage", "Requeue", `${job.name} returned to the queue (retry ${job.retryCount})`);
                 })
               }
             />
