@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reservationChart } from "./reservation.chart.js";
+import { reservationChart } from "../src/reservation.chart.js";
 
 const point = (capturedAt, cpuUtilization = 0.5, memoryUtilization = 0.25) =>
   ({ capturedAt, cpuUtilization, memoryUtilization });

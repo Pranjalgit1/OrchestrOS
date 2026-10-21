@@ -8,10 +8,10 @@ import {
   SchedulingPolicy,
   WorkloadPattern,
 } from "@prisma/client";
-import { app } from "../../app.js";
-import { prisma } from "../../lib/prisma.js";
-import { generateWorkloadSpecs } from "./workload.generator.js";
-import { prismaWorkloadRepository } from "./workload.repository.js";
+import { app } from "../src/app.js";
+import { prisma } from "../src/lib/prisma.js";
+import { generateWorkloadSpecs } from "../src/modules/workloads/workload.generator.js";
+import { prismaWorkloadRepository } from "../src/modules/workloads/workload.repository.js";
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true";
 async function withServer(run) {
   const server = app.listen(0, "127.0.0.1");

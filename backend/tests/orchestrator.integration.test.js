@@ -11,16 +11,16 @@ import {
   WorkerStatus,
   WorkloadType,
 } from "@prisma/client";
-import { app } from "../../app.js";
-import { prisma } from "../../lib/prisma.js";
-import { executionService } from "../executions/execution.service.js";
-import { prismaPlacementRepository } from "../placement/placement.repository.js";
-import { PlacementService } from "../placement/placement.service.js";
-import { resourceService } from "../resources/resource.service.js";
-import { prismaSchedulerRepository } from "../scheduler/scheduler.repository.js";
-import { SchedulerService } from "../scheduler/scheduler.service.js";
-import { prismaOrchestratorRepository } from "./orchestrator.repository.js";
-import { OrchestratorService } from "./orchestrator.service.js";
+import { app } from "../src/app.js";
+import { prisma } from "../src/lib/prisma.js";
+import { executionService } from "../src/modules/executions/execution.service.js";
+import { prismaPlacementRepository } from "../src/modules/placement/placement.repository.js";
+import { PlacementService } from "../src/modules/placement/placement.service.js";
+import { resourceService } from "../src/modules/resources/resource.service.js";
+import { prismaSchedulerRepository } from "../src/modules/scheduler/scheduler.repository.js";
+import { SchedulerService } from "../src/modules/scheduler/scheduler.service.js";
+import { prismaOrchestratorRepository } from "../src/modules/orchestrator/orchestrator.repository.js";
+import { OrchestratorService } from "../src/modules/orchestrator/orchestrator.service.js";
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true";
 const dockerTestsEnabled =
   process.env.RUN_DATABASE_TESTS === "true" &&

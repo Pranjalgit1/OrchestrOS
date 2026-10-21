@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { jobAge, selectQueueJobs } from "./job-queue.view.js";
+import { jobAge, selectQueueJobs } from "../src/job-queue.view.js";
 
 const makeJob = (id, overrides = {}) => ({ id, name: `job-${id}`, status: "COMPLETED", workloadType: "CPU_INTENSIVE",
   assignedWorkerId: "w1", assignedWorkerName: "worker-1", cpuRequiredMillicores: 100, ...overrides });

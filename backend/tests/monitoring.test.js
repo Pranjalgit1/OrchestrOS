@@ -10,13 +10,13 @@ import {
   summariseCluster,
   summariseTimings,
   utilizationSeries,
-} from "./monitoring.metrics.js";
+} from "../src/modules/monitoring/monitoring.metrics.js";
 import {
   jobMetricsQuerySchema,
   sampleHistoryQuerySchema,
-} from "./monitoring.schemas.js";
-import { MonitoringSampler } from "./monitoring.sampler.js";
-import { MonitoringService } from "./monitoring.service.js";
+} from "../src/modules/monitoring/monitoring.schemas.js";
+import { MonitoringSampler } from "../src/modules/monitoring/monitoring.sampler.js";
+import { MonitoringService } from "../src/modules/monitoring/monitoring.service.js";
 const now = new Date("2026-09-22T12:00:00.000Z");
 function makeWorker(overrides = {}) {
   return {

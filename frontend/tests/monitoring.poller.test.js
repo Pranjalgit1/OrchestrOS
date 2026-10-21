@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMonitoringPoller } from "./monitoring.poller.js";
+import { createMonitoringPoller } from "../src/monitoring.poller.js";
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 function deferred() {

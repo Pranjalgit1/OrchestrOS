@@ -8,8 +8,8 @@ import {
   WorkloadType,
   WorkerStatus,
 } from "@prisma/client";
-import { app } from "../../app.js";
-import { prisma } from "../../lib/prisma.js";
+import { app } from "../src/app.js";
+import { prisma } from "../src/lib/prisma.js";
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true";
 async function withServer(run) {
   const server = app.listen(0, "127.0.0.1");

@@ -3,10 +3,10 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import test from "node:test";
 import { JobStatus, SchedulingPolicy, WorkloadType } from "@prisma/client";
-import { app } from "../../app.js";
-import { prisma } from "../../lib/prisma.js";
-import { prismaSchedulerRepository } from "./scheduler.repository.js";
-import { SchedulerService } from "./scheduler.service.js";
+import { app } from "../src/app.js";
+import { prisma } from "../src/lib/prisma.js";
+import { prismaSchedulerRepository } from "../src/modules/scheduler/scheduler.repository.js";
+import { SchedulerService } from "../src/modules/scheduler/scheduler.service.js";
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true";
 async function withServer(run) {
   const server = app.listen(0, "127.0.0.1");

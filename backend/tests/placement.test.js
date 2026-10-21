@@ -7,15 +7,15 @@ import {
   WorkerStatus,
   WorkloadType,
 } from "@prisma/client";
-import { AppError } from "../../errors/app-error.js";
+import { AppError } from "../src/errors/app-error.js";
 import {
   buildSnapshot,
   evaluateEligibility,
   evaluatePlacement,
   scoreCandidate,
-} from "./placement.accounting.js";
-import { assignPlacementSchema } from "./placement.schemas.js";
-import { PlacementService } from "./placement.service.js";
+} from "../src/modules/placement/placement.accounting.js";
+import { assignPlacementSchema } from "../src/modules/placement/placement.schemas.js";
+import { PlacementService } from "../src/modules/placement/placement.service.js";
 const now = new Date("2026-09-21T12:00:00.000Z");
 const noLoad = { cpuMillicores: 0, memoryMiB: 0 };
 function makeWorker(overrides = {}) {
@@ -81,7 +81,10 @@ class InMemoryPlacementRepository {
     return this.jobs.find((job) => job.id === jobId) ?? null;
   }
   async listWorkers() {
-    return [...this.workers];
+    return this.workers.map((worker) => ({
+      ...worker,
+      placementCount: this.jobs.filter((job) => job.assignedWorkerId === worker.id).length,
+    }));
   }
   async assignedLoadByWorker() {
     return this.loads;
@@ -216,7 +219,7 @@ test("FIRST_FIT picks the first eligible worker in stable name order", () => {
       makeWorker({ name: "worker-1", cpuCapacityMillicores: 500 }),
       noLoad,
     ),
-    buildSnapshot(makeWorker({ name: "worker-2" }), noLoad),
+    buildSnapshot(makeWorker({ name: "worker-2", placementCount: 50 }), noLoad),
   ];
   const job = makeJob({ cpuRequiredMillicores: 1_000, memoryRequiredMiB: 512 });
   const evaluation = evaluatePlacement(
@@ -241,7 +244,7 @@ test("LEAST_LOADED picks the lowest current peak utilization", () => {
       cpuMillicores: 3_000,
       memoryMiB: 0,
     }),
-    buildSnapshot(makeWorker({ name: "worker-2" }), {
+    buildSnapshot(makeWorker({ name: "worker-2", placementCount: 50 }), {
       cpuMillicores: 400,
       memoryMiB: 256,
     }),
@@ -258,6 +261,42 @@ test("LEAST_LOADED picks the lowest current peak utilization", () => {
   );
   assert.equal(evaluation.selected?.name, "worker-2");
 });
+test("equal-score placements prefer fewer assignments without overriding resource fit", () => {
+  const snapshots = [
+    buildSnapshot(makeWorker({ name: "worker-1", placementCount: 20 }), noLoad),
+    buildSnapshot(makeWorker({ name: "worker-2", placementCount: 2 }), noLoad),
+    buildSnapshot(makeWorker({ name: "worker-3", placementCount: 5 }), noLoad),
+  ];
+  const job = makeJob();
+  for (const strategy of [PlacementStrategy.LEAST_LOADED, PlacementStrategy.RESOURCE_AWARE]) {
+    assert.equal(evaluatePlacement(snapshots, job, strategy).selected?.name, "worker-2");
+  }
+  assert.equal(evaluatePlacement(snapshots, job, PlacementStrategy.FIRST_FIT).selected?.name, "worker-1");
+  const small = buildSnapshot(makeWorker({ name: "worker-0", placementCount: 0, cpuCapacityMillicores: 500 }), noLoad);
+  assert.equal(evaluatePlacement([small, ...snapshots], job, PlacementStrategy.LEAST_LOADED).selected?.name, "worker-2");
+});
+
+test("fast completed jobs rotate across idle workers and previews do not consume turns", async () => {
+  const jobs = Array.from({ length: 9 }, () => makeJob());
+  const workers = ["worker-1", "worker-2", "worker-3"].map((name) => makeWorker({ name }));
+  const repository = new InMemoryPlacementRepository(jobs, workers);
+  let service = new PlacementService(repository, () => now);
+  const selected = [];
+  for (const job of jobs) {
+    const input = { jobId: job.id, strategy: PlacementStrategy.LEAST_LOADED };
+    const before = await service.preview(input);
+    assert.equal((await service.preview(input)).selected?.workerId, before.selected?.workerId);
+    const result = await service.assign(input);
+    assert.equal(result.selected?.workerId, before.selected?.workerId);
+    selected.push(result.selected.name);
+    // The job finishes before the next dispatch. Worker counters remain zero.
+    repository.jobs.find((row) => row.id === job.id).status = JobStatus.COMPLETED;
+    // Placement history lives in the repository, not in a service-local cursor.
+    service = new PlacementService(repository, () => now);
+  }
+  assert.deepEqual(selected, Array(3).fill(["worker-1", "worker-2", "worker-3"]).flat());
+});
+
 test("RESOURCE_AWARE looks at the resulting fit, not just current load", () => {
   // worker-a is the least loaded right now (10% peak), but it is CPU-small, so
   // this job would push it to 90% CPU and leave it badly imbalanced.
@@ -273,6 +312,7 @@ test("RESOURCE_AWARE looks at the resulting fit, not just current load", () => {
   const roomy = buildSnapshot(
     makeWorker({
       name: "worker-b",
+      placementCount: 50,
       cpuCapacityMillicores: 4_000,
       memoryCapacityMiB: 4_096,
     }),

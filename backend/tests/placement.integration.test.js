@@ -8,11 +8,82 @@ import {
   WorkerStatus,
   WorkloadType,
 } from "@prisma/client";
-import { app } from "../../app.js";
-import { prisma } from "../../lib/prisma.js";
-import { prismaPlacementRepository } from "./placement.repository.js";
-import { PlacementService } from "./placement.service.js";
+import { app } from "../src/app.js";
+import { prisma } from "../src/lib/prisma.js";
+import { prismaPlacementRepository } from "../src/modules/placement/placement.repository.js";
+import { PlacementService } from "../src/modules/placement/placement.service.js";
+import { prismaResourceRepository } from "../src/modules/resources/resource.repository.js";
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true";
+
+test("completed jobs distribute equal-load placements using saved history", { skip: !databaseTestsEnabled }, async () => {
+  const prefix = `placement-fair-${randomUUID()}`;
+  try {
+    const workers = [];
+    for (let index = 1; index <= 3; index++) {
+      workers.push(await prisma.worker.create({ data: {
+        name: `${prefix}-${index}`, cpuCapacityMillicores: 1_000, memoryCapacityMiB: 1_024,
+      } }));
+    }
+    const selected = [];
+    for (let index = 0; index < 6; index++) {
+      const job = await prisma.job.create({ data: {
+        name: `${prefix}-${index}`, workloadType: WorkloadType.SORTING,
+        status: JobStatus.SCHEDULED, cpuRequiredMillicores: 100, memoryRequiredMiB: 64,
+        estimatedDurationSeconds: 1,
+      } });
+      const service = new PlacementService(scopedRepository(prefix));
+      const input = { jobId: job.id, strategy: PlacementStrategy.LEAST_LOADED };
+      const preview = await service.preview(input);
+      const result = await service.assign(input);
+      assert.equal(result.selected.workerId, preview.selected.workerId);
+      selected.push(result.selected.workerId);
+      await prisma.job.update({ where: { id: job.id }, data: {
+        status: JobStatus.COMPLETED, completedAt: new Date(),
+      } });
+    }
+    assert.deepEqual(selected, [...workers, ...workers].map((worker) => worker.id));
+    const capacity = await new PlacementService(scopedRepository(prefix)).capacity();
+    assert.ok(capacity.every((worker) => worker.placementCount === 2 && worker.cpuReservedMillicores === 0));
+  } finally {
+    await prisma.job.deleteMany({ where: { name: { startsWith: prefix } } });
+    await prisma.worker.deleteMany({ where: { name: { startsWith: prefix } } });
+    await prisma.$disconnect();
+  }
+});
+
+test("placement counts reserved jobs once and keeps unreserved assignments", { skip: !databaseTestsEnabled }, async () => {
+  const prefix = `placement-load-${randomUUID()}`;
+  try {
+    const worker = await prisma.worker.create({ data: {
+      name: prefix, cpuCapacityMillicores: 1_000, memoryCapacityMiB: 1_024,
+    } });
+    const base = { workloadType: WorkloadType.SORTING, status: JobStatus.SCHEDULED,
+      estimatedDurationSeconds: 1, assignedWorkerId: worker.id };
+    const reserved = await prisma.job.create({ data: {
+      ...base, name: `${prefix}-reserved`, cpuRequiredMillicores: 300, memoryRequiredMiB: 128,
+    } });
+    await prisma.job.create({ data: {
+      ...base, name: `${prefix}-advisory`, cpuRequiredMillicores: 200, memoryRequiredMiB: 64,
+    } });
+    assert.equal((await prismaResourceRepository.reserve({ jobId: reserved.id, workerId: worker.id,
+      cpuMillicores: 300, memoryMiB: 128 })).status, "RESERVED");
+    const service = new PlacementService(scopedRepository(prefix));
+    for (const status of [JobStatus.SCHEDULED, JobStatus.RUNNING]) {
+      await prisma.job.update({ where: { id: reserved.id }, data: { status } });
+      const [snapshot] = await service.capacity();
+      assert.equal(snapshot.cpuReservedMillicores, 300);
+      assert.equal(snapshot.cpuAssignedMillicores, 200);
+      assert.equal(snapshot.cpuAvailableMillicores, 500);
+      assert.equal(snapshot.memoryAvailableMiB, 832);
+      assert.equal(snapshot.placementCount, 2);
+    }
+  } finally {
+    await prisma.resourceAllocation.deleteMany({ where: { job: { name: { startsWith: prefix } } } });
+    await prisma.job.deleteMany({ where: { name: { startsWith: prefix } } });
+    await prisma.worker.deleteMany({ where: { name: { startsWith: prefix } } });
+    await prisma.$disconnect();
+  }
+});
 async function withServer(run) {
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
