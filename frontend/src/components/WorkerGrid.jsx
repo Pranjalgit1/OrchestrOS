@@ -10,8 +10,7 @@ export function WorkerGrid({ workers, onSelectJob }) {
         </div>
       </header>
       <p className="hint worker-explanation">
-        Workers are scheduling slots on the same computer. Rings show reserved
-        limits, not actual RAM usage. Jobs run in Docker containers.
+        Rings show reserved limits, not the actual RAM usage
       </p>
       <div className="worker-grid">
         {workers.map((worker) => (

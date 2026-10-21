@@ -117,11 +117,11 @@ export function ControlPanel(props) {
             <option value="DATA_PROCESSING">Data processing</option>
             <option value="MATRIX_MULTIPLICATION">Matrix products</option>
           </select>
-          <p className="hint">Generated jobs use 64-256 MiB and short, bounded workloads. Resources are sized automatically.</p>
+          {/* <p className="hint">Generated jobs use 64-256 MiB and short, bounded workloads. Resources are sized automatically.</p> */}
 
           <details className="control-details">
-            <summary>Reproducibility</summary>
-            <label htmlFor="seed">Deterministic seed</label>
+            <summary>Randomness</summary>
+            
             <input
               id="seed"
               type="number"
@@ -133,9 +133,9 @@ export function ControlPanel(props) {
                 onFormChange({ ...form, seed: Number(event.target.value) })
               }
             />
-            <p className="hint">
+            {/* <p className="hint">
               The same seed and settings reproduce job specifications and workload checksums. Timing can vary.
-            </p>
+            </p> */}
           </details>
 
           <button
@@ -169,7 +169,7 @@ export function ControlPanel(props) {
 
           {policy === "ROUND_ROBIN" ? (
             <>
-              <label htmlFor="quantum">Recorded time quantum (s)</label>
+              <label htmlFor="quantum">Time quantum (s)</label>
               <input
                 id="quantum"
                 type="number"
@@ -181,7 +181,7 @@ export function ControlPanel(props) {
                   onTimeQuantumChange(Number(event.target.value))
                 }
               />
-              <p className="hint">The quantum is recorded for study runs. Running containers are not paused or resumed.</p>
+              <p className="hint">When a quantum expires and another job is waiting, the container is stopped and the job is requeued. It restarts from the beginning on its next turn, up to a preemption limit.</p>
             </>
           ) : null}
 
@@ -199,11 +199,11 @@ export function ControlPanel(props) {
               </option>
             ))}
           </select>
-          <p className="hint scheduling-note">
+          {/* <p className="hint scheduling-note">
             <Icon name="info" />
             Choose how jobs are ordered and which worker receives each job.
             The backend schedules and reserves capacity.
-          </p>
+          </p> */}
         </fieldset>
 
         {/* 4. Execution */}
@@ -212,7 +212,7 @@ export function ControlPanel(props) {
 
           <p className={`run-state${autoRunning ? " is-running" : ""}`} role="status">
             <span aria-hidden="true" />
-            {autoRunning ? "Automatic scheduling active" : "Ready for your next run"}
+            {autoRunning ? "Automatic scheduling active" : "idle"}
           </p>
 
           <button
@@ -224,7 +224,7 @@ export function ControlPanel(props) {
             <Icon name={autoRunning ? "pause" : "play"} />
             {autoRunning ? "Pause orchestrator" : "Run orchestrator"}
           </button>
-          <p className="hint">Pause stops new run requests. Containers already running continue.</p>
+          {/* <p className="hint">Pause stops new run requests. Containers already running continue.</p> */}
           <button type="button" className="btn btn-stop" onClick={props.onKillAll}
             disabled={disabled}>
             <Icon name="stop" />
@@ -236,12 +236,12 @@ export function ControlPanel(props) {
               disabled={disabled || autoRunning}>
               {busy === "clear-generated" ? "Clearing…" : "Clear generated workload"}
             </button>
-            <p className="hint">Removes generated jobs that have not started scheduling, including future arrivals.</p>
+            <p className="hint">Removes generated jobs that have not started scheduling, including future occurances.</p>
             <button type="button" className="btn btn-ghost" onClick={props.onReset}
               disabled={disabled || autoRunning}>
               {busy === "reset" ? "Clearing…" : "Clear finished jobs"}
             </button>
-            <p className="hint">Removes completed, failed, interrupted, and cancelled jobs. Pause the orchestrator before cleanup.</p>
+            <p className="hint">(Pause the orchestrator before cleanup) </p>
           </details>
         </fieldset>
       </div>

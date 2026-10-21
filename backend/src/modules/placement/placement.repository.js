@@ -1,4 +1,4 @@
-import { JobStatus } from "@prisma/client";
+import { AllocationStatus, JobStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 /** Job states that still hold an advisory claim on a worker's capacity. */
 export const ACTIVE_PLACEMENT_STATUSES = [
@@ -9,8 +9,15 @@ export const prismaPlacementRepository = {
   findJobById(jobId) {
     return prisma.job.findUnique({ where: { id: jobId } });
   },
-  listWorkers() {
-    return prisma.worker.findMany({ orderBy: { name: "asc" } });
+  async listWorkers() {
+    const workers = await prisma.worker.findMany({
+      orderBy: { name: "asc" },
+      include: { _count: { select: { assignedJobs: true } } },
+    });
+    return workers.map(({ _count, ...worker }) => ({
+      ...worker,
+      placementCount: _count.assignedJobs,
+    }));
   },
   async assignedLoadByWorker() {
     const grouped = await prisma.job.groupBy({
@@ -18,6 +25,8 @@ export const prismaPlacementRepository = {
       where: {
         assignedWorkerId: { not: null },
         status: { in: [...ACTIVE_PLACEMENT_STATUSES] },
+        // Reserved jobs are already included in the worker's allocated counters.
+        allocations: { none: { status: AllocationStatus.RESERVED } },
       },
       _sum: {
         cpuRequiredMillicores: true,
