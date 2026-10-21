@@ -38,6 +38,7 @@ export function OrchestratorConsole() {
   const [policy, setPolicy] = useState("FCFS");
   const [strategy, setStrategy] = useState("LEAST_LOADED");
   const [timeQuantumSeconds, setTimeQuantumSeconds] = useState(10);
+  const [jobsPerTick, setJobsPerTick] = useState(1);
   const [autoRunning, setAutoRunning] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [filter, setFilter] = useState("ALL");
@@ -45,8 +46,8 @@ export function OrchestratorConsole() {
   const mounted = useRef(true);
   const logId = useRef(0);
   // Kept in a ref so the auto-run timer always sees the current selections.
-  const settings = useRef({ policy, strategy, timeQuantumSeconds });
-  settings.current = { policy, strategy, timeQuantumSeconds };
+  const settings = useRef({ policy, strategy, timeQuantumSeconds, jobsPerTick });
+  settings.current = { policy, strategy, timeQuantumSeconds, jobsPerTick };
   const log = useCallback((kind, label, detail) => {
     logId.current += 1;
     const entry = {
@@ -163,8 +164,8 @@ export function OrchestratorConsole() {
       const result = await runOrchestrator({
         policy: current.policy,
         strategy: current.strategy,
-        // One start per tick keeps study runs easy to follow and limits bursts.
-        maxJobs: 1,
+        // One start per tick is easy to follow; more fills the cluster faster.
+        maxJobs: current.jobsPerTick,
         ...(current.policy === "ROUND_ROBIN"
           ? { timeQuantumSeconds: current.timeQuantumSeconds }
           : {}),
@@ -252,6 +253,8 @@ export function OrchestratorConsole() {
         onStrategyChange={setStrategy}
         timeQuantumSeconds={timeQuantumSeconds}
         onTimeQuantumChange={setTimeQuantumSeconds}
+        jobsPerTick={jobsPerTick}
+        onJobsPerTickChange={setJobsPerTick}
         autoRunning={autoRunning}
         busy={busy}
         onGenerate={onGenerate}

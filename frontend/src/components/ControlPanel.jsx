@@ -26,6 +26,11 @@ const STRATEGIES = [
   { value: "LEAST_LOADED", label: "Least Loaded · lowest load" },
   { value: "RESOURCE_AWARE", label: "Resource-Aware · balanced fit" },
 ];
+const JOBS_PER_TICK = [
+  { value: 1, label: "1 · easy to follow" },
+  { value: 5, label: "5 · steady load" },
+  { value: 25, label: "25 · fill the cluster" },
+];
 export function ControlPanel(props) {
   const {
     form,
@@ -214,6 +219,21 @@ export function ControlPanel(props) {
             <span aria-hidden="true" />
             {autoRunning ? "Automatic scheduling active" : "idle"}
           </p>
+
+          <label htmlFor="jobs-per-tick">Jobs started per tick</label>
+          <select
+            id="jobs-per-tick"
+            value={props.jobsPerTick}
+            disabled={disabled}
+            onChange={(event) => props.onJobsPerTickChange(Number(event.target.value))}
+          >
+            {JOBS_PER_TICK.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <p className="hint">Each tick runs every 2s. Starting more jobs per tick fills the workers, which is what triggers autoscaling.</p>
 
           <button
             type="button"

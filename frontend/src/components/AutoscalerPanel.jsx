@@ -146,6 +146,12 @@ export function AutoscalerPanel({ onChanged }) {
 
       {error ? <p className="warn">{error}</p> : null}
 
+      <AutoscalerSettings
+        config={config}
+        busy={busy}
+        onSave={(patch) => act(() => updateAutoscaler(patch))}
+      />
+
       <details className="stage-controls" open={events.length > 0}>
         <summary>Scaling history ({events.length})</summary>
         {events.length === 0 ? (
@@ -181,5 +187,103 @@ export function AutoscalerPanel({ onChanged }) {
         )}
       </details>
     </section>
+  );
+}
+
+/** Fields an operator can tune. Utilizations are shown as percentages. */
+const SETTINGS = [
+  { key: "scaleUpUtilization", label: "Scale up at (% reserved)", min: 5, max: 100, percent: true },
+  { key: "scaleDownUtilization", label: "Scale down below (% reserved)", min: 5, max: 100, percent: true },
+  { key: "scaleUpQueueThreshold", label: "Waiting jobs needed to scale up", min: 1, max: 1000 },
+  { key: "maxWorkers", label: "Most extra workers", min: 0, max: 20 },
+  { key: "idleSeconds", label: "Idle time before retiring (s)", min: 0, max: 3600 },
+  { key: "cooldownSeconds", label: "Wait between changes (s)", min: 0, max: 3600 },
+];
+const DEMO_PRESET = {
+  scaleUpUtilization: 0.6,
+  scaleDownUtilization: 0.3,
+  scaleUpQueueThreshold: 2,
+  idleSeconds: 10,
+  cooldownSeconds: 5,
+};
+const DEFAULT_PRESET = {
+  scaleUpUtilization: 0.75,
+  scaleDownUtilization: 0.4,
+  scaleUpQueueThreshold: 2,
+  idleSeconds: 30,
+  cooldownSeconds: 15,
+};
+function toForm(config) {
+  return Object.fromEntries(SETTINGS.map(({ key, percent }) => [
+    key, percent ? Math.round(config[key] * 100) : config[key],
+  ]));
+}
+function toPatch(form) {
+  return Object.fromEntries(SETTINGS.map(({ key, percent }) => [
+    key, percent ? Number(form[key]) / 100 : Number(form[key]),
+  ]));
+}
+/**
+ * Threshold editor. The form keeps its own draft so the 3-second refresh does
+ * not overwrite what is being typed; the backend validates on save.
+ */
+function AutoscalerSettings({ config, busy, onSave }) {
+  const [draft, setDraft] = useState(() => toForm(config));
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (!dirty) setDraft(toForm(config));
+  }, [config, dirty]);
+  const save = async (patch) => {
+    await onSave(patch);
+    setDirty(false);
+  };
+  return (
+    <details className="stage-controls">
+      <summary>Thresholds</summary>
+      <form
+        className="autoscaler-settings"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save(toPatch(draft));
+        }}
+      >
+        {SETTINGS.map(({ key, label, min, max }) => (
+          <label key={key} htmlFor={`autoscale-${key}`}>
+            {label}
+            <input
+              id={`autoscale-${key}`}
+              type="number"
+              min={min}
+              max={max}
+              step={1}
+              required
+              value={draft[key]}
+              disabled={busy}
+              onChange={(event) => {
+                setDirty(true);
+                setDraft({ ...draft, [key]: event.target.value });
+              }}
+            />
+          </label>
+        ))}
+        <div className="stage-buttons autoscaler-actions">
+          <button type="submit" className="btn btn-primary" disabled={busy || !dirty}>
+            Save thresholds
+          </button>
+          <button type="button" className="btn btn-ghost" disabled={busy}
+            onClick={() => void save(DEMO_PRESET)}>
+            Quick demo preset
+          </button>
+          <button type="button" className="btn btn-ghost" disabled={busy}
+            onClick={() => void save(DEFAULT_PRESET)}>
+            Restore defaults
+          </button>
+        </div>
+        <p className="hint">
+          The demo preset scales up at 60%, retires after 10s idle, and waits 5s between changes.
+          Settings last until the backend restarts.
+        </p>
+      </form>
+    </details>
   );
 }
