@@ -25,6 +25,8 @@ const allowedTransitions = {
     JobStatus.FAILED,
     JobStatus.INTERRUPTED,
     JobStatus.CANCELLED,
+    // Round Robin preemption, or an automatic retry after an infrastructure fault.
+    JobStatus.QUEUED,
   ]),
   [JobStatus.INTERRUPTED]: new Set([
     JobStatus.QUEUED,
@@ -32,7 +34,8 @@ const allowedTransitions = {
     JobStatus.CANCELLED,
   ]),
   [JobStatus.COMPLETED]: new Set(),
-  [JobStatus.FAILED]: new Set(),
+  // A failed job is final unless an operator requeues it.
+  [JobStatus.FAILED]: new Set([JobStatus.QUEUED]),
   [JobStatus.CANCELLED]: new Set(),
 };
 export function canTransitionJob(from, to) {

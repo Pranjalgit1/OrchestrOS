@@ -103,6 +103,9 @@ export function releaseResources(jobId) {
 export function cancelJob(jobId) {
   return postJson(`/api/jobs/${jobId}/cancel`, {});
 }
+export function requeueJob(jobId) {
+  return postJson(`/api/jobs/${jobId}/requeue`, {});
+}
 export function clearFinishedJobs() {
   return postJson("/api/orchestrator/clear-finished", {});
 }

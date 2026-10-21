@@ -5,6 +5,7 @@ import {
   Prisma,
 } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
+import { RequeueReason, requeuedJobData } from "../jobs/job.requeue.js";
 import {
   TRANSACTION_OPTIONS,
   releaseAllocationWithin,
@@ -15,7 +16,28 @@ export const TERMINAL_EXECUTION_STATUSES = new Set([
   ExecutionStatus.FAILED,
   ExecutionStatus.INTERRUPTED,
   ExecutionStatus.CANCELLED,
+  ExecutionStatus.PREEMPTED,
 ]);
+const OPEN_EXECUTION_STATUSES = [ExecutionStatus.PENDING, ExecutionStatus.RUNNING];
+/**
+ * Whether a finished execution sends its job back to the queue.
+ *
+ * Preemption always requeues. A retry only requeues while the job is under its
+ * retry budget; past it, the failure is recorded as final.
+ */
+function requeueReasonFor(request, job) {
+  // A preempted execution always hands its job back; nothing else would run it.
+  if (request.executionStatus === ExecutionStatus.PREEMPTED) {
+    return RequeueReason.PREEMPTION;
+  }
+  if (
+    request.requeue === RequeueReason.RETRY &&
+    job.retryCount < (request.maxRetries ?? 0)
+  ) {
+    return RequeueReason.RETRY;
+  }
+  return null;
+}
 function jobStatusForExecution(executionStatus) {
   switch (executionStatus) {
     case ExecutionStatus.COMPLETED:
@@ -31,9 +53,43 @@ function jobStatusForExecution(executionStatus) {
 export const prismaExecutionRepository = {
   findOpenExecutions() {
     return prisma.jobExecution.findMany({
-      where: { status: { in: [ExecutionStatus.PENDING, ExecutionStatus.RUNNING] } },
+      where: { status: { in: OPEN_EXECUTION_STATUSES } },
       orderBy: { createdAt: "asc" },
+      // Recovery needs the quantum to resume Round Robin preemption checks.
+      include: { job: { select: { timeQuantumSeconds: true } } },
     });
+  },
+  findOpenExecutionForJob(jobId) {
+    return prisma.jobExecution.findFirst({
+      where: { jobId, status: { in: OPEN_EXECUTION_STATUSES } },
+      orderBy: { attempt: "desc" },
+    });
+  },
+  /**
+   * What the Round Robin tracker needs to decide whether to evict a running job:
+   * its preemption count and how many other jobs are queued and eligible.
+   */
+  async findPreemptionContext(executionId, now) {
+    const execution = await prisma.jobExecution.findUnique({
+      where: { id: executionId },
+      select: {
+        status: true,
+        job: { select: { id: true, preemptionCount: true } },
+      },
+    });
+    if (!execution) return null;
+    const waitingJobs = await prisma.job.count({
+      where: {
+        status: JobStatus.QUEUED,
+        arrivalAt: { lte: now },
+        id: { not: execution.job.id },
+      },
+    });
+    return {
+      executionStatus: execution.status,
+      preemptionCount: execution.job.preemptionCount,
+      waitingJobs,
+    };
   },
   async cancelNonExecutingJobs() {
     return prisma.$transaction(async (tx) => {
@@ -202,16 +258,26 @@ export const prismaExecutionRepository = {
           completedAt: request.completedAt,
         },
       });
+      const current = await tx.job.findUniqueOrThrow({
+        where: { id: execution.jobId },
+        select: { retryCount: true },
+      });
+      const requeueReason = requeueReasonFor(request, current);
+      const requeued = requeueReason !== null;
+      // A requeued job returns to QUEUED with its per-attempt decisions cleared,
+      // in the same transaction that records the attempt and frees its capacity.
       const job = await tx.job.update({
         where: { id: execution.jobId },
-        data: {
-          status: jobStatusForExecution(request.executionStatus),
-          completedAt: request.completedAt,
-          ...(request.executionStatus === ExecutionStatus.CANCELLED
-            ? { cancelledAt: request.completedAt } : {}),
-          failureReason: request.failureReason,
-          ...(request.result === null ? {} : { result: request.result }),
-        },
+        data: requeued
+          ? requeuedJobData(requeueReason)
+          : {
+              status: jobStatusForExecution(request.executionStatus),
+              completedAt: request.completedAt,
+              ...(request.executionStatus === ExecutionStatus.CANCELLED
+                ? { cancelledAt: request.completedAt } : {}),
+              failureReason: request.failureReason,
+              ...(request.result === null ? {} : { result: request.result }),
+            },
       });
       // Capacity is returned in the same transaction that records the outcome,
       // so a completed job can never keep holding a reservation.
@@ -222,6 +288,7 @@ export const prismaExecutionRepository = {
         job,
         worker: release.status === "RELEASED" ? release.worker : null,
         released: release.status === "RELEASED",
+        requeued,
       };
     }, TRANSACTION_OPTIONS);
   },

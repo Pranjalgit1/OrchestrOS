@@ -7,9 +7,9 @@ import {
   isEligible,
   orderByPolicy,
   selectNextJob,
-} from "./scheduler.policies.js";
-import { dispatchSchema, previewQuerySchema } from "./scheduler.schemas.js";
-import { SchedulerService } from "./scheduler.service.js";
+} from "../src/modules/scheduler/scheduler.policies.js";
+import { dispatchSchema, previewQuerySchema } from "../src/modules/scheduler/scheduler.schemas.js";
+import { SchedulerService } from "../src/modules/scheduler/scheduler.service.js";
 const now = new Date("2026-09-21T12:00:00.000Z");
 function secondsBefore(seconds) {
   return new Date(now.getTime() - seconds * 1_000);

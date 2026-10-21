@@ -9,11 +9,11 @@ import {
   WorkerStatus,
   WorkloadType,
 } from "@prisma/client";
-import { app } from "../../app.js";
-import { prisma } from "../../lib/prisma.js";
-import { utilizationSeries } from "./monitoring.metrics.js";
-import { prismaMonitoringRepository } from "./monitoring.repository.js";
-import { MonitoringService } from "./monitoring.service.js";
+import { app } from "../src/app.js";
+import { prisma } from "../src/lib/prisma.js";
+import { utilizationSeries } from "../src/modules/monitoring/monitoring.metrics.js";
+import { prismaMonitoringRepository } from "../src/modules/monitoring/monitoring.repository.js";
+import { MonitoringService } from "../src/modules/monitoring/monitoring.service.js";
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true";
 
 test(

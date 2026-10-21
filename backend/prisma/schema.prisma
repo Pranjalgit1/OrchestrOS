@@ -74,6 +74,8 @@ enum ExecutionStatus {
   FAILED
   INTERRUPTED
   CANCELLED
+  /// Evicted when its Round Robin quantum expired; the job went back to the queue.
+  PREEMPTED
 }
 
 model WorkloadBatch {
@@ -113,6 +115,10 @@ model Job {
   scheduledAt              DateTime?
   timeQuantumSeconds       Int?
   schedulingRounds         Int                @default(0)
+  /// Times a Round Robin quantum expiry evicted this job back to the queue.
+  preemptionCount          Int                @default(0)
+  /// Times this job was requeued after a failed or interrupted execution.
+  retryCount               Int                @default(0)
   placementStrategy        PlacementStrategy?
   placedAt                 DateTime?
   createdAt                DateTime           @default(now())
@@ -160,11 +166,7 @@ model Worker {
   @@map("workers")
 }
 
-/// Observational utilization history.
-///
-/// Worker counters record only the present, so utilization over time cannot be
-/// derived after the fact. These rows are the one metric OrchestrOS stores;
-/// every other metric is computed from the authoritative records on read.
+
 model WorkerSample {
   id                     String       @id @default(uuid()) @db.Char(36)
   workerId               String       @db.Char(36)

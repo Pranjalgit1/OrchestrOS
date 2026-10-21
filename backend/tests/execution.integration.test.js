@@ -9,13 +9,13 @@ import {
   WorkerStatus,
   WorkloadType,
 } from "@prisma/client";
-import { app } from "../../app.js";
-import { prisma } from "../../lib/prisma.js";
-import { prismaResourceRepository } from "../resources/resource.repository.js";
-import { WORKLOAD_IMAGE, parseRunnerResult } from "./execution.contract.js";
-import { prismaExecutionRepository } from "./execution.repository.js";
-import { buildContainerSpec, DockerContainerRuntime } from "./execution.runtime.js";
-import { ExecutionService } from "./execution.service.js";
+import { app } from "../src/app.js";
+import { prisma } from "../src/lib/prisma.js";
+import { prismaResourceRepository } from "../src/modules/resources/resource.repository.js";
+import { WORKLOAD_IMAGE, parseRunnerResult } from "../src/modules/executions/execution.contract.js";
+import { prismaExecutionRepository } from "../src/modules/executions/execution.repository.js";
+import { buildContainerSpec, DockerContainerRuntime } from "../src/modules/executions/execution.runtime.js";
+import { ExecutionService } from "../src/modules/executions/execution.service.js";
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true";
 const dockerTestsEnabled =
   process.env.RUN_DATABASE_TESTS === "true" &&

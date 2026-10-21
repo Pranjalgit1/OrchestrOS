@@ -8,9 +8,9 @@ import {
   WorkerStatus,
   WorkloadType,
 } from "@prisma/client";
-import { app } from "../../app.js";
-import { prisma } from "../../lib/prisma.js";
-import { prismaResourceRepository } from "./resource.repository.js";
+import { app } from "../src/app.js";
+import { prisma } from "../src/lib/prisma.js";
+import { prismaResourceRepository } from "../src/modules/resources/resource.repository.js";
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true";
 
 test(

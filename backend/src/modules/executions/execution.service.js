@@ -18,24 +18,36 @@ import {
   prismaExecutionRepository,
 } from "./execution.repository.js";
 import { dockerContainerRuntime } from "./execution.runtime.js";
+import { RequeueReason } from "../jobs/job.requeue.js";
+const KILL_ALL_REASON = "Stopped by Kill all workloads";
+export const OPERATOR_CANCEL_REASON = "Cancelled by operator";
 export class ExecutionService {
   repository;
   runtime;
   timeoutSeconds;
+  maxPreemptions;
+  maxRetries;
   /** Background settlements, so shutdown and tests can wait for them. */
   pending = new Map();
   imageVerified = false;
   stoppingAll = false;
   starting = new Set();
-  cancelling = new Set();
+  /** Executions being stopped on purpose, mapped to the reason recorded. */
+  cancelling = new Map();
+  /** Executions whose container is being stopped for Round Robin preemption. */
+  preempting = new Set();
   constructor(
     repository = prismaExecutionRepository,
     runtime = dockerContainerRuntime,
     timeoutSeconds = env.EXECUTION_TIMEOUT_SECONDS,
+    { maxPreemptions = env.ROUND_ROBIN_MAX_PREEMPTIONS,
+      maxRetries = env.EXECUTION_MAX_RETRIES } = {},
   ) {
     this.repository = repository;
     this.runtime = runtime;
     this.timeoutSeconds = timeoutSeconds;
+    this.maxPreemptions = maxPreemptions;
+    this.maxRetries = maxRetries;
   }
   describeRuntime() {
     return this.runtime.describe().catch((error) => {
@@ -115,6 +127,9 @@ export class ExecutionService {
         failureReason: `container could not be started: ${message}`,
         result: null,
         completedAt: new Date(),
+        // The workload never ran, so this is an infrastructure fault worth a retry.
+        requeue: RequeueReason.RETRY,
+        maxRetries: this.maxRetries,
       });
       throw ExecutionService.toRuntimeError(error);
     }
@@ -122,7 +137,12 @@ export class ExecutionService {
       execution.id,
       started.containerId,
     );
-    this.track(execution.id, started.containerId);
+    this.track(
+      execution.id,
+      started.containerId,
+      this.timeoutSeconds * 1_000,
+      job.timeQuantumSeconds ?? null,
+    );
     return {
       execution: runningExecution,
       job,
@@ -160,6 +180,12 @@ export class ExecutionService {
         alreadySettled: true,
       };
     }
+    if (this.preempting.has(executionId)) {
+      throw new ConflictError(
+        "Container is being preempted; it will settle on its own",
+        "EXECUTION_STILL_RUNNING",
+      );
+    }
     if (!execution.containerId) {
       return this.finalize(
         executionId,
@@ -167,6 +193,7 @@ export class ExecutionService {
           executionStatus: ExecutionStatus.FAILED,
           failureReason: "execution never reached a container",
           result: null,
+          requeue: RequeueReason.RETRY,
         },
         null,
       );
@@ -188,6 +215,8 @@ export class ExecutionService {
           failureReason:
             "container is no longer present on the Docker daemon, so its outcome cannot be recovered",
           result: null,
+          // Nothing says the workload misbehaved, so the job may run again.
+          requeue: RequeueReason.RETRY,
         },
         null,
       );
@@ -249,7 +278,7 @@ export class ExecutionService {
         throw ExecutionService.toRuntimeError(error);
       });
       const executions = await this.repository.findOpenExecutions();
-      for (const execution of executions) this.cancelling.add(execution.id);
+      for (const execution of executions) this.cancelling.set(execution.id, KILL_ALL_REASON);
       const processed = new Set();
       for (const execution of executions) {
         const containerId = execution.containerId ?? containerNameFor(execution.id);
@@ -257,7 +286,7 @@ export class ExecutionService {
           await this.runtime.stopManaged(containerId);
           const result = await this.finalize(execution.id, {
             executionStatus: ExecutionStatus.CANCELLED,
-            failureReason: "Stopped by Kill all workloads",
+            failureReason: KILL_ALL_REASON,
             result: null,
           }, null);
           if (!result.alreadySettled) cancelledExecutions += 1;
@@ -313,7 +342,9 @@ export class ExecutionService {
         }
         if (await this.runtime.isRunning(containerId)) {
           const elapsed = Date.now() - (execution.startedAt ?? execution.createdAt).getTime();
-          this.track(execution.id, containerId, Math.max(1, this.timeoutSeconds * 1000 - elapsed));
+          this.track(execution.id, containerId,
+            Math.max(1, this.timeoutSeconds * 1000 - elapsed),
+            execution.job?.timeQuantumSeconds ?? null);
         } else {
           await this.settle(execution.id);
         }
@@ -347,29 +378,43 @@ export class ExecutionService {
     this.imageVerified = true;
   }
   /** Awaits the container in the background and settles it once it exits. */
-  track(executionId, containerId, timeoutMs = this.timeoutSeconds * 1_000) {
+  track(
+    executionId,
+    containerId,
+    timeoutMs = this.timeoutSeconds * 1_000,
+    quantumSeconds = null,
+  ) {
     const settlement = (async () => {
       try {
-        const { timedOut } = await this.runtime.waitForExit(
+        const { timedOut, preempted } = await this.awaitExit(
+          executionId,
           containerId,
           timeoutMs,
+          quantumSeconds,
         );
         const exit = await this.runtime.collect(containerId);
         const execution = await this.repository.findById(executionId);
-        await this.finalize(
-          executionId,
-          this.cancelling.has(executionId) ? {
+        const cancelReason = this.cancelling.get(executionId);
+        let outcome;
+        if (cancelReason !== undefined) {
+          outcome = {
             executionStatus: ExecutionStatus.CANCELLED,
-            failureReason: "Stopped by Kill all workloads",
+            failureReason: cancelReason,
             result: null,
-          } : ExecutionService.classify(
+          };
+        } else {
+          outcome = ExecutionService.classify(
             exit,
             timedOut,
             this.timeoutSeconds,
             execution?.attempt ?? 1,
-          ),
-          exit,
-        );
+          );
+          // A run that finished just as its quantum expired keeps its result.
+          if (preempted && outcome.executionStatus !== ExecutionStatus.COMPLETED) {
+            outcome = ExecutionService.preempted(quantumSeconds);
+          }
+        }
+        await this.finalize(executionId, outcome, exit);
         await this.removeContainer(containerId);
       } catch (error) {
         const recorded = await this.repository.findById(executionId).catch(() => null);
@@ -382,9 +427,109 @@ export class ExecutionService {
         );
       } finally {
         this.pending.delete(executionId);
+        this.preempting.delete(executionId);
       }
     })();
     this.pending.set(executionId, settlement);
+  }
+  /**
+   * Waits for the container to exit, enforcing the wall-clock timeout.
+   *
+   * Without a quantum this is one wait. With a Round Robin quantum the wait is
+   * cut into quantum-sized slices; after each expired slice the job is evicted
+   * if another job is waiting and it still has preemptions left, otherwise it
+   * keeps running into the next slice. The final slice before the deadline uses
+   * the ordinary timeout, so preemption never extends an execution's limit.
+   */
+  async awaitExit(executionId, containerId, timeoutMs, quantumSeconds) {
+    if (!quantumSeconds || this.maxPreemptions === 0) {
+      return this.runtime.waitForExit(containerId, timeoutMs);
+    }
+    const quantumMs = quantumSeconds * 1_000;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= quantumMs) {
+        return this.runtime.waitForExit(containerId, Math.max(1, remaining));
+      }
+      const slice = await this.runtime.waitForExit(containerId, quantumMs, {
+        stopOnTimeout: false,
+      });
+      if (!slice.timedOut) return { timedOut: false, preempted: false };
+      if (await this.shouldPreempt(executionId)) {
+        this.preempting.add(executionId);
+        await this.runtime.stopManaged(containerId);
+        return { timedOut: false, preempted: true };
+      }
+    }
+  }
+  /** True when an expired quantum should evict this execution's job. */
+  async shouldPreempt(executionId) {
+    if (this.stoppingAll || this.cancelling.has(executionId)) return false;
+    try {
+      const context = await this.repository.findPreemptionContext(
+        executionId,
+        new Date(),
+      );
+      return (
+        context !== null &&
+        context.executionStatus === ExecutionStatus.RUNNING &&
+        context.preemptionCount < this.maxPreemptions &&
+        context.waitingJobs > 0
+      );
+    } catch (error) {
+      // A failed check must not end tracking; the job simply keeps its turn.
+      console.error(
+        `Preemption check failed for execution ${executionId}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return false;
+    }
+  }
+  /**
+   * Stops one job's container and records it as cancelled.
+   *
+   * Returns the job as recorded afterwards. If the container finished or was
+   * preempted first, that outcome stands and the caller sees the job's real
+   * status rather than a claimed cancellation.
+   */
+  async cancel(jobId, reason = OPERATOR_CANCEL_REASON) {
+    if (this.stoppingAll) {
+      throw new ConflictError("Workloads are being stopped", "WORKLOADS_STOPPING");
+    }
+    let execution = await this.repository.findOpenExecutionForJob(jobId);
+    if (!execution) return { cancelled: false, job: null };
+    if (!execution.containerId) {
+      // A launch may be between container creation and recording its id.
+      await Promise.allSettled([...this.starting]);
+      execution = await this.repository.findById(execution.id);
+      if (!execution || TERMINAL_EXECUTION_STATUSES.has(execution.status)) {
+        return { cancelled: false, job: null };
+      }
+    }
+    const containerId = execution.containerId ?? containerNameFor(execution.id);
+    this.cancelling.set(execution.id, reason);
+    try {
+      await this.runtime.stopManaged(containerId).catch((error) => {
+        throw ExecutionService.toRuntimeError(error);
+      });
+      // Let the tracker record the exit code and logs if it is watching.
+      const tracked = this.pending.get(execution.id);
+      if (tracked) await tracked;
+      const result = await this.finalize(execution.id, {
+        executionStatus: ExecutionStatus.CANCELLED,
+        failureReason: reason,
+        result: null,
+      }, null);
+      await this.removeContainer(containerId);
+      return {
+        cancelled: result.execution.status === ExecutionStatus.CANCELLED,
+        job: result.job,
+        released: result.released,
+      };
+    } finally {
+      this.cancelling.delete(execution.id);
+    }
   }
   async finalize(executionId, outcome, exit) {
     const finishedAt = exit?.finishedAt ? new Date(exit.finishedAt) : null;
@@ -404,6 +549,9 @@ export class ExecutionService {
       failureReason: outcome.failureReason,
       result: outcome.result,
       completedAt,
+      ...(outcome.requeue
+        ? { requeue: outcome.requeue, maxRetries: this.maxRetries }
+        : {}),
     });
     if (result.status === "EXECUTION_NOT_FOUND") {
       throw new NotFoundError("Execution");
@@ -422,6 +570,7 @@ export class ExecutionService {
       job: result.job,
       worker: result.worker,
       released: result.released,
+      requeued: result.requeued === true,
       alreadySettled: false,
     };
   }
@@ -437,12 +586,27 @@ export class ExecutionService {
       );
     }
   }
+  /**
+   * The outcome of a Round Robin eviction. The container is discarded and the
+   * job goes back to the queue; its next attempt starts from the beginning,
+   * which is safe because every workload is deterministic for its seed.
+   */
+  static preempted(quantumSeconds) {
+    return {
+      executionStatus: ExecutionStatus.PREEMPTED,
+      failureReason:
+        `Round Robin quantum of ${quantumSeconds}s expired while other jobs were waiting; ` +
+        "the container was stopped and the job returned to the queue",
+      result: null,
+    };
+  }
   /** Turns a container exit into a recorded execution outcome. */
   static classify(exit, timedOut, timeoutSeconds, attempt) {
     if (timedOut) {
       return {
         // Interrupted rather than failed: the workload did not misbehave, the
-        // orchestrator stopped it. Interrupted jobs stay eligible for requeue.
+        // orchestrator stopped it. An operator can requeue it; it is not
+        // retried automatically because the same run would hit the same limit.
         executionStatus: ExecutionStatus.INTERRUPTED,
         failureReason: `execution exceeded the ${timeoutSeconds}s limit and the container was stopped`,
         result: null,

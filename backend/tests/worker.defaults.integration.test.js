@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { prisma } from "../../lib/prisma.js";
-import { resourceService } from "../resources/resource.service.js";
-import { ensureStudyWorkers, STUDY_WORKERS } from "./worker.defaults.js";
+import { prisma } from "../src/lib/prisma.js";
+import { resourceService } from "../src/modules/resources/resource.service.js";
+import { ensureStudyWorkers, STUDY_WORKERS } from "../src/modules/workers/worker.defaults.js";
 
 test("study budgets update idle defaults and preserve an older active reservation", {
   skip: process.env.RUN_DATABASE_TESTS !== "true",

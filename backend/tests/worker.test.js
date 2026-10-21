@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { WorkerStatus } from "@prisma/client";
-import { AppError } from "../../errors/app-error.js";
-import { createWorkerSchema } from "./worker.schemas.js";
-import { WorkerService } from "./worker.service.js";
+import { AppError } from "../src/errors/app-error.js";
+import { createWorkerSchema } from "../src/modules/workers/worker.schemas.js";
+import { WorkerService } from "../src/modules/workers/worker.service.js";
 function makeWorker(overrides = {}) {
   const now = new Date();
   return {

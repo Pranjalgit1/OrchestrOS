@@ -17,11 +17,13 @@ const currentCapabilities = [
   "Live operational metrics and utilization history",
   "Browser-driven orchestration with per-stage controls",
   "Restart recovery and workload cleanup",
+  "Round Robin preemption with requeue",
+  "Per-job cancellation, including running containers",
+  "Automatic and manual retry of failed jobs",
 ];
 const futureCapabilities = [
   "Reactive autoscaling",
   "Worker-level failure recovery",
-  "Preemption and individual runtime cancellation",
 ];
 export function ServiceHealth({ health, error, status }) {
   const apiState = error ? "Unavailable"

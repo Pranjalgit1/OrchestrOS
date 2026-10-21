@@ -7,13 +7,13 @@ import {
   WorkerStatus,
   WorkloadType,
 } from "@prisma/client";
-import { AppError } from "../../errors/app-error.js";
+import { AppError } from "../src/errors/app-error.js";
 import {
   listAllocationsQuerySchema,
   releaseResourcesSchema,
   reserveResourcesSchema,
-} from "./resource.schemas.js";
-import { ResourceService } from "./resource.service.js";
+} from "../src/modules/resources/resource.schemas.js";
+import { ResourceService } from "../src/modules/resources/resource.service.js";
 const now = new Date("2026-09-22T12:00:00.000Z");
 function makeWorker(overrides = {}) {
   return {

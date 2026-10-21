@@ -15,7 +15,7 @@
     "db:deploy": "dotenv -e ../.env -- prisma migrate deploy",
     "db:seed": "dotenv -e ../.env -- node prisma/seed.js",
     "db:setup": "npm run db:deploy && npm run db:seed",
-    "test": "node --test --test-concurrency=1 src/*.test.js src/modules/jobs/*.test.js src/modules/workers/*.test.js src/modules/workloads/*.test.js src/modules/scheduler/*.test.js src/modules/placement/*.test.js src/modules/resources/*.test.js src/modules/executions/*.test.js src/modules/monitoring/*.test.js src/modules/orchestrator/*.test.js",
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
     "check": "node scripts/check.js"
   },
   "dependencies": {

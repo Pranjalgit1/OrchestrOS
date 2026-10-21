@@ -40,7 +40,8 @@ State jobs are ordered by `updatedAt` descending before applying `limit`; each j
 | POST | `/jobs` | Create one queued job |
 | GET | `/jobs` | List jobs, optionally filtered by `status` |
 | GET | `/jobs/:id` | Read one job |
-| POST | `/jobs/:id/cancel` | Cancel a queued job |
+| POST | `/jobs/:id/cancel` | Cancel an unfinished job; a running job's container is stopped first and its reservation released |
+| POST | `/jobs/:id/requeue` | Return a `FAILED` or `INTERRUPTED` job to the queue for another attempt |
 | POST | `/workers` | Create one logical worker |
 | GET | `/workers` | List workers |
 | GET | `/workers/:id` | Read one worker |
@@ -72,6 +73,13 @@ Example job:
 The workload runner applies its own smaller work limits, described in [the architecture guide](architecture.md). An estimate is not a promise about actual duration.
 
 Job lists accept `limit` from 1-100, default 50.
+
+Cancel and requeue have no request body and return the updated job.
+
+- **Cancel.** Repeating a cancel returns the same cancelled job. Cancelling a `COMPLETED` or `FAILED` job returns 409 `JOB_NOT_CANCELLABLE`. So does a running job whose container finished before it could be stopped, and the response reports the status it finished with.
+- **Requeue.** Requeuing any job that is not `FAILED` or `INTERRUPTED` returns 409 `JOB_NOT_REQUEUEABLE`. A requeue clears the job's scheduling and placement fields and increments `retryCount`. Earlier attempts stay readable through `/executions?jobId=`.
+
+Jobs also report `preemptionCount` (Round Robin evictions) and `retryCount`. Executions may end as `PREEMPTED` when a Round Robin quantum expires while another job waits.
 
 Example worker:
 

@@ -2,18 +2,18 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import { JobStatus, WorkloadPattern, WorkloadType } from "@prisma/client";
-import { AppError } from "../../errors/app-error.js";
-import { createJobSchema } from "../jobs/job.schemas.js";
+import { AppError } from "../src/errors/app-error.js";
+import { createJobSchema } from "../src/modules/jobs/job.schemas.js";
 import {
   createMulberry32,
   derivedWorkloadSize,
   generateWorkloadSpecs,
-} from "./workload.generator.js";
+} from "../src/modules/workloads/workload.generator.js";
 import {
   customWorkloadConfigSchema,
   generateWorkloadSchema,
-} from "./workload.schemas.js";
-import { WorkloadService } from "./workload.service.js";
+} from "../src/modules/workloads/workload.schemas.js";
+import { WorkloadService } from "../src/modules/workloads/workload.service.js";
 const predefinedPatterns = [
   WorkloadPattern.LIGHT,
   WorkloadPattern.MEDIUM,

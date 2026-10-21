@@ -8,13 +8,13 @@ import {
   WorkerStatus,
   WorkloadType,
 } from "@prisma/client";
-import { AppError } from "../../errors/app-error.js";
+import { AppError } from "../src/errors/app-error.js";
 import {
   DockerApiError,
   DockerUnavailableError,
   demultiplexLogStream,
   negotiateApiVersion,
-} from "./docker.client.js";
+} from "../src/modules/executions/docker.client.js";
 import {
   RUNNER_EXIT_INVALID_INPUT,
   RUNNER_EXIT_WORKLOAD_FAILED,
@@ -24,14 +24,14 @@ import {
   describeExitCode,
   deriveWorkloadSeed,
   parseRunnerResult,
-} from "./execution.contract.js";
+} from "../src/modules/executions/execution.contract.js";
 import {
   executionIdParamsSchema,
   listExecutionsQuerySchema,
   startExecutionSchema,
-} from "./execution.schemas.js";
-import { ExecutionService } from "./execution.service.js";
-import { buildContainerSpec, DockerContainerRuntime } from "./execution.runtime.js";
+} from "../src/modules/executions/execution.schemas.js";
+import { ExecutionService } from "../src/modules/executions/execution.service.js";
+import { buildContainerSpec, DockerContainerRuntime } from "../src/modules/executions/execution.runtime.js";
 test("runtime stop refuses containers without the ownership label", async () => {
   let stopped = false;
   const runtime = new DockerContainerRuntime({
@@ -747,6 +747,12 @@ test("a container that cannot start is recorded as failed so capacity is not str
     repository.finalizations[0]?.failureReason ?? "",
     /could not be started/,
   );
+  assert.equal(
+    repository.finalizations[0]?.requeue,
+    "RETRY",
+    "a launch failure is an infrastructure fault, so the job may retry",
+  );
+  assert.equal(typeof repository.finalizations[0]?.maxRetries, "number");
   assert.equal(repository.started.length, 0);
 });
 test("settling refuses while the container is still running", async () => {
@@ -840,6 +846,7 @@ test("an open execution whose container vanished is settled as an honest failure
     repository.finalizations[0]?.failureReason ?? "",
     /no longer present/,
   );
+  assert.equal(repository.finalizations[0]?.requeue, "RETRY");
   assert.equal(
     repository.finalizations[0]?.exitCode,
     null,
@@ -931,4 +938,205 @@ test("container names are derived from the execution, so a retry cannot collide"
   const second = randomUUID();
   assert.notEqual(containerNameFor(first), containerNameFor(second));
   assert.match(containerNameFor(first), /^orchestros-exec-/);
+});
+
+/**
+ * Runtime whose waits are scripted: each entry answers one `waitForExit` call.
+ * `stopManaged` is recorded so tests can see whether a container was evicted.
+ */
+class ScriptedRuntime extends StubRuntime {
+  waits = [];
+  stopped = [];
+  constructor(script, options = {}) {
+    super(options);
+    this.script = [...script];
+  }
+  async waitForExit(_containerId, timeoutMs, options) {
+    this.waits.push({ timeoutMs, stopOnTimeout: options?.stopOnTimeout ?? true });
+    return { timedOut: this.script.shift() ?? false };
+  }
+  async stopManaged(containerId) {
+    this.stopped.push(containerId);
+  }
+}
+function preemptionRepository(contexts) {
+  const execution = makeExecution({
+    status: ExecutionStatus.RUNNING,
+    containerId: "a".repeat(64),
+    startedAt: now,
+  });
+  const repository = new StubRepository(null, {
+    status: "FINALIZED",
+    execution,
+    job: makeJob({ status: JobStatus.QUEUED }),
+    released: true,
+    requeued: true,
+  }, execution);
+  const queue = [...contexts];
+  repository.contextCalls = 0;
+  repository.findPreemptionContext = async () => {
+    repository.contextCalls += 1;
+    return queue.shift() ?? queue.at(-1) ?? null;
+  };
+  return { repository, execution };
+}
+const running = (overrides = {}) => ({
+  executionStatus: ExecutionStatus.RUNNING,
+  preemptionCount: 0,
+  waitingJobs: 1,
+  ...overrides,
+});
+test("an expired Round Robin quantum evicts the job when another job is waiting", async () => {
+  const { repository, execution } = preemptionRepository([running()]);
+  const runtime = new ScriptedRuntime([true]);
+  const service = new ExecutionService(repository, runtime, 300, { maxPreemptions: 3 });
+  service.track(execution.id, execution.containerId, 300_000, 10);
+  await service.awaitPendingSettlements();
+  assert.deepEqual(runtime.waits, [{ timeoutMs: 10_000, stopOnTimeout: false }],
+    "a quantum slice only observes expiry; it does not stop the container itself");
+  assert.deepEqual(runtime.stopped, [execution.containerId]);
+  assert.equal(repository.finalizations.length, 1);
+  assert.equal(repository.finalizations[0].executionStatus, ExecutionStatus.PREEMPTED);
+  assert.match(repository.finalizations[0].failureReason, /quantum of 10s/);
+  assert.deepEqual(runtime.removed, [execution.containerId]);
+  assert.equal(service.preempting.size, 0);
+});
+test("a job keeps running past its quantum while nobody is waiting", async () => {
+  const { repository, execution } = preemptionRepository([
+    running({ waitingJobs: 0 }), running({ waitingJobs: 0 }),
+  ]);
+  const runtime = new ScriptedRuntime([true, true, false], {
+    exit: makeExit({ stdout: `${runnerLine()}\n` }),
+  });
+  const service = new ExecutionService(repository, runtime, 300, { maxPreemptions: 3 });
+  service.track(execution.id, execution.containerId, 300_000, 10);
+  await service.awaitPendingSettlements();
+  assert.equal(runtime.waits.length, 3);
+  assert.equal(repository.contextCalls, 2);
+  assert.deepEqual(runtime.stopped, []);
+  assert.equal(repository.finalizations[0].executionStatus, ExecutionStatus.COMPLETED);
+});
+test("a job that used up its preemptions runs to completion", async () => {
+  const { repository, execution } = preemptionRepository([running({ preemptionCount: 3 })]);
+  const runtime = new ScriptedRuntime([true, false], {
+    exit: makeExit({ stdout: `${runnerLine()}\n` }),
+  });
+  const service = new ExecutionService(repository, runtime, 300, { maxPreemptions: 3 });
+  service.track(execution.id, execution.containerId, 300_000, 10);
+  await service.awaitPendingSettlements();
+  assert.deepEqual(runtime.stopped, []);
+  assert.equal(repository.finalizations[0].executionStatus, ExecutionStatus.COMPLETED);
+});
+test("disabled preemption waits once, exactly as before", async () => {
+  const { repository, execution } = preemptionRepository([running()]);
+  const runtime = new ScriptedRuntime([false], { exit: makeExit({ stdout: `${runnerLine()}\n` }) });
+  const service = new ExecutionService(repository, runtime, 300, { maxPreemptions: 0 });
+  service.track(execution.id, execution.containerId, 300_000, 10);
+  await service.awaitPendingSettlements();
+  assert.deepEqual(runtime.waits, [{ timeoutMs: 300_000, stopOnTimeout: true }]);
+  assert.equal(repository.contextCalls, 0);
+});
+test("the last slice before the deadline enforces the normal timeout", async (context) => {
+  const { repository, execution } = preemptionRepository([running({ waitingJobs: 0 })]);
+  const runtime = new ScriptedRuntime([true, true]);
+  // An expired wait takes its full duration, so the deadline actually approaches.
+  context.mock.timers.enable({ apis: ["Date"], now: now.getTime() });
+  const scriptedWait = runtime.waitForExit.bind(runtime);
+  runtime.waitForExit = async (id, timeoutMs, options) => {
+    const answer = await scriptedWait(id, timeoutMs, options);
+    if (answer.timedOut) context.mock.timers.tick(timeoutMs);
+    return answer;
+  };
+  const service = new ExecutionService(repository, runtime, 15, { maxPreemptions: 3 });
+  service.track(execution.id, execution.containerId, 15_000, 10);
+  await service.awaitPendingSettlements();
+  assert.equal(runtime.waits.length, 2);
+  assert.equal(runtime.waits[0].stopOnTimeout, false);
+  assert.equal(runtime.waits[1].stopOnTimeout, true, "the deadline still stops the container");
+  assert.ok(runtime.waits[1].timeoutMs <= 5_000);
+  assert.equal(repository.finalizations[0].executionStatus, ExecutionStatus.INTERRUPTED);
+  assert.equal(repository.finalizations[0].requeue, undefined,
+    "a timeout is not retried automatically; the same run would hit the same limit");
+});
+test("a run that finishes as its quantum expires keeps its result", async () => {
+  const { repository, execution } = preemptionRepository([running()]);
+  const runtime = new ScriptedRuntime([true], { exit: makeExit({ stdout: `${runnerLine()}\n` }) });
+  const service = new ExecutionService(repository, runtime, 300, { maxPreemptions: 3 });
+  service.track(execution.id, execution.containerId, 300_000, 10);
+  await service.awaitPendingSettlements();
+  assert.equal(repository.finalizations[0].executionStatus, ExecutionStatus.COMPLETED);
+});
+test("a failed preemption check keeps the job running instead of losing track of it", async () => {
+  const { repository, execution } = preemptionRepository([]);
+  repository.findPreemptionContext = async () => { throw new Error("database busy"); };
+  const runtime = new ScriptedRuntime([true, false], { exit: makeExit({ stdout: `${runnerLine()}\n` }) });
+  const service = new ExecutionService(repository, runtime, 300, { maxPreemptions: 3 });
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    service.track(execution.id, execution.containerId, 300_000, 10);
+    await service.awaitPendingSettlements();
+  } finally {
+    console.error = originalError;
+  }
+  assert.deepEqual(runtime.stopped, []);
+  assert.equal(repository.finalizations[0].executionStatus, ExecutionStatus.COMPLETED);
+});
+test("cancelling a running job stops its container and records an operator cancellation", async () => {
+  const execution = makeExecution({ status: ExecutionStatus.RUNNING,
+    containerId: "d".repeat(64), startedAt: now });
+  const repository = new StubRepository(null, {
+    status: "FINALIZED",
+    execution: { ...execution, status: ExecutionStatus.CANCELLED },
+    job: makeJob({ id: execution.jobId, status: JobStatus.CANCELLED }),
+    released: true,
+  }, execution);
+  repository.findOpenExecutionForJob = async () => execution;
+  const runtime = new ScriptedRuntime([]);
+  const service = new ExecutionService(repository, runtime, 300);
+  const result = await service.cancel(execution.jobId);
+  assert.equal(result.cancelled, true);
+  assert.equal(result.job.status, JobStatus.CANCELLED);
+  assert.deepEqual(runtime.stopped, [execution.containerId]);
+  assert.equal(repository.finalizations[0].executionStatus, ExecutionStatus.CANCELLED);
+  assert.equal(repository.finalizations[0].failureReason, "Cancelled by operator");
+  assert.deepEqual(runtime.removed, [execution.containerId]);
+  assert.equal(service.cancelling.size, 0);
+});
+test("a tracked container stopped by cancel is recorded with its exit details", async () => {
+  const execution = makeExecution({ status: ExecutionStatus.RUNNING,
+    containerId: "e".repeat(64), startedAt: now });
+  const repository = new StubRepository(null, {
+    status: "FINALIZED",
+    execution: { ...execution, status: ExecutionStatus.CANCELLED },
+    job: makeJob({ id: execution.jobId, status: JobStatus.CANCELLED }),
+    released: true,
+  }, execution);
+  repository.findOpenExecutionForJob = async () => execution;
+  let exitContainer;
+  const runtime = new ScriptedRuntime([], { exit: makeExit({ exitCode: 137 }) });
+  runtime.waitForExit = () => new Promise((resolve) => {
+    exitContainer = () => resolve({ timedOut: false });
+  });
+  runtime.stopManaged = async (id) => { runtime.stopped.push(id); exitContainer(); };
+  const service = new ExecutionService(repository, runtime, 300);
+  service.track(execution.id, execution.containerId);
+  await service.cancel(execution.jobId);
+  assert.equal(repository.finalizations[0].executionStatus, ExecutionStatus.CANCELLED,
+    "the tracker records a cancellation, not an exit-code failure");
+  assert.equal(repository.finalizations[0].failureReason, "Cancelled by operator");
+  assert.equal(repository.finalizations[0].exitCode, 137);
+});
+test("cancel reports nothing to stop when the job has no live execution", async () => {
+  const repository = new StubRepository(null);
+  repository.findOpenExecutionForJob = async () => null;
+  const runtime = new ScriptedRuntime([]);
+  const service = new ExecutionService(repository, runtime, 300);
+  assert.deepEqual(await service.cancel(randomUUID()), { cancelled: false, job: null });
+  assert.deepEqual(runtime.stopped, []);
+});
+test("cancel is refused while kill all is stopping every workload", async () => {
+  const service = new ExecutionService(new StubRepository(null), new ScriptedRuntime([]), 300);
+  service.stoppingAll = true;
+  await assert.rejects(service.cancel(randomUUID()), { code: "WORKLOADS_STOPPING" });
 });

@@ -10,17 +10,17 @@ import {
   WorkerStatus,
   WorkloadType,
 } from "@prisma/client";
-import { ConflictError } from "../../errors/app-error.js";
+import { ConflictError } from "../src/errors/app-error.js";
 import {
   derivePipelineStage,
   isEligibleNow,
   secondsUntilEligible,
-} from "./orchestrator.pipeline.js";
+} from "../src/modules/orchestrator/orchestrator.pipeline.js";
 import {
   orchestratorStateQuerySchema,
   runOrchestratorSchema,
-} from "./orchestrator.schemas.js";
-import { OrchestratorService } from "./orchestrator.service.js";
+} from "../src/modules/orchestrator/orchestrator.schemas.js";
+import { OrchestratorService } from "../src/modules/orchestrator/orchestrator.service.js";
 const now = new Date("2026-09-23T12:00:00.000Z");
 function makeJob(overrides = {}) {
   return {
