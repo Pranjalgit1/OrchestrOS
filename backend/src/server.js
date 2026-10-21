@@ -3,6 +3,7 @@ import { env } from "./config/env.js";
 import { prisma } from "./lib/prisma.js";
 import { executionService } from "./modules/executions/execution.service.js";
 import { monitoringSampler } from "./modules/monitoring/monitoring.sampler.js";
+import { autoscalerService } from "./modules/autoscaler/autoscaler.service.js";
 import { ensureStudyWorkers } from "./modules/workers/worker.defaults.js";
 // Reconcile containers before accepting new start requests after a restart.
 try {
@@ -21,6 +22,13 @@ const server = app.listen(env.PORT, env.HOST, () => {
 });
 // Started here rather than in app.js so importing the app never starts a timer.
 monitoringSampler.start();
+autoscalerService.start();
+if (autoscalerService.loopEnabled) {
+  console.log(
+    `Autoscaler evaluating every ${autoscalerService.intervalSeconds}s ` +
+      `(${autoscalerService.config.enabled ? "enabled" : "disabled; toggle it from the dashboard"})`,
+  );
+}
 if (monitoringSampler.enabled) {
   console.log(
     `Monitoring sampler running every ${env.MONITORING_SAMPLE_INTERVAL_SECONDS}s, ` +
@@ -55,6 +63,7 @@ async function shutdown(signal) {
   clearInterval(recoveryTimer);
   console.log(`${signal} received; shutting down OrchestrOS backend`);
   monitoringSampler.stop();
+  autoscalerService.stop();
   server.close(async (error) => {
     // Let running containers finish being recorded, otherwise their executions
     // would stay RUNNING and keep holding reservations.

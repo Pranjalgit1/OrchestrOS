@@ -419,6 +419,7 @@ export class OrchestratorService {
         id: entry.id,
         name: entry.name,
         status: entry.status,
+        autoscaled: entry.autoscaled ?? false,
         cpuCapacityMillicores: entry.cpuCapacityMillicores,
         cpuAllocatedMillicores: entry.cpuAllocatedMillicores,
         cpuUtilization: ratio(

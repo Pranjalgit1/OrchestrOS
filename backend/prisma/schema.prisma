@@ -59,6 +59,13 @@ enum WorkerStatus {
   BUSY
   STOPPING
   FAILED
+  /// Removed from service by the autoscaler; kept so job history still resolves.
+  RETIRED
+}
+
+enum ScalingAction {
+  SCALE_UP
+  SCALE_DOWN
 }
 
 enum AllocationStatus {
@@ -154,6 +161,8 @@ model Worker {
   cpuAllocatedMillicores  Int                  @default(0)
   memoryAllocatedMiB      Int                  @default(0)
   status                  WorkerStatus         @default(IDLE)
+  /// Created by the autoscaler, which is the only thing allowed to retire it.
+  autoscaled              Boolean              @default(false)
   lastHeartbeat           DateTime?
   createdAt               DateTime             @default(now())
   updatedAt               DateTime             @updatedAt
@@ -161,9 +170,31 @@ model Worker {
   allocations             ResourceAllocation[]
   executions              JobExecution[]
   samples                 WorkerSample[]
+  scalingEvents           ScalingEvent[]
 
   @@index([status])
+  @@index([autoscaled, status])
   @@map("workers")
+}
+
+/// One autoscaler decision that changed the cluster, with the signals behind it.
+model ScalingEvent {
+  id                String        @id @default(uuid()) @db.Char(36)
+  action            ScalingAction
+  workerId          String        @db.Char(36)
+  workerName        String        @db.VarChar(64)
+  reason            String        @db.Text
+  queuedJobs        Int
+  cpuUtilization    Float
+  memoryUtilization Float
+  /// Schedulable workers after the action.
+  workerCount       Int
+  createdAt         DateTime      @default(now())
+  worker            Worker        @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([createdAt])
+  @@index([workerId])
+  @@map("scaling_events")
 }
 
 

@@ -1,4 +1,4 @@
-import { AllocationStatus, ExecutionStatus, JobStatus } from "@prisma/client";
+import { AllocationStatus, ExecutionStatus, JobStatus, WorkerStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 function tally(groups) {
   const counts = {};
@@ -23,7 +23,11 @@ export const prismaMonitoringRepository = {
         latestSample,
         sampleCount,
       ] = await Promise.all([
-        tx.worker.findMany({ orderBy: { name: "asc" } }),
+        tx.worker.findMany({
+          // Retired workers contribute no capacity to the live cluster.
+          where: { status: { not: WorkerStatus.RETIRED } },
+          orderBy: { name: "asc" },
+        }),
         tx.job.groupBy({ by: ["status"], _count: { _all: true } }),
         tx.jobExecution.groupBy({ by: ["status"], _count: { _all: true } }),
         tx.resourceAllocation.count({
@@ -230,6 +234,7 @@ export const prismaMonitoringRepository = {
           WHERE \`status\` = 'RESERVED'
           GROUP BY \`workerId\`
         ) reserved ON reserved.\`workerId\` = w.\`id\`
+        WHERE w.\`status\` <> 'RETIRED'
         ON DUPLICATE KEY UPDATE \`id\` = \`worker_samples\`.\`id\`
       `;
       return inserted;

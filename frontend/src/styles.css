@@ -1735,3 +1735,12 @@ a {
     animation: none !important;
   }
 }
+/* Reactive autoscaling */
+.badge-auto {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px dashed var(--accent-text);
+  margin-left: auto;
+  margin-right: 6px;
+}
+.autoscaler-actions .btn { width: auto; }

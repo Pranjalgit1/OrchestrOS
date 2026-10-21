@@ -1,4 +1,4 @@
-import { AllocationStatus, JobStatus } from "@prisma/client";
+import { AllocationStatus, JobStatus, WorkerStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 /** Job states that still hold an advisory claim on a worker's capacity. */
 export const ACTIVE_PLACEMENT_STATUSES = [
@@ -11,6 +11,8 @@ export const prismaPlacementRepository = {
   },
   async listWorkers() {
     const workers = await prisma.worker.findMany({
+      // Retired workers are out of service and not placement candidates.
+      where: { status: { not: WorkerStatus.RETIRED } },
       orderBy: { name: "asc" },
       include: { _count: { select: { assignedJobs: true } } },
     });

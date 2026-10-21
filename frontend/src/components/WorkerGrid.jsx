@@ -17,6 +17,9 @@ export function WorkerGrid({ workers, onSelectJob }) {
           <article key={worker.id} className="worker-card">
             <header>
               <strong className="mono">{worker.name}</strong>
+              {worker.autoscaled ? (
+                <span className="badge badge-auto" title="Added by the autoscaler">auto</span>
+              ) : null}
               <span className={`badge badge-${worker.status.toLowerCase()}`}>
                 {worker.status}
               </span>

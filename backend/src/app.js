@@ -13,6 +13,7 @@ import { resourceRouter } from "./modules/resources/resource.routes.js";
 import { schedulerRouter } from "./modules/scheduler/scheduler.routes.js";
 import { workloadRouter } from "./modules/workloads/workload.routes.js";
 import { workerRouter } from "./modules/workers/worker.routes.js";
+import { autoscalerRouter } from "./modules/autoscaler/autoscaler.routes.js";
 export const app = express();
 app.disable("x-powered-by");
 app.use(
@@ -38,6 +39,7 @@ app.use("/api/resources", resourceRouter);
 app.use("/api/executions", executionRouter);
 app.use("/api/monitoring", monitoringRouter);
 app.use("/api/workers", workerRouter);
+app.use("/api/autoscaler", autoscalerRouter);
 app.use((_request, response) => {
   response.status(404).json({
     error: {

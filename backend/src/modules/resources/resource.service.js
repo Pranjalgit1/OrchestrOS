@@ -55,6 +55,12 @@ export class ResourceService {
         );
       case "WORKER_NOT_FOUND":
         throw new NotFoundError("Worker");
+      case "WORKER_NOT_SCHEDULABLE":
+        throw new ConflictError(
+          `Assigned worker is ${outcome.workerStatus} and no longer accepts work; ` +
+            "the placement was withdrawn so the job can be placed again",
+          "WORKER_NOT_SCHEDULABLE",
+        );
       default:
         throw new Error("Unhandled reservation outcome");
     }

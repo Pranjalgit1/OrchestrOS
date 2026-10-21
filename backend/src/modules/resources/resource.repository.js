@@ -1,5 +1,6 @@
 import { AllocationStatus, JobStatus, Prisma, WorkerStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
+import { SCHEDULABLE_WORKER_STATUSES } from "../placement/placement.accounting.js";
 /**
  * Reservation transactions intentionally block on a worker row lock, so the
  * defaults are widened: `maxWait` covers queueing for a connection and
@@ -25,7 +26,8 @@ export const prismaResourceRepository = {
                \`cpuCapacityMillicores\`,
                \`memoryCapacityMiB\`,
                \`cpuAllocatedMillicores\`,
-               \`memoryAllocatedMiB\`
+               \`memoryAllocatedMiB\`,
+               \`status\`
         FROM \`workers\`
         WHERE \`id\` = ${workerId}
         FOR UPDATE
@@ -34,6 +36,16 @@ export const prismaResourceRepository = {
       const worker = locked[0];
       if (!worker) {
         return { status: "WORKER_NOT_FOUND", lockWaitMs };
+      }
+      // A worker can leave service (for example, retired by the autoscaler)
+      // after a job was placed on it. The placement is withdrawn so the job
+      // can be placed again instead of retrying a worker that will never accept.
+      if (!SCHEDULABLE_WORKER_STATUSES.includes(worker.status)) {
+        await tx.job.update({
+          where: { id: jobId },
+          data: { assignedWorkerId: null, placementStrategy: null, placedAt: null },
+        });
+        return { status: "WORKER_NOT_SCHEDULABLE", lockWaitMs, workerStatus: worker.status };
       }
       // Duplicate check precedes the capacity check on purpose. A job that
       // already holds a reservation is counted in the worker's own usage, so

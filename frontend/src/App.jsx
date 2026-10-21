@@ -20,9 +20,9 @@ const currentCapabilities = [
   "Round Robin preemption with requeue",
   "Per-job cancellation, including running containers",
   "Automatic and manual retry of failed jobs",
+  "Reactive worker autoscaling with recorded decisions",
 ];
 const futureCapabilities = [
-  "Reactive autoscaling",
   "Worker-level failure recovery",
 ];
 export function ServiceHealth({ health, error, status }) {
