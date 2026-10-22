@@ -1,6 +1,5 @@
 import { WorkloadPattern, WorkloadType } from "@prisma/client";
 export const GENERATOR_VERSION = "v2";
-// Study limits are inherent in generation, rather than an optional mode.
 export const STUDY_LIMITS = { cpuMillicores: 1_000, memoryMiB: 256, durationSeconds: 10 };
 const MIN_WORKLOAD_SIZE = 1;
 const MAX_WORKLOAD_SIZE = 100_000_000;
