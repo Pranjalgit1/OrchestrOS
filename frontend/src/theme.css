@@ -1,4 +1,6 @@
-/* Monochrome throughout. Status labels and icons carry meaning beyond shade. */
+/* Monochrome surfaces. Colour is kept for meaning only: green/red actions,
+   blue CPU and green memory, and one colour per policy in comparisons.
+   Labels and icons still carry meaning beyond colour. */
 :root {
   color-scheme: light;
   --page: #f7f7f7;
@@ -23,6 +25,22 @@
   --danger: #242424;
   --danger-soft: #ededed;
   --chart-secondary: #777777;
+  /* The one place colour is used: telling scheduling policies apart in charts.
+     Each keeps at least 3:1 contrast against the surface. */
+  --policy-fcfs: #2563eb;
+  --policy-sjf: #059669;
+  --policy-priority: #d97706;
+  --policy-rr: #9333ea;
+  /* Action colours: green starts or enables, red stops or disables. Both keep
+     at least 4.5:1 contrast with white button text. */
+  --go: #15803d;
+  --go-hover: #166534;
+  --stop: #dc2626;
+  --stop-hover: #b91c1c;
+  --on-color: #ffffff;
+  /* Resource colours, the same in every ring, bar, and line. */
+  --cpu: #2563eb;
+  --memory: #16a34a;
   --shadow: 0 2px 4px rgb(0 0 0 / 2%);
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --motion-fast: 180ms;
@@ -53,6 +71,12 @@
   --danger: #f5f5f5;
   --danger-soft: #303030;
   --chart-secondary: #a3a3a3;
+  --policy-fcfs: #60a5fa;
+  --policy-sjf: #34d399;
+  --policy-priority: #fbbf24;
+  --policy-rr: #c084fc;
+  --cpu: #60a5fa;
+  --memory: #4ade80;
   --shadow: none;
 }
 
@@ -81,6 +105,12 @@
     --danger: #f5f5f5;
     --danger-soft: #303030;
     --chart-secondary: #a3a3a3;
+    --policy-fcfs: #60a5fa;
+    --policy-sjf: #34d399;
+    --policy-priority: #fbbf24;
+    --policy-rr: #c084fc;
+    --cpu: #60a5fa;
+    --memory: #4ade80;
     --shadow: none;
   }
 }

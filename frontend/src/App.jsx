@@ -21,7 +21,17 @@ const currentCapabilities = [
   "Per-job cancellation, including running containers",
   "Automatic and manual retry of failed jobs",
   "Reactive worker autoscaling with recorded decisions",
+  "Multi-policy benchmark with comparison charts",
 ];
+/** Navigation entries, in page order. */
+const SECTIONS = [
+  ["console", "Control panel"],
+  ["pipeline", "Pipeline"],
+  ["benchmark", "Policy comparison"],
+  ["job-queue", "Job queue"],
+  ["monitoring", "Monitoring"],
+];
+const SECTION_IDS = SECTIONS.map(([id]) => id);
 const futureCapabilities = [
   "Worker-level failure recovery",
 ];
@@ -55,11 +65,33 @@ export function App() {
   useEffect(() => {
     const updateSection = () => {
       const section = window.location.hash.slice(1);
-      if (["console", "pipeline", "job-queue", "monitoring"].includes(section)) setActiveSection(section);
+      if (SECTION_IDS.includes(section)) setActiveSection(section);
     };
     updateSection();
     window.addEventListener("hashchange", updateSection);
     return () => window.removeEventListener("hashchange", updateSection);
+  }, []);
+  useEffect(() => {
+    // The header stays on screen, so it follows the reader: the last section
+    // whose top has passed just below the header is the current one.
+    let frame = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const line = (document.querySelector(".console-header")?.offsetHeight ?? 80) + 24;
+        let current = SECTION_IDS[0];
+        for (const id of SECTION_IDS) {
+          const element = document.getElementById(id);
+          if (element && element.getBoundingClientRect().top <= line) current = id;
+        }
+        setActiveSection(current);
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", onScroll);
+    };
   }, []);
   const [health, setHealth] = useState(null);
   const [error, setError] = useState(null);
@@ -95,10 +127,7 @@ export function App() {
           <span className="console-label">Workload console</span>
         </a>
         <nav aria-label="Dashboard sections">
-          {[
-            ["console", "Control panel"], ["pipeline", "Pipeline"],
-            ["job-queue", "Job queue"], ["monitoring", "Monitoring"],
-          ].map(([id, label]) => (
+          {SECTIONS.map(([id, label]) => (
             <a key={id} href={`#${id}`} aria-current={activeSection === id ? "location" : undefined}
               onClick={() => setActiveSection(id)}>{label}</a>
           ))}

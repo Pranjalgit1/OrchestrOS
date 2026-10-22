@@ -61,7 +61,7 @@ export function fetchOrchestratorState(signal) {
 export function runOrchestrator(input) {
   return postJson("/api/orchestrator/run", input);
 }
-const MIXED_COMPUTE_TYPES = [
+export const MIXED_COMPUTE_TYPES = [
   "CPU_INTENSIVE",
   "MATRIX_MULTIPLICATION",
   "SORTING",
@@ -131,4 +131,14 @@ export function clearGeneratedWorkload() {
 }
 export function killAllWorkloads() {
   return postJson("/api/orchestrator/kill-all", {});
+}
+/* Multi-policy benchmarks: the backend runs the suite; the browser only starts, polls, and stops it. */
+export function fetchBenchmarks(signal) {
+  return requestJson("/api/benchmarks?limit=10", { signal, cache: "no-store" });
+}
+export function startBenchmark(input) {
+  return postJson("/api/benchmarks", input);
+}
+export function abortBenchmark(id) {
+  return postJson(`/api/benchmarks/${id}/abort`, {});
 }

@@ -177,10 +177,24 @@ The backend selects jobs in `COMPLETED`, `FAILED`, `INTERRUPTED`, or `CANCELLED`
 
 Queued, scheduled, and running jobs are not selected for this cleanup. Workers and sampled usage history remain. Since finished records are removed, later summaries based on those records will change.
 
-## 13. Errors and shutdown
+## 13. Compare scheduling policies
+
+Open **Benchmark** in the dashboard, choose the policies and workload, and press **Run**. The browser calls `POST /api/benchmarks` and then polls `GET /api/benchmarks` every 2 seconds while it runs.
+
+1. The backend checks that no job is unfinished and that the workload image exists, records the suite with one pending run per policy, and returns 202.
+2. It pauses the autoscaler.
+3. For each policy in order (FCFS, SJF, Priority, Round Robin), it creates the batch (generated the first time, reused after that) and records the current capacity. It then calls the orchestrator every second with that policy until every job in the batch has finished. Round Robin uses the chosen quantum.
+4. It reads the batch's jobs and execution attempts, calculates the metrics, and saves them on the run.
+5. After the last run, or after a failure or stop, it resumes the autoscaler and records the suite's outcome. Runs that never started are marked aborted.
+
+**Stop benchmark** calls `POST /api/benchmarks/:id/abort`. The runner stops all workloads, records the current run with what it measured so far, and skips the rest. A run whose jobs were cancelled from elsewhere, or that hits a stage error that will not clear by waiting (for example Docker being unavailable), ends the suite in the same way.
+
+The results panel shows each run's status and capacity, a metrics table, and one bar chart per metric with the best policy drawn solid and marked ★. If capacity or checksums differed, a note says the numbers are not directly comparable.
+
+## 14. Errors and shutdown
 
 Input errors return a readable error code and message. Invalid JSON returns HTTP 400; a request body over 16 KB returns HTTP 413. Unknown URLs return HTTP 404. The [API guide](api.md) explains the normal request format.
 
-On a normal shutdown signal, the server stops its sampler, closes its listener, waits for pending execution-result work, and disconnects from MySQL.
+On a normal shutdown signal, the server stops its sampler, stops a running benchmark and waits for it to record itself, closes its listener, waits for pending execution-result work, and disconnects from MySQL.
 
 A forced stop or crash can leave a job marked running. On startup and every 30 seconds, the backend reconciles untracked open executions: it settles exited/missing containers and resumes tracking live containers using their original deadline. Missing outcomes are recorded as failures. Manual recovery remains available through `POST /api/executions/:executionId/settle`; it refuses a live container.

@@ -221,6 +221,10 @@ export class BenchmarkService {
       jobCount: batch.jobs?.length ?? batch.jobCount,
     });
     const startedAt = this.clock().getTime();
+    // Spread-out patterns cannot finish before their last arrival, so the
+    // allowance starts counting from there.
+    const lastArrivalMs = Math.max(0, ...(batch.jobs ?? []).map((job) => job.arrivalOffsetSeconds ?? 0)) * 1_000;
+    const deadline = startedAt + lastArrivalMs + this.runTimeoutMs;
     const request = {
       policy: run.policy,
       strategy: input.strategy,
@@ -246,10 +250,11 @@ export class BenchmarkService {
         await this.stopEverything();
         return this.closeRun(run, batch, BenchmarkStatus.ABORTED, "Stopped by the operator");
       }
-      if (this.clock().getTime() - startedAt > this.runTimeoutMs) {
+      if (this.clock().getTime() > deadline) {
         await this.stopEverything();
         return this.closeRun(run, batch, BenchmarkStatus.FAILED,
-          `The ${run.policy} run did not finish within ${Math.round(this.runTimeoutMs / 60_000)} minutes`);
+          `The ${run.policy} run did not finish within ${Math.round(this.runTimeoutMs / 60_000)} minutes ` +
+            "of its last arrival");
       }
 
       try {

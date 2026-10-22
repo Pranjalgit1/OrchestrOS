@@ -191,7 +191,7 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
 
       {overview ? (
         <>
-          <div className="monitor-grid">
+          <div className="monitor-grid quad">
             <article className="tile reserved-tile">
               <h3>Reserved capacity</h3>
               <CapacityGauge cpu={overview.cluster.cpuUtilization}
@@ -273,6 +273,33 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
                   : ""}
               </p>
             </article>
+
+            <article className="tile">
+              <h3>Running now</h3>
+              <div className="running-viewport">
+                {overview.executions.running.length === 0 ? (
+                  <div className="empty-state running-empty">
+                    <Icon name="box" />
+                    <p>No containers running.</p>
+                  </div>
+                ) : (
+                  <ul className="runlist">
+                    {overview.executions.running.map((execution) => (
+                      <li key={execution.executionId}>
+                        <strong>{execution.jobName}</strong>
+                        <span className="muted">
+                          {execution.workloadType} on {execution.workerName} ·{" "}
+                          {execution.elapsedSeconds}s
+                          {execution.containerId
+                            ? ` · ${execution.containerId.slice(0, 12)}`
+                            : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </article>
           </div>
 
           <article className="tile wide">
@@ -333,8 +360,7 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
             </div>
           </article>
 
-          <div className="monitor-grid two">
-            <article className="tile">
+          <article className="tile timings-tile">
               <h3>Lifecycle timings</h3>
               <div className="table-scroll">
                 <table className="grid">
@@ -362,35 +388,7 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
                   </tbody>
                 </table>
               </div>
-            </article>
-
-            <article className="tile">
-              <h3>Running now</h3>
-              <div className="running-viewport">
-                {overview.executions.running.length === 0 ? (
-                  <div className="empty-state running-empty">
-                    <Icon name="box" />
-                    <p>No containers running.</p>
-                  </div>
-                ) : (
-                  <ul className="runlist">
-                    {overview.executions.running.map((execution) => (
-                      <li key={execution.executionId}>
-                        <strong>{execution.jobName}</strong>
-                        <span className="muted">
-                          {execution.workloadType} on {execution.workerName} ·{" "}
-                          {execution.elapsedSeconds}s
-                          {execution.containerId
-                            ? ` · ${execution.containerId.slice(0, 12)}`
-                            : ""}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </article>
-          </div>
+          </article>
 
           <p className="muted footnote">
             Refreshing every {REFRESH_SECONDS}s · last read{" "}

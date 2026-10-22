@@ -49,7 +49,7 @@ Some features also have calculation-only files, such as `scheduler.policies.js` 
 
 ## 2. What MySQL stores
 
-The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). The initial SQL is in [the MySQL migration](../backend/prisma/migrations/20261005000000_mysql_initial/migration.sql). [A follow-up migration](../backend/prisma/migrations/20261021000000_preemption_and_requeue/migration.sql) adds the `PREEMPTED` execution status and the job preemption and retry counters. [The autoscaling migration](../backend/prisma/migrations/20261021120000_reactive_autoscaling/migration.sql) adds the `RETIRED` worker status, the `autoscaled` flag, and `scaling_events`.
+The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). The initial SQL is in [the MySQL migration](../backend/prisma/migrations/20261005000000_mysql_initial/migration.sql). [A follow-up migration](../backend/prisma/migrations/20261021000000_preemption_and_requeue/migration.sql) adds the `PREEMPTED` execution status and the job preemption and retry counters. [The autoscaling migration](../backend/prisma/migrations/20261021120000_reactive_autoscaling/migration.sql) adds the `RETIRED` worker status, the `autoscaled` flag, and `scaling_events`. [The benchmark migration](../backend/prisma/migrations/20261023000000_policy_benchmarks/migration.sql) adds `benchmark_suites` and `benchmark_runs`.
 
 | Table | What one row means |
 | --- | --- |
@@ -60,6 +60,8 @@ The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). T
 | `job_executions` | One attempt to run a job in a container |
 | `worker_samples` | One worker's resource-use snapshot at a particular time |
 | `scaling_events` | One autoscaler action, the worker it changed, and the signals behind it |
+| `benchmark_suites` | One policy comparison: the workload settings and its overall outcome |
+| `benchmark_runs` | One policy's run in a suite, the capacity it saw, and its measured metrics |
 
 The queue is saved in `jobs`. There is no second queue that must be kept in sync with MySQL.
 
@@ -274,9 +276,32 @@ Each timing includes count, average, minimum, maximum, and p95. MySQL calculates
 
 A stage with no data has count 0. Success rate is `null` when there are no completed outcomes to calculate it from. The API limits requested history to between 1 minute and 7 days.
 
-## 11. What is unfinished
+## 11. Policy benchmark
 
-Worker-level failure recovery, machine learning, and full experiment comparison are still planned. Autoscaled workers are logical capacity on the same computer, like the study workers; scaling does not add physical hardware. Round Robin preemption does not pause and resume a container; a preempted job restarts from the beginning. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
+The benchmark module (`backend/src/modules/benchmarks`) runs the same seeded workload once per scheduling policy and compares the results. It does not simulate anything: each run goes through the normal orchestrator, so scheduling, placement, the row-locked reservation, and Docker execution are the same code the console uses.
+
+- **Same work every run.** The first run generates the batch. Every later run reuses it, so names, resources, workload seeds, and result checksums match. Only arrival times move to the start of each run.
+- **One run at a time on a quiet cluster.** The scheduler considers every queued job, so a suite only starts with no unfinished jobs (`CLUSTER_NOT_IDLE`). While it runs, routes that would add, clear, or advance work return 409 `BENCHMARK_RUNNING`. Kill all workloads stays available as the emergency stop.
+- **Fixed capacity.** The autoscaler is paused for the suite and resumed afterwards. Each run records the worker count and capacity it saw, and the comparison says when they differed.
+- **Driving a run.** The runner calls the orchestrator every second with up to `jobsPerTick` jobs until every job in the batch is finished. A run that has not finished 15 minutes after its last arrival fails.
+
+When a run ends, its metrics are copied into `benchmark_runs`, so clearing finished jobs later does not erase the comparison. Times cover completed jobs only:
+
+| Metric | Definition |
+| --- | --- |
+| Turnaround | Completion minus planned arrival |
+| Response | First container start minus planned arrival |
+| Waiting | Turnaround minus time spent running, summed over every attempt |
+| Makespan | First arrival to last completion |
+| Throughput | Completed jobs per minute of makespan |
+
+p95 values use the same interpolation as monitoring. A run's `checksumDigest` is a SHA-256 over every job's result checksum, set only when every job completed; equal digests show the runs did identical work. The comparison marks the best value per metric and treats values within a millisecond as a tie.
+
+The suite runner lives in the backend process. A restart abandons it, and the next boot marks the suite as aborted.
+
+## 12. What is unfinished
+
+Worker-level failure recovery and machine-learning (predictive) scaling are still planned. Autoscaled workers are logical capacity on the same computer, like the study workers; scaling does not add physical hardware. Round Robin preemption does not pause and resume a container; a preempted job restarts from the beginning. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
 
 After a backend crash, startup recovery and a 30-second reconciliation pass settle untracked exited/missing containers and resume tracking live executions against their original deadline. The manual settle endpoint remains available. Completion uses the Docker finish timestamp when available, so stale recovery does not inflate execution duration.
 

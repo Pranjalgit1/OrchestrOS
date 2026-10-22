@@ -5,12 +5,15 @@ import {
   fetchAutoscaler,
   updateAutoscaler,
 } from "../api";
+import { Icon } from "./Icon.jsx";
 
 const POLL_MS = 3_000;
 
 function percent(value) {
   return `${Math.round((value ?? 0) * 100)}%`;
 }
+
+const ACTION_TEXT = { SCALE_UP: "Scaled up", SCALE_DOWN: "Scaled down", NONE: "No change" };
 
 /**
  * Reactive autoscaling: its settings, the most recent decision and the signals
@@ -59,6 +62,23 @@ export function AutoscalerPanel({ onChanged }) {
       await refresh();
     }
   };
+  return (
+    <AutoscalerView
+      status={status}
+      error={error}
+      busy={busy}
+      onToggle={() => act(() => updateAutoscaler({ enabled: !status.config.enabled }))}
+      onEvaluate={() => act(evaluateAutoscaler)}
+      onSave={(patch) => act(() => updateAutoscaler(patch))}
+    />
+  );
+}
+
+/**
+ * Pure view. The switch and the four signals are what an operator watches; the
+ * rules, thresholds, and history stay one click away.
+ */
+export function AutoscalerView({ status, error, busy = false, onToggle, onEvaluate, onSave }) {
   if (!status) {
     return (
       <section className="panel autoscaler-panel" aria-label="Autoscaler">
@@ -67,8 +87,13 @@ export function AutoscalerPanel({ onChanged }) {
       </section>
     );
   }
-  const { config, lastDecision, events } = status;
+  const { config, lastDecision, events, pausedReason } = status;
   const signals = lastDecision?.signals;
+  const on = config.enabled;
+  const decisionText = lastDecision
+    ? `${ACTION_TEXT[lastDecision.action] ?? lastDecision.action}${
+      lastDecision.action !== "NONE" && !lastDecision.applied ? " (not applied)" : ""}`
+    : null;
   return (
     <section className="panel autoscaler-panel" aria-label="Autoscaler">
       <header className="panel-head">
@@ -76,116 +101,109 @@ export function AutoscalerPanel({ onChanged }) {
           <p className="eyebrow">Reactive autoscaling</p>
           <h2>Autoscaler</h2>
         </div>
-        <span className={`badge ${config.enabled ? "badge-active" : "badge-idle"}`}>
-          {config.enabled ? "ON" : "OFF"}
-        </span>
+        <div className="autoscaler-head-actions">
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={onEvaluate}
+            title="Run one scaling decision now">
+            <Icon name="refresh" />Evaluate now
+          </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={on}
+            className={`btn autoscale-switch ${on ? "btn-go" : "btn-stop"}`}
+            disabled={busy}
+            title={on ? "Click to turn autoscaling off" : "Click to turn autoscaling on"}
+            onClick={onToggle}
+          >
+            <span className="switch-knob" aria-hidden="true" />
+            Autoscaling: {on ? "On" : "Off"}
+          </button>
+        </div>
       </header>
 
-      <div className="stage-buttons autoscaler-actions">
-        <button
-          type="button"
-          className={config.enabled ? "btn btn-stop" : "btn btn-primary"}
-          disabled={busy}
-          aria-pressed={config.enabled}
-          onClick={() => act(() => updateAutoscaler({ enabled: !config.enabled }))}
-        >
-          {config.enabled ? "Turn autoscaling off" : "Turn autoscaling on"}
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost"
-          disabled={busy}
-          onClick={() => act(evaluateAutoscaler)}
-        >
-          Evaluate now
-        </button>
-      </div>
+      {pausedReason ? (
+        <p className="autoscaler-paused" role="status">
+          Held while {pausedReason}. It resumes on its own afterwards.
+        </p>
+      ) : null}
 
-      <p className="hint">
-        Adds a {config.workerCpuMillicores}m / {config.workerMemoryMiB} MiB worker when at least{" "}
-        {config.scaleUpQueueThreshold} jobs wait and the cluster is {percent(config.scaleUpUtilization)}{" "}
-        reserved, up to {config.maxWorkers} extra workers. Retires an idle extra worker after{" "}
-        {config.idleSeconds}s once the cluster would stay below {percent(config.scaleDownUtilization)}.
-        Waits {config.cooldownSeconds}s between changes.
-        {status.loop.enabled ? ` Checked every ${status.loop.intervalSeconds}s.` : " The timer is off; use Evaluate now."}
+      <dl className="autoscaler-stats">
+        <div>
+          <dt>Waiting jobs</dt>
+          <dd>{signals ? signals.queuedJobs : "—"}</dd>
+        </div>
+        <div>
+          <dt><span className="metric-dot cpu-dot" />CPU reserved</dt>
+          <dd>{signals ? percent(signals.utilization.cpu) : "—"}</dd>
+        </div>
+        <div>
+          <dt><span className="metric-dot memory-dot" />Memory reserved</dt>
+          <dd>{signals ? percent(signals.utilization.memory) : "—"}</dd>
+        </div>
+        <div>
+          <dt>Workers in service</dt>
+          <dd>
+            {signals ? signals.workerCount : "—"}
+            {signals ? <small>{signals.autoscaledWorkers} of {config.maxWorkers} extra</small> : null}
+          </dd>
+        </div>
+      </dl>
+
+      <p className="autoscaler-decision" role="status">
+        {lastDecision ? (
+          <>
+            <strong>{decisionText}</strong>
+            <span>{lastDecision.reason}</span>
+            {lastDecision.evaluatedAt ? (
+              <time dateTime={lastDecision.evaluatedAt}>
+                {new Date(lastDecision.evaluatedAt).toLocaleTimeString()}
+              </time>
+            ) : null}
+          </>
+        ) : (
+          <span>No evaluation yet.</span>
+        )}
       </p>
 
-      {lastDecision ? (
-        <dl className="facts">
-          <div>
-            <dt>Last decision</dt>
-            <dd>
-              {lastDecision.action === "NONE" ? "No change" : lastDecision.action.replace("_", " ").toLowerCase()}
-              {lastDecision.evaluatedAt ? ` · ${new Date(lastDecision.evaluatedAt).toLocaleTimeString()}` : ""}
-            </dd>
-          </div>
-          <div>
-            <dt>Why</dt>
-            <dd>{lastDecision.reason}</dd>
-          </div>
-          {signals ? (
-            <>
-              <div>
-                <dt>Waiting jobs</dt>
-                <dd>{signals.queuedJobs}</dd>
-              </div>
-              <div>
-                <dt>Cluster reserved</dt>
-                <dd>CPU {percent(signals.utilization.cpu)} · memory {percent(signals.utilization.memory)}</dd>
-              </div>
-              <div>
-                <dt>Workers in service</dt>
-                <dd>{signals.workerCount} ({signals.autoscaledWorkers} autoscaled of {config.maxWorkers})</dd>
-              </div>
-            </>
-          ) : null}
-        </dl>
-      ) : (
-        <p className="muted">No evaluation yet.</p>
-      )}
+      {error ? <p className="warn" role="alert">{error}</p> : null}
 
-      {error ? <p className="warn">{error}</p> : null}
-
-      <AutoscalerSettings
-        config={config}
-        busy={busy}
-        onSave={(patch) => act(() => updateAutoscaler(patch))}
-      />
-
-      <details className="stage-controls" open={events.length > 0}>
-        <summary>Scaling history ({events.length})</summary>
-        {events.length === 0 ? (
-          <p className="muted">No scaling actions recorded yet.</p>
-        ) : (
-          <div className="table-scroll">
-            <table className="grid">
-              <caption className="sr-only">Recent scaling actions, newest first</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Time</th>
-                  <th scope="col">Action</th>
-                  <th scope="col">Worker</th>
-                  <th scope="col">Waiting</th>
-                  <th scope="col">Reserved</th>
-                  <th scope="col">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((event) => (
-                  <tr key={event.id}>
-                    <td><time dateTime={event.createdAt}>{new Date(event.createdAt).toLocaleTimeString()}</time></td>
-                    <td>{event.action === "SCALE_UP" ? "Scale up" : "Scale down"}</td>
-                    <td className="mono">{event.workerName}</td>
-                    <td>{event.queuedJobs}</td>
-                    <td>{percent(Math.max(event.cpuUtilization, event.memoryUtilization))}</td>
-                    <td>{event.reason}</td>
+      <div className="autoscaler-more">
+        <AutoscalerSettings config={config} loop={status.loop} busy={busy} onSave={onSave} />
+        <details className="stage-controls">
+          <summary>Scaling history ({events.length})</summary>
+          {events.length === 0 ? (
+            <p className="muted">No scaling actions recorded yet.</p>
+          ) : (
+            <div className="table-scroll">
+              <table className="grid">
+                <caption className="sr-only">Recent scaling actions, newest first</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Time</th>
+                    <th scope="col">Action</th>
+                    <th scope="col">Worker</th>
+                    <th scope="col">Waiting</th>
+                    <th scope="col">Reserved</th>
+                    <th scope="col">Reason</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </details>
+                </thead>
+                <tbody>
+                  {events.map((event) => (
+                    <tr key={event.id}>
+                      <td><time dateTime={event.createdAt}>{new Date(event.createdAt).toLocaleTimeString()}</time></td>
+                      <td>{event.action === "SCALE_UP" ? "Scale up" : "Scale down"}</td>
+                      <td className="mono">{event.workerName}</td>
+                      <td>{event.queuedJobs}</td>
+                      <td>{percent(Math.max(event.cpuUtilization, event.memoryUtilization))}</td>
+                      <td>{event.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </details>
+      </div>
     </section>
   );
 }
@@ -224,10 +242,10 @@ function toPatch(form) {
   ]));
 }
 /**
- * Threshold editor. The form keeps its own draft so the 3-second refresh does
- * not overwrite what is being typed; the backend validates on save.
+ * Rules and threshold editor. The form keeps its own draft so the 3-second
+ * refresh does not overwrite what is being typed; the backend validates on save.
  */
-function AutoscalerSettings({ config, busy, onSave }) {
+function AutoscalerSettings({ config, loop, busy, onSave }) {
   const [draft, setDraft] = useState(() => toForm(config));
   const [dirty, setDirty] = useState(false);
   useEffect(() => {
@@ -239,7 +257,15 @@ function AutoscalerSettings({ config, busy, onSave }) {
   };
   return (
     <details className="stage-controls">
-      <summary>Thresholds</summary>
+      <summary>Rules and thresholds</summary>
+      <p className="hint">
+        Adds a {config.workerCpuMillicores}m / {config.workerMemoryMiB} MiB worker when at least{" "}
+        {config.scaleUpQueueThreshold} jobs wait and the cluster is {percent(config.scaleUpUtilization)}{" "}
+        reserved, up to {config.maxWorkers} extra workers. Retires an idle extra worker after{" "}
+        {config.idleSeconds}s once the cluster would stay below {percent(config.scaleDownUtilization)}.
+        Waits {config.cooldownSeconds}s between changes.
+        {loop.enabled ? ` Checked every ${loop.intervalSeconds}s.` : " The timer is off; use Evaluate now."}
+      </p>
       <form
         className="autoscaler-settings"
         onSubmit={(event) => {

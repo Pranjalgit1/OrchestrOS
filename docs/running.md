@@ -208,3 +208,6 @@ The recorded migration check on 5 October 2026 passed all 130 tests with both fl
 | Worker rings show full capacity | Rings show CPU/memory reservations, not measured physical RAM; use Kill all workloads to stop jobs and release capacity. Small worker budgets are automatic |
 | Windows RAM remains high with no workloads | Check other applications and Docker/WSL memory separately; stopped workload reservations do not represent live RAM use |
 | Port already in use | Stop the other instance or choose a free published port and update the related connection settings |
+| Benchmark says the cluster is not idle | Let queued and running jobs finish, or use Kill all workloads, then start it again |
+| Buttons return "A policy benchmark is running" | A suite is in progress; wait for it or press Stop benchmark |
+| Benchmark models missing after pulling | Stop the backend, then run `npm run db:deploy --workspace backend` and `npm run prisma:generate` |

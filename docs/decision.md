@@ -150,7 +150,17 @@ Workers are retired rather than deleted because jobs, allocations, and execution
 
 Runtime settings are held in memory. They are an operator's experiment knobs, while the environment holds the defaults and the event history in MySQL is the durable record.
 
-## 18. Use both small tests and real-system tests
+## 18. Benchmark policies on the real pipeline, one at a time
+
+A comparison is only fair if every policy does the same work on the same capacity, so the benchmark controls both instead of trusting the operator to.
+
+- **Isolation by refusal, not filtering.** The scheduler, the resume lookup, and Round Robin preemption all look at every job. Scoping them to one batch would change how the console behaves. Instead, a suite needs an idle cluster to start, and while it runs, routes that change the pipeline return 409. Kill all workloads is still allowed, because an emergency stop should never be blocked.
+- **Reuse, don't regenerate.** Later runs copy the first run's batch through the existing reuse path. Equal result checksums then prove the work was identical, rather than assuming it.
+- **Pause the autoscaler instead of disabling it.** A disabled autoscaler still retires idle autoscaled workers, which would change capacity between runs. Pausing freezes the cluster as it is.
+- **Store results as columns.** Metrics are copied onto the run row when it ends, and the batch link is `ON DELETE SET NULL`. Clearing finished jobs therefore keeps the results. CHECK constraints keep counts and timings non-negative.
+- **Waiting excludes run time.** Waiting subtracts the time spent running across all attempts, so a preempted Round Robin job's second queue stay counts as waiting.
+
+## 19. Use both small tests and real-system tests
 
 Services can receive simple in-memory replacements for database or Docker operations. This lets small tests check their rules quickly.
 

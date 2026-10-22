@@ -229,7 +229,35 @@ PATCH accepts any subset of the following fields:
 
 A decision's `action` is `SCALE_UP`, `SCALE_DOWN`, or `NONE`, with a plain-language `reason` and `applied` telling whether the change committed. `GET /workers` also lists retired autoscaled workers with status `RETIRED`. A reservation on a worker that is no longer schedulable returns 409 `WORKER_NOT_SCHEDULABLE` and withdraws the job's placement.
 
-## 7. Monitoring
+## 7. Policy benchmark
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| GET | `/benchmarks?limit=10` | List recent suites, newest first, with `activeSuiteId` (`null` when idle) |
+| POST | `/benchmarks` | Start a suite; returns 202 and a `Location` header |
+| GET | `/benchmarks/:id` | Read one suite with its runs, live `progress`, and `comparison` |
+| POST | `/benchmarks/:id/abort` | Ask the running suite to stop; returns 202 |
+
+POST accepts any subset of these fields:
+
+| Field | Allowed values | Default |
+| --- | --- | --- |
+| `policies` | 1-4 distinct of `FCFS`, `SJF`, `PRIORITY`, `ROUND_ROBIN` | all four |
+| `strategy` | `FIRST_FIT`, `LEAST_LOADED`, `RESOURCE_AWARE` | `LEAST_LOADED` |
+| `count` | 10, 25, or 50 | 10 |
+| `pattern` | Any predefined pattern or `IMMEDIATE` (not `CUSTOM`) | `IMMEDIATE` |
+| `seed` | 0-2,147,483,647 | 42 |
+| `workloadTypes` | 1-5 distinct workload types | `["SLEEP"]` |
+| `timeQuantumSeconds` | 1-3,600, Round Robin run only | 5 |
+| `jobsPerTick` | 1-25 | 25 |
+
+Starting returns 409 `CLUSTER_NOT_IDLE` when any job is unfinished, 409 `BENCHMARK_RUNNING` when a suite is already running, and 503 `WORKLOAD_IMAGE_MISSING` when the workload image is not built. Aborting a suite that is not running returns 409 `BENCHMARK_NOT_RUNNING`.
+
+While a suite runs, these return 409 `BENCHMARK_RUNNING`: creating, cancelling, or requeuing jobs; generating, reusing, or clearing workloads; orchestrator run and clear-finished; the individual dispatch, assign, reserve, release, and start steps; creating workers; and changing autoscaler settings. Reads and `POST /orchestrator/kill-all` stay available.
+
+`comparison` contains `comparable`, `fairCapacity`, `identicalWork`, `notes`, and one entry per metric with each policy's value and `best` (an empty list means a tie).
+
+## 8. Monitoring
 
 | Method | Path | What it does |
 | --- | --- | --- |
@@ -243,7 +271,7 @@ A decision's `action` is `SCALE_UP`, `SCALE_DOWN`, or `NONE`, with a plain-langu
 
 These reads do not change job scheduling or resource reservations. Capturing a sample writes monitoring history only.
 
-## 8. Basic checks and errors
+## 9. Basic checks and errors
 
 | Method | Path | What it does |
 | --- | --- | --- |

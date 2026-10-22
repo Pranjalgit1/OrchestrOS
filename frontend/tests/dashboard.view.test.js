@@ -74,6 +74,14 @@ test("an empty or single-sample chart does not promise an enabled sampler", () =
   assert.match(single, /<td>50%<\/td>/);
 });
 
+test("capacity, queue, throughput, and running containers share one 2 × 2 block", () => {
+  const html = monitoring({ jobs });
+  const block = html.match(/<div class="monitor-grid quad">([\s\S]*?)<article class="tile wide">/)[1];
+  const titles = [...block.matchAll(/<h3>([^<]+)/g)].map((match) => match[1]);
+  assert.deepEqual(titles, ["Reserved capacity", "Queue", "Throughput (60 min)", "Running now"]);
+  assert.match(html, /<article class="tile timings-tile"><h3>Lifecycle timings<\/h3>/);
+});
+
 test("a failed health check overrides an old healthy response and recovery clears it", () => {
   const health = { status: "ok", dependencies: { database: "up" } };
   const failed = render(ServiceHealth, { health, error: "Request timed out", status: { lastCheckedAt: 1000 } });

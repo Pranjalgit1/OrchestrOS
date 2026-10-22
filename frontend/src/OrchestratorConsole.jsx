@@ -15,6 +15,7 @@ import {
 } from "./api";
 import { ActivityLog } from "./components/ActivityLog.jsx";
 import { AutoscalerPanel } from "./components/AutoscalerPanel.jsx";
+import { BenchmarkPanel } from "./components/BenchmarkPanel.jsx";
 import { ControlPanel } from "./components/ControlPanel.jsx";
 import { JobDetail } from "./components/JobDetail.jsx";
 import { JobQueue } from "./components/JobQueue.jsx";
@@ -336,6 +337,10 @@ export function OrchestratorConsole() {
           </div>
 
           <AutoscalerPanel onChanged={() => void refresh()} />
+
+          <div id="benchmark">
+            <BenchmarkPanel />
+          </div>
 
           <JobQueue
             jobs={state.jobs}
