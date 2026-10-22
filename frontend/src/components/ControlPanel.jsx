@@ -27,9 +27,9 @@ const STRATEGIES = [
   { value: "RESOURCE_AWARE", label: "Resource-Aware · balanced fit" },
 ];
 const JOBS_PER_TICK = [
-  { value: 1, label: "1 · easy to follow" },
-  { value: 5, label: "5 · steady load" },
-  { value: 25, label: "25 · fill the cluster" },
+  { value: 1, label: "step-by-step demo(One job starts every 2 seconds)" },
+  { value: 5, label: "steady load(several workers busy)" },
+  { value: 25, label: "fill the cluster(stress test / autoscaling)" },
 ];
 export function ControlPanel(props) {
   const {

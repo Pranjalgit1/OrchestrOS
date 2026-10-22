@@ -36,6 +36,8 @@ export class AutoscalerService {
   timer = null;
   running = false;
   lastDecision = null;
+  /** Why evaluation is suspended, such as a benchmark needing fixed capacity. */
+  pausedReason = null;
   constructor(
     repository = prismaAutoscalerRepository,
     {
@@ -84,8 +86,21 @@ export class AutoscalerService {
     this.config = next;
     return this.config;
   }
+  /**
+   * Suspends every evaluation, scale-down included, until `resume`. Unlike
+   * turning autoscaling off, this freezes the cluster exactly as it is.
+   */
+  pause(reason) {
+    this.pausedReason = reason;
+  }
+  resume() {
+    this.pausedReason = null;
+  }
   /** One evaluation; applies the decision unless another pass is running. */
   async evaluate() {
+    if (this.pausedReason) {
+      return { action: ScaleAction.NONE, reason: `Paused: ${this.pausedReason}`, applied: false };
+    }
     if (this.running) {
       return { action: ScaleAction.NONE, reason: "Another evaluation is in progress", applied: false };
     }
@@ -125,6 +140,7 @@ export class AutoscalerService {
     const events = await this.repository.listEvents(EVENT_HISTORY);
     return {
       config: this.config,
+      pausedReason: this.pausedReason,
       loop: { enabled: this.loopEnabled, intervalSeconds: this.intervalSeconds },
       hostMemoryLimitMiB: Math.floor(this.hostMemoryMiB() * HOST_MEMORY_FRACTION),
       lastDecision: this.lastDecision,
