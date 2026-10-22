@@ -5,6 +5,8 @@ import { executionService } from "./modules/executions/execution.service.js";
 import { monitoringSampler } from "./modules/monitoring/monitoring.sampler.js";
 import { autoscalerService } from "./modules/autoscaler/autoscaler.service.js";
 import { ensureStudyWorkers } from "./modules/workers/worker.defaults.js";
+import { benchmarkService } from "./modules/benchmarks/benchmark.service.js";
+import { prismaBenchmarkRepository } from "./modules/benchmarks/benchmark.repository.js";
 // Reconcile containers before accepting new start requests after a restart.
 try {
   const recovery = await executionService.recover();
@@ -16,6 +18,13 @@ try {
   await ensureStudyWorkers(prisma);
 } catch (error) {
   console.error("Study worker setup failed:", error.message);
+}
+try {
+  // A suite still RUNNING in the database lost its runner with the old process.
+  const abandoned = await prismaBenchmarkRepository.abandonInterruptedSuites();
+  if (abandoned) console.log(`Marked ${abandoned} interrupted benchmark(s) as aborted`);
+} catch (error) {
+  console.error("Benchmark recovery failed:", error.message);
 }
 const server = app.listen(env.PORT, env.HOST, () => {
   console.log(`OrchestrOS backend listening on http://${env.HOST}:${env.PORT}`);
@@ -64,7 +73,16 @@ async function shutdown(signal) {
   console.log(`${signal} received; shutting down OrchestrOS backend`);
   monitoringSampler.stop();
   autoscalerService.stop();
+  // Stop a running benchmark so it records itself as aborted before exit.
+  if (benchmarkService.isRunning) {
+    try {
+      benchmarkService.abort(benchmarkService.active.suiteId);
+    } catch {
+      // It finished in the meantime.
+    }
+  }
   server.close(async (error) => {
+    await benchmarkService.awaitCompletion();
     // Let running containers finish being recorded, otherwise their executions
     // would stay RUNNING and keep holding reservations.
     await executionService.awaitPendingSettlements();

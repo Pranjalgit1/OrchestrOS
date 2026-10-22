@@ -5,6 +5,7 @@ import {
   startExecutionSchema,
 } from "./execution.schemas.js";
 import { executionService } from "./execution.service.js";
+import { rejectWhileBenchmarking } from "../benchmarks/benchmark.guard.js";
 export const executionRouter = Router();
 /** Reports what the container runtime looks like from the backend's side. */
 executionRouter.get("/runtime", async (_request, response) => {
@@ -18,7 +19,7 @@ executionRouter.get("/", async (request, response) => {
  * Starts a container for a reserved job and returns before it finishes. The run
  * settles on its own; poll the execution to observe the outcome.
  */
-executionRouter.post("/start", async (request, response) => {
+executionRouter.post("/start", rejectWhileBenchmarking, async (request, response) => {
   const input = startExecutionSchema.parse(request.body ?? {});
   const result = await executionService.start(input.jobId);
   response.status(202).json(result);
