@@ -36,6 +36,9 @@ export function createMulberry32(seed) {
 function randomInteger(random, minimum, maximum) {
   return minimum + Math.floor(random() * (maximum - minimum + 1));
 }
+function createWorkloadName(seed, sequence) {
+  return `workload-${seed}-${String(sequence).padStart(3, "0")}`;
+}
 function pick(random, values) {
   const value = values[Math.floor(random() * values.length)];
   if (value === undefined) {
