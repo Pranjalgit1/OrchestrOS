@@ -142,7 +142,7 @@ export function generateWorkloadSpecs(input) {
   const typePool = input.custom?.workloadTypes ?? input.workloadTypes ?? workloadTypes;
   return Array.from({ length: input.count }, (_, index) => {
     const sequence = index + 1;
-    const name = `workload-${input.seed}-${String(sequence).padStart(3, "0")}`;
+    const name = createWorkloadName(input.seed, sequence);
     const workloadType = pick(random, typePool);
     if (input.custom) {
       const custom = input.custom;
