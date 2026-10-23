@@ -32,7 +32,6 @@ Backend: Express application
 | Executions | Start Docker containers and record results | `backend/src/modules/executions/` |
 | Monitoring | Read current values and save usage history | `backend/src/modules/monitoring/` |
 | Workload program | Do the actual calculation inside a container | `workload-runner/run.js` |
-| Tests | Check backend and frontend behavior separately from application source | `backend/tests/`, `frontend/tests/` |
 
 Most backend features use the same file pattern:
 
@@ -42,14 +41,14 @@ Most backend features use the same file pattern:
 | `.schemas.js` | Check that incoming values are allowed |
 | `.service.js` | Apply the feature's rules |
 | `.repository.js` | Read and change database records |
-
-Tests live in `backend/tests/` and `frontend/tests/`, outside the source folders. Files ending in `.test.js` check behavior with controlled inputs; backend `.integration.test.js` files use a real database or container when enabled.
+| `.test.js` | Check behavior with controlled inputs |
+| `.integration.test.js` | Check behavior using a real database or container |
 
 Some features also have calculation-only files, such as `scheduler.policies.js` and `placement.accounting.js`. These are easier to test because they do not need a server or database.
 
 ## 2. What MySQL stores
 
-The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). The initial SQL is in [the MySQL migration](../backend/prisma/migrations/20261005000000_mysql_initial/migration.sql). [A follow-up migration](../backend/prisma/migrations/20261021000000_preemption_and_requeue/migration.sql) adds the `PREEMPTED` execution status and the job preemption and retry counters. [The autoscaling migration](../backend/prisma/migrations/20261021120000_reactive_autoscaling/migration.sql) adds the `RETIRED` worker status, the `autoscaled` flag, and `scaling_events`.
+The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). The initial SQL is in [the MySQL migration](../backend/prisma/migrations/20261005000000_mysql_initial/migration.sql).
 
 | Table | What one row means |
 | --- | --- |
@@ -59,7 +58,6 @@ The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). T
 | `resource_allocations` | A job's CPU and memory reservation, including released history |
 | `job_executions` | One attempt to run a job in a container |
 | `worker_samples` | One worker's resource-use snapshot at a particular time |
-| `scaling_events` | One autoscaler action, the worker it changed, and the signals behind it |
 
 The queue is saved in `jobs`. There is no second queue that must be kept in sync with MySQL.
 
@@ -71,12 +69,10 @@ Jobs created manually or by the generator start as `QUEUED`.
 
 ```text
 QUEUED -> SCHEDULED -> RUNNING -> COMPLETED
-  ^                       | -> FAILED --------+
-  |                       | -> INTERRUPTED ---+--> (requeue) --> QUEUED
-  |                       | -> CANCELLED
-  +---- preempted or ----+
-        auto-retried
-Any unfinished job -> CANCELLED
+   |                       | -> FAILED
+   |                       | -> INTERRUPTED
+   v
+CANCELLED
 ```
 
 | State | Meaning |
@@ -85,19 +81,9 @@ Any unfinished job -> CANCELLED
 | `SCHEDULED` | Chosen by the scheduler; it may still need a worker or reservation |
 | `RUNNING` | Execution has been claimed; the container is starting or running |
 | `COMPLETED` | Finished successfully and returned a valid result |
-| `FAILED` | Could not start, exited with an error, or did not return a valid result, and was not retried |
+| `FAILED` | Could not start, exited with an error, or did not return a valid result |
 | `INTERRUPTED` | The system stopped the run after its time limit |
-| `CANCELLED` | Cancelled by an operator at any unfinished stage, or by Kill all workloads |
-
-Going back to `QUEUED` clears the job's scheduling, placement, and container fields so it goes through the whole pipeline again. Its arrival time and Round Robin round count are kept. Each attempt keeps its own execution row, so history is not lost. Jobs count requeues in two columns: `preemptionCount` for Round Robin evictions and `retryCount` for retries after a failed or interrupted run.
-
-A job goes back to `QUEUED` in three ways:
-
-- **Preemption.** A Round Robin quantum expired while another job was waiting (section 6).
-- **Automatic retry.** The run was lost to an infrastructure fault. Either the container could not start, it vanished from Docker, or the execution never reached a container. These jobs are requeued up to `EXECUTION_MAX_RETRIES` times (default 2). Exit-code failures, out-of-memory kills, missing results, and timeouts are not retried automatically. Running the same deterministic workload with the same limits would fail the same way.
-- **Manual requeue.** `POST /api/jobs/:id/requeue` sends a `FAILED` or `INTERRUPTED` job back to the queue.
-
-Cancelling a queued, scheduled, or reserved job happens in one transaction that also releases its reservation. Cancelling a running job is different: the backend first stops the container, then records the cancellation and releases capacity together. If the container finishes or is preempted first, that outcome stands. The cancel then either acts on the new state, cancelling a requeued job, or reports that the job already finished.
+| `CANCELLED` | Cancelled while queued |
 
 `CREATED` and `WAITING` also exist in the allowed state model, but normal job creation currently starts at `QUEUED`. State-change rules live in `job.transitions.js`.
 
@@ -120,29 +106,7 @@ The setup script creates these workers if they are missing:
 
 These built-in budgets total 3 GiB. They are scheduling limits, not preallocated physical memory or separate machines. Container memory limits are ceilings; actual Windows/WSL memory use includes other applications and the Docker VM. The dashboard reports free memory on the backend host separately from reservations. Setup and backend startup apply the budgets to idle default workers automatically; active reservations are preserved. Recovery also applies them when old executions finish.
 
-New workers start `IDLE` with nothing reserved. A worker with a reservation becomes `BUSY`; it becomes `IDLE` again when its reserved CPU and memory reach zero. `RETIRED` marks an autoscaled worker taken out of service. The model also supports `STARTING`, `ACTIVE`, `STOPPING`, and `FAILED`.
-
-### Reactive autoscaling
-
-The autoscaler (`backend/src/modules/autoscaler`) adds and removes extra logical workers named `auto-worker-N`. It never touches the three study workers or workers created through the API. Every few seconds (`AUTOSCALE_INTERVAL_SECONDS`, default 5) it reads one database snapshot, makes one decision, and applies at most one change. The decision rules are in `autoscaler.policy.js`.
-
-| Decision | When |
-| --- | --- |
-| Scale up | At least 2 eligible jobs are queued **and** the schedulable workers are at least 75% reserved (the higher of CPU and memory) |
-| Scale down | An autoscaled worker has held nothing and had no job planned on it for 30 seconds, fewer than 2 jobs wait, **and** the cluster would stay below 40% reserved without it |
-| No change | Neither applies, the 15-second cooldown since the last change is still running, the `AUTOSCALE_MAX_WORKERS` limit (default 3) is reached, or one more worker would push the combined worker memory budgets past 75% of host memory |
-
-The 75%/40% gap and the cooldown keep the cluster from flapping between sizes. These thresholds can be changed at runtime through `PATCH /api/autoscaler`. Runtime changes last until the backend restarts.
-
-A new worker gets `AUTOSCALE_WORKER_CPU_MILLICORES` and `AUTOSCALE_WORKER_MEMORY_MIB` (default 1000m / 512 MiB). Scale-up reuses a retired autoscaled worker before creating a new one.
-
-Scale-down marks a worker `RETIRED` rather than deleting it, because past jobs and executions still reference it. Retired workers are left out of placement, the dashboard, and monitoring totals and samples. A database check refuses any reservation counters on a retired worker.
-
-Each change and its scaling event (the action, reason, waiting jobs, utilization, and resulting worker count) commit in one transaction to `scaling_events`. This keeps the history auditable.
-
-Retirement rechecks the worker under its row lock. A job placed on it in the brief gap after that check is caught at reservation. Reservation refuses any worker that is not schedulable and withdraws the placement, so the job is placed again on its next pass.
-
-Autoscaling starts off (`AUTOSCALE_ENABLED=false`) and is switched on from the dashboard. While it is off, nothing is added, but idle autoscaled workers are still retired so the cluster drains back to its base size.
+New workers start `IDLE` with nothing reserved. A worker with a reservation becomes `BUSY`; it becomes `IDLE` again when its reserved CPU and memory reach zero. The model also supports `STARTING`, `ACTIVE`, `STOPPING`, and `FAILED`.
 
 ## 5. Repeatable workload generation
 
@@ -186,14 +150,7 @@ Only `QUEUED` jobs whose arrival time has passed can be selected.
 
 Priority ranges from 1 to 10, with 10 highest. Waiting jobs gain one effective priority level per full minute waited, up to 10. This helps old jobs get a turn.
 
-Round Robin records a time slice (quantum), normally 10 seconds, and increases the job's round count. The accepted time slice is 1-3600 seconds. Jobs with fewer rounds are chosen first.
-
-The quantum is enforced while the container runs, like Kubernetes pod preemption. The backend waits on the container one quantum at a time. Each time a quantum expires, it checks two things: is another `QUEUED` job eligible, and is this job still under `ROUND_ROBIN_MAX_PREEMPTIONS` evictions (default 3)?
-
-- If both are true, the container is stopped and discarded. The execution is recorded as `PREEMPTED`, and the job returns to the queue with its reservation released in the same transaction.
-- If either is false, the job keeps running into the next quantum.
-
-A preempted job restarts from the beginning on its next turn. Workloads are deterministic for their seed, so the result is identical. The cap stops a long job from being restarted forever. The overall execution time limit still applies to each attempt, and a run that finishes just as its quantum expires keeps its result. Setting the cap to 0 turns preemption off.
+Round Robin records a time slice, normally 10 seconds, and increases the job's round count. The accepted time slice is 1-3600 seconds. Actually pausing and resuming a running container is still planned.
 
 The scheduler changes a job only if it is still queued. This stops two simultaneous scheduling requests from both selecting the same job successfully.
 
@@ -201,7 +158,7 @@ The scheduler changes a job only if it is still queued. This stops two simultane
 
 Placement chooses a worker for an already scheduled job. It saves the choice, strategy, and time. Reservation happens afterward.
 
-A worker must be `IDLE`, `ACTIVE`, or `BUSY`, and its calculated free CPU and memory must both fit the job. Placement considers saved reservation counters plus scheduled/running assignments that do not hold a reservation. A reserved job is counted only once.
+A worker must be `IDLE`, `ACTIVE`, or `BUSY`, and its calculated free CPU and memory must both fit the job. Placement considers saved reservation counters and the requirements of jobs already assigned in scheduled/running states.
 
 | Strategy | How it chooses |
 | --- | --- |
@@ -209,7 +166,7 @@ A worker must be `IDLE`, `ACTIVE`, or `BUSY`, and its calculated free CPU and me
 | `LEAST_LOADED` | Worker with the lowest current load, using the higher of CPU and memory usage |
 | `RESOURCE_AWARE` | Worker that would have the best balance and lowest high usage after adding the job |
 
-The Resource Aware score is `0.7 * peak + 0.3 * imbalance`. Here, peak is the higher of the expected CPU and memory usage fractions, and imbalance is their difference. Lower scores win. For Least Loaded and Resource Aware, equal scores prefer the worker with fewer saved job assignments, then worker name. This spreads short jobs across equally loaded workers even when each finishes before the next dispatch. The count includes retained finished jobs and survives backend restarts; clearing job history removes those jobs from the count. First Fit always keeps name order.
+The Resource Aware score is `0.7 * peak + 0.3 * imbalance`. Here, peak is the higher of the expected CPU and memory usage fractions, and imbalance is their difference. Lower scores win. Worker names break ties.
 
 If no worker fits, placement reports insufficient resources. A saved placement is only a plan: reservation checks the real counters again before granting capacity.
 
@@ -252,7 +209,7 @@ Each container gets the job's reserved CPU and memory limits. It has no network,
 
 The backend talks directly to Docker's API. In Compose, only the backend receives the Docker socket. This gives it control over the host Docker engine, so this setup is intended for a local development machine.
 
-When a run finishes, the backend saves the outcome and frees its resources in one database transaction. It then removes the container. A zero exit code counts as success only if the expected result is present. Errors are `FAILED`; a time limit is `INTERRUPTED`; a Round Robin eviction is `PREEMPTED`; an operator stop is `CANCELLED`. Monitoring counts `FAILED` and `INTERRUPTED` executions as failures. Preemptions are not counted as failures.
+When a run finishes, the backend saves the outcome and frees its resources in one database transaction. It then removes the container. A zero exit code counts as success only if the expected result is present. Errors are `FAILED`; a time limit is `INTERRUPTED`.
 
 ## 10. Monitoring
 
@@ -276,7 +233,7 @@ A stage with no data has count 0. Success rate is `null` when there are no compl
 
 ## 11. What is unfinished
 
-Worker-level failure recovery, machine learning, and full experiment comparison are still planned. Autoscaled workers are logical capacity on the same computer, like the study workers; scaling does not add physical hardware. Round Robin preemption does not pause and resume a container; a preempted job restarts from the beginning. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
+Automatic scaling, worker-level failure recovery, individual runtime cancellation, actual Round Robin preemption, machine learning, and full experiment comparison are still planned. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
 
 After a backend crash, startup recovery and a 30-second reconciliation pass settle untracked exited/missing containers and resume tracking live executions against their original deadline. The manual settle endpoint remains available. Completion uses the Docker finish timestamp when available, so stale recovery does not inflate execution duration.
 

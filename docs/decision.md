@@ -68,23 +68,13 @@ Keeping the steps separate makes them easier to explain, test, and compare. A pl
 
 FCFS uses arrival order. SJF uses estimated duration. Priority uses urgency plus waiting-time aging. Round Robin uses previous scheduling rounds and records a time slice.
 
-The job is updated only if it is still queued, so competing requests cannot both claim it. Priority aging helps long-waiting jobs get a turn.
-
-Round Robin preemption evicts and requeues instead of pausing. A paused container still holds its memory, so pausing would free no capacity for the waiting job. Splitting one reservation into a CPU part and a memory part would complicate the locking and accounting described in section 11. Eviction reuses the existing outcome-and-release transaction. Its cost is that a preempted job restarts from the beginning. That is acceptable for deterministic workloads, and it is bounded in three ways:
-
-- A job is only evicted while another job is waiting.
-- Each job has a preemption cap (`ROUND_ROBIN_MAX_PREEMPTIONS`).
-- A run that finishes at the quantum boundary keeps its result.
-
-Automatic retries are limited to infrastructure faults where the workload never got a fair run. Deterministic failures would repeat, so they wait for an operator's requeue.
+The job is updated only if it is still queued, so competing requests cannot both claim it. Priority aging helps long-waiting jobs get a turn. Actual Round Robin pause/resume behavior remains future work.
 
 ## 10. Account for planned worker load
 
-Placement includes saved reservations and the requirements of assigned jobs without a live reservation. Reserved jobs are already represented by worker counters and must not be counted again as advisory load.
+Placement includes saved reservations and the requirements of jobs already assigned to workers. This helps avoid repeatedly choosing the same worker before execution begins.
 
 First Fit chooses the first suitable worker. Least Loaded checks current usage. Resource Aware estimates usage after adding the new job and prefers lower, more balanced CPU and memory usage. Its formula is visible in the code rather than hidden in a model.
-
-Least Loaded and Resource Aware break equal-score ties using the number of saved jobs assigned to each worker, then name. This avoids repeatedly choosing worker-1 when short jobs finish between dispatches. The count comes from database records, so previews do not change it and backend restarts do not reset it. It reflects retained history rather than a permanent lifetime counter. Scores and eligibility still take priority; First Fit remains ordered by name.
 
 ## 11. Lock the worker when reserving capacity
 
@@ -142,15 +132,7 @@ The Immediate demo uses a valid custom batch with all arrival offsets set to zer
 
 Clear finished jobs is a backend transaction that removes finished job records and their related history in the required order. It leaves queued and running jobs out of the selection.
 
-## 17. Scale logical workers reactively, and retire instead of delete
-
-Scaling reacts to observed signals: waiting jobs and reserved capacity. It does not use forecasts, which keeps every decision explainable from one database snapshot and recorded with its reason. Requiring both a queue and high utilization avoids adding workers when jobs are only waiting for the next orchestrator pass. Separate scale-up and scale-down thresholds plus a cooldown prevent flapping.
-
-Workers are retired rather than deleted because jobs, allocations, and executions keep foreign keys to the worker that ran them. Retirement keeps that history intact, and scale-up reuses retired workers so rows do not accumulate. A host-memory ceiling keeps the combined logical budgets within what the computer can plausibly back.
-
-Runtime settings are held in memory. They are an operator's experiment knobs, while the environment holds the defaults and the event history in MySQL is the durable record.
-
-## 18. Use both small tests and real-system tests
+## 17. Use both small tests and real-system tests
 
 Services can receive simple in-memory replacements for database or Docker operations. This lets small tests check their rules quickly.
 
