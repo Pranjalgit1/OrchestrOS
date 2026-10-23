@@ -364,10 +364,6 @@ export class OrchestratorService {
             ? secondsUntilEligible(job.arrivalAt, now)
             : 0,
         schedulingPolicy: job.schedulingPolicy,
-        timeQuantumSeconds: job.timeQuantumSeconds ?? null,
-        schedulingRounds: job.schedulingRounds ?? 0,
-        preemptionCount: job.preemptionCount ?? 0,
-        retryCount: job.retryCount ?? 0,
         placementStrategy: job.placementStrategy,
         assignedWorkerId: job.assignedWorkerId,
         assignedWorkerName: row.workerName,
@@ -419,7 +415,6 @@ export class OrchestratorService {
         id: entry.id,
         name: entry.name,
         status: entry.status,
-        autoscaled: entry.autoscaled ?? false,
         cpuCapacityMillicores: entry.cpuCapacityMillicores,
         cpuAllocatedMillicores: entry.cpuAllocatedMillicores,
         cpuUtilization: ratio(

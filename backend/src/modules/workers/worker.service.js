@@ -26,5 +26,10 @@ export class WorkerService {
     }
     return worker;
   }
+  async remove(id) {
+    const worker = await this.repository.findById(id);
+    if (!worker) throw new NotFoundError("Worker");
+    return this.repository.remove(id);
+  }
 }
 export const workerService = new WorkerService();

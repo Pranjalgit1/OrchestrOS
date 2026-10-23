@@ -13,7 +13,7 @@ function ratio(used, capacity) {
 }
 /**
  * Builds a capacity snapshot. Available capacity subtracts both persisted
- * reservations and the advisory load of placed jobs without a reservation, so
+ * reservations and the advisory load of jobs already placed on the worker, so
  * repeated placements cannot overcommit the plan before reservation exists.
  */
 export function buildSnapshot(worker, assigned) {
@@ -23,7 +23,6 @@ export function buildSnapshot(worker, assigned) {
     workerId: worker.id,
     name: worker.name,
     status: worker.status,
-    placementCount: worker.placementCount ?? 0,
     cpuCapacityMillicores: worker.cpuCapacityMillicores,
     memoryCapacityMiB: worker.memoryCapacityMiB,
     cpuReservedMillicores: worker.cpuAllocatedMillicores,
@@ -88,9 +87,8 @@ export function scoreCandidate(snapshot, job, strategy) {
   }
 }
 /**
- * Pure placement decision. Equal load/fit scores prefer the worker with fewer
- * saved job assignments, so short jobs do not always target the first worker.
- * FIRST_FIT retains name order. Reading a preview never advances a cursor.
+ * Pure placement decision: evaluates every worker and selects one, or none when
+ * no worker has enough free CPU and memory.
  */
 export function evaluatePlacement(snapshots, job, strategy) {
   const candidates = [...snapshots]
@@ -111,10 +109,7 @@ export function evaluatePlacement(snapshots, job, strategy) {
     }
     const currentScore = current.score ?? Number.POSITIVE_INFINITY;
     const candidateScore = candidate.score ?? Number.POSITIVE_INFINITY;
-    const fairerTie = strategy !== PlacementStrategy.FIRST_FIT &&
-      candidateScore === currentScore &&
-      candidate.worker.placementCount < current.worker.placementCount;
-    return candidateScore < currentScore || fairerTie ? candidate : current;
+    return candidateScore < currentScore ? candidate : current;
   }, undefined);
   return {
     strategy,

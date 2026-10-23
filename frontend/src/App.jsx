@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { fetchHealthStatus } from "./api";
 import { MonitoringPanel } from "./MonitoringPanel.jsx";
 import { OrchestratorConsole } from "./OrchestratorConsole.jsx";
+import { AlgorithmComparison } from "./components/AlgorithmComparison.jsx";
+import { AutoScalingPanel } from "./components/AutoScalingPanel.jsx";
 import { Icon } from "./components/Icon.jsx";
 import { createMonitoringPoller } from "./monitoring.poller.js";
 const currentCapabilities = [
@@ -17,13 +19,13 @@ const currentCapabilities = [
   "Live operational metrics and utilization history",
   "Browser-driven orchestration with per-stage controls",
   "Restart recovery and workload cleanup",
-  "Round Robin preemption with requeue",
-  "Per-job cancellation, including running containers",
-  "Automatic and manual retry of failed jobs",
-  "Reactive worker autoscaling with recorded decisions",
+  "Reactive auto scaling (threshold-based)",
+  "ML-based predictive auto scaling (linear regression)",
+  "Side-by-side scheduling algorithm comparison with bar charts",
 ];
 const futureCapabilities = [
   "Worker-level failure recovery",
+  "Preemption and individual runtime cancellation",
 ];
 export function ServiceHealth({ health, error, status }) {
   const apiState = error ? "Unavailable"
@@ -55,7 +57,7 @@ export function App() {
   useEffect(() => {
     const updateSection = () => {
       const section = window.location.hash.slice(1);
-      if (["console", "pipeline", "job-queue", "monitoring"].includes(section)) setActiveSection(section);
+      if (["console", "pipeline", "job-queue", "monitoring", "autoscaling", "comparison"].includes(section)) setActiveSection(section);
     };
     updateSection();
     window.addEventListener("hashchange", updateSection);
@@ -81,10 +83,6 @@ export function App() {
     });
     return () => poller.stop();
   }, []);
-  const servicesConnected = !error && health?.status === "ok" && health?.dependencies?.database === "up";
-  const connectionLabel = error ? "Connection unavailable"
-    : servicesConnected ? "Systems connected"
-      : health?.status === "degraded" ? "Service degraded" : "Connecting to services";
   return (
     <main className="shell" id="overview">
       <a className="skip-link" href="#console">Skip to controls</a>
@@ -98,6 +96,7 @@ export function App() {
           {[
             ["console", "Control panel"], ["pipeline", "Pipeline"],
             ["job-queue", "Job queue"], ["monitoring", "Monitoring"],
+            ["autoscaling", "Auto Scaling"], ["comparison", "Comparison"],
           ].map(([id, label]) => (
             <a key={id} href={`#${id}`} aria-current={activeSection === id ? "location" : undefined}
               onClick={() => setActiveSection(id)}>{label}</a>
@@ -112,18 +111,8 @@ export function App() {
       </header>
 
       <div className="workspace-heading">
-        <div>
-          <p className="workspace-kicker">Local workspace</p>
-          <h1>Workload console<span className="heading-period">.</span></h1>
-          <p>Create jobs, choose a policy, and follow each run.</p>
-        </div>
-        <div className="workspace-status" role="status">
-          <span className={`connection-indicator${servicesConnected ? " is-connected" : ""}`} aria-hidden="true" />
-          <div>
-            <strong>{connectionLabel}</strong>
-            <span>Local compute. Persistent state.</span>
-          </div>
-        </div>
+        <h1>Workload console</h1>
+        <p>Create jobs, choose a policy, and follow each run.</p>
       </div>
 
       {error ? (
@@ -138,6 +127,14 @@ export function App() {
 
       <div id="monitoring">
         <MonitoringPanel />
+      </div>
+
+      <div id="autoscaling">
+        <AutoScalingPanel />
+      </div>
+
+      <div id="comparison">
+        <AlgorithmComparison />
       </div>
 
       <details className="foundation-details">

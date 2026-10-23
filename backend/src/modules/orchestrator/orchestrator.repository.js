@@ -1,4 +1,4 @@
-import { AllocationStatus, ExecutionStatus, JobStatus, WorkerStatus } from "@prisma/client";
+import { AllocationStatus, ExecutionStatus, JobStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 /** Job states that are finished and therefore safe to clear. */
 const TERMINAL_JOB_STATUSES = [
@@ -65,10 +65,7 @@ export const prismaOrchestratorRepository = {
     }));
   },
   listWorkers(client = prisma) {
-    return client.worker.findMany({
-      where: { status: { not: WorkerStatus.RETIRED } },
-      orderBy: { name: "asc" },
-    });
+    return client.worker.findMany({ orderBy: { name: "asc" } });
   },
   async countJobsByStatus(client = prisma) {
     const groups = await client.job.groupBy({

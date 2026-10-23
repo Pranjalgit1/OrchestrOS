@@ -321,11 +321,7 @@ export class DockerEngineClient {
         `${base}/containers/${containerId}?force=1&v=1`,
       );
     } catch (error) {
-      // 404: already gone. 409 "already in progress": a concurrent removal of
-      // the same container (the tracker and a cancel can both clean up) will
-      // finish the job, so this one has nothing left to do.
-      if (error instanceof DockerApiError && (error.statusCode === 404 ||
-          (error.statusCode === 409 && /already in progress/i.test(error.message)))) return;
+      if (error instanceof DockerApiError && error.statusCode === 404) return;
       throw error;
     }
   }

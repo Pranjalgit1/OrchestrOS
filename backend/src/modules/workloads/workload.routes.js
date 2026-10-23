@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { rejectWhileBenchmarking } from "../benchmarks/benchmark.guard.js";
 import {
   generateWorkloadSchema,
   reuseWorkloadSchema,
@@ -7,10 +6,10 @@ import {
 } from "./workload.schemas.js";
 import { workloadService } from "./workload.service.js";
 export const workloadRouter = Router();
-workloadRouter.post("/clear-generated", rejectWhileBenchmarking, async (_request, response) => {
+workloadRouter.post("/clear-generated", async (_request, response) => {
   response.json(await workloadService.clearGenerated());
 });
-workloadRouter.post("/generate", rejectWhileBenchmarking, async (request, response) => {
+workloadRouter.post("/generate", async (request, response) => {
   const input = generateWorkloadSchema.parse(request.body);
   const batch = await workloadService.generate(input);
   response.location(`/api/workloads/${batch.id}`).status(201).json(batch);
@@ -20,7 +19,7 @@ workloadRouter.get("/:id", async (request, response) => {
   const batch = await workloadService.getById(id);
   response.json(batch);
 });
-workloadRouter.post("/:id/reuse", rejectWhileBenchmarking, async (request, response) => {
+workloadRouter.post("/:id/reuse", async (request, response) => {
   const { id } = workloadBatchIdParamsSchema.parse(request.params);
   const input = reuseWorkloadSchema.parse(request.body ?? {});
   const batch = await workloadService.reuse(id, input);

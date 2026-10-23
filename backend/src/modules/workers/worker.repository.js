@@ -24,4 +24,7 @@ export const prismaWorkerRepository = {
   findById(id) {
     return prisma.worker.findUnique({ where: { id } });
   },
+  remove(id) {
+    return prisma.worker.delete({ where: { id } });
+  },
 };

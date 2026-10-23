@@ -103,26 +103,6 @@ export function releaseResources(jobId) {
 export function cancelJob(jobId) {
   return postJson(`/api/jobs/${jobId}/cancel`, {});
 }
-export function requeueJob(jobId) {
-  return postJson(`/api/jobs/${jobId}/requeue`, {});
-}
-export function fetchAutoscaler(signal) {
-  return requestJson("/api/autoscaler", { signal, cache: "no-store" });
-}
-export async function updateAutoscaler(patch) {
-  const result = await requestJson("/api/autoscaler", {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(STATE_CHANGED_EVENT));
-  }
-  return result;
-}
-export function evaluateAutoscaler() {
-  return postJson("/api/autoscaler/evaluate", {});
-}
 export function clearFinishedJobs() {
   return postJson("/api/orchestrator/clear-finished", {});
 }
@@ -131,4 +111,24 @@ export function clearGeneratedWorkload() {
 }
 export function killAllWorkloads() {
   return postJson("/api/orchestrator/kill-all", {});
+}
+
+// ---------------------------------------------------------------------------
+// Auto Scaling
+// ---------------------------------------------------------------------------
+export function fetchAutoScalingStatus() {
+  return getJson("/api/autoscaling/status");
+}
+export function updateAutoScalingConfig(config) {
+  return postJson("/api/autoscaling/config", config);
+}
+export function triggerAutoScaling(dryRun = false) {
+  return postJson("/api/autoscaling/trigger", { dryRun });
+}
+
+// ---------------------------------------------------------------------------
+// Algorithm Comparison
+// ---------------------------------------------------------------------------
+export function runAlgorithmComparison(params) {
+  return postJson("/api/comparison/simulate", params);
 }
