@@ -10,16 +10,14 @@ export function WorkerGrid({ workers, onSelectJob }) {
         </div>
       </header>
       <p className="hint worker-explanation">
-        Rings show reserved limits, not the actual RAM usage
+        Workers are scheduling slots on the same computer. Rings show reserved
+        limits, not actual RAM usage. Jobs run in Docker containers.
       </p>
       <div className="worker-grid">
         {workers.map((worker) => (
           <article key={worker.id} className="worker-card">
             <header>
               <strong className="mono">{worker.name}</strong>
-              {worker.autoscaled ? (
-                <span className="badge badge-auto" title="Added by the autoscaler">auto</span>
-              ) : null}
               <span className={`badge badge-${worker.status.toLowerCase()}`}>
                 {worker.status}
               </span>

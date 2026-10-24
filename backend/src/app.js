@@ -3,6 +3,8 @@ import express from "express";
 import { ZodError } from "zod";
 import { env } from "./config/env.js";
 import { AppError } from "./errors/app-error.js";
+import { autoScalingRouter } from "./modules/autoscaling/autoscaling.routes.js";
+import { comparisonRouter } from "./modules/comparison/comparison.routes.js";
 import { executionRouter } from "./modules/executions/execution.routes.js";
 import { healthRouter } from "./modules/health/health.routes.js";
 import { jobRouter } from "./modules/jobs/job.routes.js";
@@ -13,8 +15,6 @@ import { resourceRouter } from "./modules/resources/resource.routes.js";
 import { schedulerRouter } from "./modules/scheduler/scheduler.routes.js";
 import { workloadRouter } from "./modules/workloads/workload.routes.js";
 import { workerRouter } from "./modules/workers/worker.routes.js";
-import { autoscalerRouter } from "./modules/autoscaler/autoscaler.routes.js";
-import { benchmarkRouter } from "./modules/benchmarks/benchmark.routes.js";
 export const app = express();
 app.disable("x-powered-by");
 app.use(
@@ -40,8 +40,8 @@ app.use("/api/resources", resourceRouter);
 app.use("/api/executions", executionRouter);
 app.use("/api/monitoring", monitoringRouter);
 app.use("/api/workers", workerRouter);
-app.use("/api/autoscaler", autoscalerRouter);
-app.use("/api/benchmarks", benchmarkRouter);
+app.use("/api/autoscaling", autoScalingRouter);
+app.use("/api/comparison", comparisonRouter);
 app.use((_request, response) => {
   response.status(404).json({
     error: {

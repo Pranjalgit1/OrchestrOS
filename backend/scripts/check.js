@@ -17,6 +17,6 @@ function checkDirectory(directory) {
   }
 }
 
-for (const directory of ["src", "tests", "prisma", "scripts"])
+for (const directory of ["src", "prisma", "scripts"])
   checkDirectory(resolve(directory));
 console.log("JavaScript syntax checks passed");

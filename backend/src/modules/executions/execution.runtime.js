@@ -111,18 +111,12 @@ export class DockerContainerRuntime {
       throw error;
     })) throw new Error("Docker container is still active after stop");
   }
-  /**
-   * Waits up to `timeoutMs` for the container to exit. By default an expired
-   * wait stops the container; `stopOnTimeout: false` only reports the expiry,
-   * which is how a Round Robin quantum is observed without ending the run.
-   */
-  async waitForExit(containerId, timeoutMs, { stopOnTimeout = true } = {}) {
+  async waitForExit(containerId, timeoutMs) {
     try {
       await this.client.waitContainer(containerId, timeoutMs);
       return { timedOut: false };
     } catch (error) {
       if (!(error instanceof DockerTimeoutError)) throw error;
-      if (!stopOnTimeout) return { timedOut: true };
       // The timeout is OrchestrOS policy, so it stops the container itself.
       await this.client.stopContainer(
         containerId,

@@ -40,8 +40,7 @@ State jobs are ordered by `updatedAt` descending before applying `limit`; each j
 | POST | `/jobs` | Create one queued job |
 | GET | `/jobs` | List jobs, optionally filtered by `status` |
 | GET | `/jobs/:id` | Read one job |
-| POST | `/jobs/:id/cancel` | Cancel an unfinished job; a running job's container is stopped first and its reservation released |
-| POST | `/jobs/:id/requeue` | Return a `FAILED` or `INTERRUPTED` job to the queue for another attempt |
+| POST | `/jobs/:id/cancel` | Cancel a queued job |
 | POST | `/workers` | Create one logical worker |
 | GET | `/workers` | List workers |
 | GET | `/workers/:id` | Read one worker |
@@ -73,13 +72,6 @@ Example job:
 The workload runner applies its own smaller work limits, described in [the architecture guide](architecture.md). An estimate is not a promise about actual duration.
 
 Job lists accept `limit` from 1-100, default 50.
-
-Cancel and requeue have no request body and return the updated job.
-
-- **Cancel.** Repeating a cancel returns the same cancelled job. Cancelling a `COMPLETED` or `FAILED` job returns 409 `JOB_NOT_CANCELLABLE`. So does a running job whose container finished before it could be stopped, and the response reports the status it finished with.
-- **Requeue.** Requeuing any job that is not `FAILED` or `INTERRUPTED` returns 409 `JOB_NOT_REQUEUEABLE`. A requeue clears the job's scheduling and placement fields and increments `retryCount`. Earlier attempts stay readable through `/executions?jobId=`.
-
-Jobs also report `preemptionCount` (Round Robin evictions) and `retryCount`. Executions may end as `PREEMPTED` when a Round Robin quantum expires while another job waits.
 
 Example worker:
 
@@ -203,33 +195,7 @@ Allocation lists accept optional `jobId`, `workerId`, and `status`. Execution li
 
 A successful start returns HTTP 202: the run has started, but it has not necessarily finished. Settling a container that is still running returns a conflict. Settling an already recorded outcome returns that outcome without releasing resources again.
 
-## 6. Autoscaler
-
-| Method | Path | What it does |
-| --- | --- | --- |
-| GET | `/autoscaler` | Read settings, the latest decision with its signals, and the 20 most recent scaling events |
-| PATCH | `/autoscaler` | Change runtime settings, for example `{ "enabled": true }` |
-| POST | `/autoscaler/evaluate` | Run one scaling evaluation now and return its decision |
-
-PATCH accepts any subset of the following fields:
-
-| Field | Allowed values |
-| --- | --- |
-| `enabled` | `true` or `false` |
-| `maxWorkers` | 0-20 |
-| `workerCpuMillicores` | 100-64,000 |
-| `workerMemoryMiB` | 128-131,072 |
-| `scaleUpQueueThreshold` | 1-1,000 |
-| `scaleUpUtilization` | 0.05-1 |
-| `scaleDownUtilization` | 0.05-1 |
-| `idleSeconds` | 0-3,600 |
-| `cooldownSeconds` | 0-3,600 |
-
-`scaleDownUtilization` must stay below `scaleUpUtilization`; otherwise the request returns 400 `INVALID_AUTOSCALER_CONFIG`. Settings last until the backend restarts.
-
-A decision's `action` is `SCALE_UP`, `SCALE_DOWN`, or `NONE`, with a plain-language `reason` and `applied` telling whether the change committed. `GET /workers` also lists retired autoscaled workers with status `RETIRED`. A reservation on a worker that is no longer schedulable returns 409 `WORKER_NOT_SCHEDULABLE` and withdraws the job's placement.
-
-## 7. Monitoring
+## 6. Monitoring
 
 | Method | Path | What it does |
 | --- | --- | --- |
@@ -243,7 +209,7 @@ A decision's `action` is `SCALE_UP`, `SCALE_DOWN`, or `NONE`, with a plain-langu
 
 These reads do not change job scheduling or resource reservations. Capturing a sample writes monitoring history only.
 
-## 8. Basic checks and errors
+## 7. Basic checks and errors
 
 | Method | Path | What it does |
 | --- | --- | --- |

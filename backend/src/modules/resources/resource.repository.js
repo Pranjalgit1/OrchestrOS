@@ -1,6 +1,5 @@
 import { AllocationStatus, JobStatus, Prisma, WorkerStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
-import { SCHEDULABLE_WORKER_STATUSES } from "../placement/placement.accounting.js";
 /**
  * Reservation transactions intentionally block on a worker row lock, so the
  * defaults are widened: `maxWait` covers queueing for a connection and
@@ -10,30 +9,9 @@ export const TRANSACTION_OPTIONS = {
   maxWait: 15_000,
   timeout: 20_000,
 };
-const DEADLOCK_ATTEMPTS = 4;
-/**
- * Runs a transaction, retrying when MySQL picks it as a deadlock victim.
- *
- * InnoDB resolves a deadlock by rolling one transaction back, so nothing was
- * written and running it again is safe. Prisma reports that as P2034. Under a
- * burst of starts and completions on the same worker this is expected rather
- * than exceptional, so callers should never see it.
- */
-export async function withDeadlockRetry(run) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await run();
-    } catch (error) {
-      const retryable = error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2034";
-      if (!retryable || attempt >= DEADLOCK_ATTEMPTS) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 20 * attempt + Math.random() * 30));
-    }
-  }
-}
 export const prismaResourceRepository = {
   async reserve({ jobId, workerId, cpuMillicores, memoryMiB }) {
-    return withDeadlockRetry(() => prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT \`id\` FROM \`jobs\` WHERE \`id\` = ${jobId} FOR UPDATE`;
       const currentJob = await tx.job.findUnique({ where: { id: jobId } });
       if (!currentJob || currentJob.status !== JobStatus.SCHEDULED) {
@@ -47,8 +25,7 @@ export const prismaResourceRepository = {
                \`cpuCapacityMillicores\`,
                \`memoryCapacityMiB\`,
                \`cpuAllocatedMillicores\`,
-               \`memoryAllocatedMiB\`,
-               \`status\`
+               \`memoryAllocatedMiB\`
         FROM \`workers\`
         WHERE \`id\` = ${workerId}
         FOR UPDATE
@@ -57,16 +34,6 @@ export const prismaResourceRepository = {
       const worker = locked[0];
       if (!worker) {
         return { status: "WORKER_NOT_FOUND", lockWaitMs };
-      }
-      // A worker can leave service (for example, retired by the autoscaler)
-      // after a job was placed on it. The placement is withdrawn so the job
-      // can be placed again instead of retrying a worker that will never accept.
-      if (!SCHEDULABLE_WORKER_STATUSES.includes(worker.status)) {
-        await tx.job.update({
-          where: { id: jobId },
-          data: { assignedWorkerId: null, placementStrategy: null, placedAt: null },
-        });
-        return { status: "WORKER_NOT_SCHEDULABLE", lockWaitMs, workerStatus: worker.status };
       }
       // Duplicate check precedes the capacity check on purpose. A job that
       // already holds a reservation is counted in the worker's own usage, so
@@ -124,13 +91,13 @@ export const prismaResourceRepository = {
         }
         throw error;
       }
-    }, TRANSACTION_OPTIONS));
+    }, TRANSACTION_OPTIONS);
   },
   async release(jobId) {
-    return withDeadlockRetry(() => prisma.$transaction(
+    return prisma.$transaction(
       (tx) => releaseAllocationWithin(tx, jobId),
       TRANSACTION_OPTIONS,
-    ));
+    );
   },
   listAllocations({ jobId, workerId, status, limit }) {
     return prisma.resourceAllocation.findMany({

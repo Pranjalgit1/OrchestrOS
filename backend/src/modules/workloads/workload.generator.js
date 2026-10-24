@@ -1,5 +1,6 @@
 import { WorkloadPattern, WorkloadType } from "@prisma/client";
 export const GENERATOR_VERSION = "v2";
+// Study limits are inherent in generation, rather than an optional mode.
 export const STUDY_LIMITS = { cpuMillicores: 1_000, memoryMiB: 256, durationSeconds: 10 };
 const MIN_WORKLOAD_SIZE = 1;
 const MAX_WORKLOAD_SIZE = 100_000_000;
@@ -35,9 +36,6 @@ export function createMulberry32(seed) {
 }
 function randomInteger(random, minimum, maximum) {
   return minimum + Math.floor(random() * (maximum - minimum + 1));
-}
-function createWorkloadName(seed, sequence) {
-  return `workload-${seed}-${String(sequence).padStart(3, "0")}`;
 }
 function pick(random, values) {
   const value = values[Math.floor(random() * values.length)];
@@ -142,7 +140,7 @@ export function generateWorkloadSpecs(input) {
   const typePool = input.custom?.workloadTypes ?? input.workloadTypes ?? workloadTypes;
   return Array.from({ length: input.count }, (_, index) => {
     const sequence = index + 1;
-    const name = createWorkloadName(input.seed, sequence);
+    const name = `workload-${input.seed}-${String(sequence).padStart(3, "0")}`;
     const workloadType = pick(random, typePool);
     if (input.custom) {
       const custom = input.custom;

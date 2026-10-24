@@ -1,10 +1,8 @@
 import { Router } from "express";
-import { rejectWhileBenchmarking } from "../benchmarks/benchmark.guard.js";
 import { createWorkerSchema, workerIdParamsSchema } from "./worker.schemas.js";
 import { workerService } from "./worker.service.js";
 export const workerRouter = Router();
-// A new worker mid-benchmark would change capacity between policy runs.
-workerRouter.post("/", rejectWhileBenchmarking, async (request, response) => {
+workerRouter.post("/", async (request, response) => {
   const input = createWorkerSchema.parse(request.body);
   const worker = await workerService.create(input);
   response.location(`/api/workers/${worker.id}`).status(201).json(worker);
@@ -17,4 +15,9 @@ workerRouter.get("/:id", async (request, response) => {
   const { id } = workerIdParamsSchema.parse(request.params);
   const worker = await workerService.getById(id);
   response.json(worker);
+});
+workerRouter.delete("/:id", async (request, response) => {
+  const { id } = workerIdParamsSchema.parse(request.params);
+  await workerService.remove(id);
+  response.status(204).end();
 });

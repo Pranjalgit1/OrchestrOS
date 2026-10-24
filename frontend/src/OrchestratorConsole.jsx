@@ -8,13 +8,11 @@ import {
   generateWorkload,
   killAllWorkloads,
   releaseResources,
-  requeueJob,
   reserveResources,
   runOrchestrator,
   startExecution,
 } from "./api";
 import { ActivityLog } from "./components/ActivityLog.jsx";
-import { AutoscalerPanel } from "./components/AutoscalerPanel.jsx";
 import { ControlPanel } from "./components/ControlPanel.jsx";
 import { JobDetail } from "./components/JobDetail.jsx";
 import { JobQueue } from "./components/JobQueue.jsx";
@@ -38,7 +36,6 @@ export function OrchestratorConsole() {
   const [policy, setPolicy] = useState("FCFS");
   const [strategy, setStrategy] = useState("LEAST_LOADED");
   const [timeQuantumSeconds, setTimeQuantumSeconds] = useState(10);
-  const [jobsPerTick, setJobsPerTick] = useState(1);
   const [autoRunning, setAutoRunning] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [filter, setFilter] = useState("ALL");
@@ -46,8 +43,8 @@ export function OrchestratorConsole() {
   const mounted = useRef(true);
   const logId = useRef(0);
   // Kept in a ref so the auto-run timer always sees the current selections.
-  const settings = useRef({ policy, strategy, timeQuantumSeconds, jobsPerTick });
-  settings.current = { policy, strategy, timeQuantumSeconds, jobsPerTick };
+  const settings = useRef({ policy, strategy, timeQuantumSeconds });
+  settings.current = { policy, strategy, timeQuantumSeconds };
   const log = useCallback((kind, label, detail) => {
     logId.current += 1;
     const entry = {
@@ -164,8 +161,8 @@ export function OrchestratorConsole() {
       const result = await runOrchestrator({
         policy: current.policy,
         strategy: current.strategy,
-        // One start per tick is easy to follow; more fills the cluster faster.
-        maxJobs: current.jobsPerTick,
+        // One start per tick keeps study runs easy to follow and limits bursts.
+        maxJobs: 1,
         ...(current.policy === "ROUND_ROBIN"
           ? { timeQuantumSeconds: current.timeQuantumSeconds }
           : {}),
@@ -253,8 +250,6 @@ export function OrchestratorConsole() {
         onStrategyChange={setStrategy}
         timeQuantumSeconds={timeQuantumSeconds}
         onTimeQuantumChange={setTimeQuantumSeconds}
-        jobsPerTick={jobsPerTick}
-        onJobsPerTickChange={setJobsPerTick}
         autoRunning={autoRunning}
         busy={busy}
         onGenerate={onGenerate}
@@ -322,20 +317,12 @@ export function OrchestratorConsole() {
               }
               onCancel={(jobId) =>
                 act("stage", "Cancel", async () => {
-                  const job = await cancelJob(jobId);
-                  log("stage", "Cancel", `${job.name} cancelled; any container was stopped and its reservation released`);
-                })
-              }
-              onRequeue={(jobId) =>
-                act("stage", "Requeue", async () => {
-                  const job = await requeueJob(jobId);
-                  log("stage", "Requeue", `${job.name} returned to the queue (retry ${job.retryCount})`);
+                  await cancelJob(jobId);
+                  log("stage", "Cancel", `Job ${jobId.slice(0, 8)} cancelled`);
                 })
               }
             />
           </div>
-
-          <AutoscalerPanel onChanged={() => void refresh()} />
 
           <JobQueue
             jobs={state.jobs}
@@ -362,13 +349,7 @@ export function OrchestratorConsole() {
           </p>
         </>
       ) : (
-        <div className="console-loading" role="status">
-          <span className="loading-indicator" aria-hidden="true" />
-          <div>
-            <strong>{error ? "Waiting for a connection" : "Loading your workspace"}</strong>
-            <p>{error ? "The console will retry automatically." : "Reading jobs, workers, and reserved capacity."}</p>
-          </div>
-        </div>
+        <p className="muted">Loading orchestrator state…</p>
       )}
     </>
   );

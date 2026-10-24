@@ -4,7 +4,6 @@ import {
   runOrchestratorSchema,
 } from "./orchestrator.schemas.js";
 import { orchestratorService } from "./orchestrator.service.js";
-import { rejectWhileBenchmarking } from "../benchmarks/benchmark.guard.js";
 export const orchestratorRouter = Router();
 orchestratorRouter.post("/kill-all", async (_request, response) => {
   response.json(await orchestratorService.killAll());
@@ -17,7 +16,7 @@ orchestratorRouter.post("/kill-all", async (_request, response) => {
  * `/api/executions/start`) remain available and unchanged for debugging and for
  * demonstrating one stage at a time.
  */
-orchestratorRouter.post("/run", rejectWhileBenchmarking, async (request, response) => {
+orchestratorRouter.post("/run", async (request, response) => {
   const input = runOrchestratorSchema.parse(request.body ?? {});
   response.status(202).json(await orchestratorService.run(input));
 });
@@ -30,6 +29,6 @@ orchestratorRouter.get("/state", async (request, response) => {
  * Removes finished jobs so a demonstration can start from a clean queue.
  * Running and reserved work is left untouched.
  */
-orchestratorRouter.post("/clear-finished", rejectWhileBenchmarking, async (_request, response) => {
+orchestratorRouter.post("/clear-finished", async (_request, response) => {
   response.json(await orchestratorService.clearFinished());
 });

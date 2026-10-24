@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { rejectWhileBenchmarking } from "../benchmarks/benchmark.guard.js";
 import {
   assignPlacementSchema,
   previewPlacementQuerySchema,
@@ -13,7 +12,7 @@ placementRouter.get("/preview", async (request, response) => {
   const query = previewPlacementQuerySchema.parse(request.query);
   response.json(await placementService.preview(query));
 });
-placementRouter.post("/assign", rejectWhileBenchmarking, async (request, response) => {
+placementRouter.post("/assign", async (request, response) => {
   const input = assignPlacementSchema.parse(request.body ?? {});
   response.json(await placementService.assign(input));
 });

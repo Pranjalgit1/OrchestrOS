@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { rejectWhileBenchmarking } from "../benchmarks/benchmark.guard.js";
 import {
   listAllocationsQuerySchema,
   releaseResourcesSchema,
@@ -7,12 +6,12 @@ import {
 } from "./resource.schemas.js";
 import { resourceService } from "./resource.service.js";
 export const resourceRouter = Router();
-resourceRouter.post("/reserve", rejectWhileBenchmarking, async (request, response) => {
+resourceRouter.post("/reserve", async (request, response) => {
   const input = reserveResourcesSchema.parse(request.body ?? {});
   const result = await resourceService.reserve(input);
   response.status(201).json(result);
 });
-resourceRouter.post("/release", rejectWhileBenchmarking, async (request, response) => {
+resourceRouter.post("/release", async (request, response) => {
   const input = releaseResourcesSchema.parse(request.body ?? {});
   response.json(await resourceService.release(input));
 });
