@@ -4,9 +4,12 @@ import test from "node:test";
 import { WorkerStatus } from "@prisma/client";
 import {
   ScaleAction,
+  ScalingStrategy,
   clusterUtilization,
   decideScaling,
+  forecastLoad,
   isRetirable,
+  linearRegression,
   nextAutoscaledName,
 } from "../src/modules/autoscaler/autoscaler.policy.js";
 import { updateAutoscalerSchema } from "../src/modules/autoscaler/autoscaler.schemas.js";
@@ -224,4 +227,103 @@ test("the timer only starts when an interval is configured", () => {
   assert.notEqual(on.timer, null);
   on.stop();
   assert.equal(on.timer, null);
+});
+
+// --- ML strategy ----------------------------------------------------------
+const mlConfig = { ...config, strategy: ScalingStrategy.ML, mlWindowPoints: 20, mlLookAheadSeconds: 60 };
+/** Points `stepSeconds` apart ending at `now`, oldest first. */
+function history(points, stepSeconds = 5) {
+  return points.map(([queuedJobs, peak], index) => ({
+    at: new Date(now.getTime() - (points.length - 1 - index) * stepSeconds * 1_000),
+    queuedJobs,
+    peak,
+  }));
+}
+test("linear regression recovers a line and stays flat when it cannot fit one", () => {
+  const fit = linearRegression([0, 1, 2, 3], [1, 3, 5, 7]);
+  assert.equal(fit.slope, 2);
+  assert.equal(fit.intercept, 1);
+  assert.deepEqual(linearRegression([4, 4], [2, 6]), { slope: 0, intercept: 4 });
+  assert.deepEqual(linearRegression([], []), { slope: 0, intercept: 0 });
+});
+test("the forecast extrapolates the trend and clamps to possible values", () => {
+  assert.equal(forecastLoad(history([[0, 0.1], [1, 0.2]]), 60), null, "two points are too few");
+  const rising = forecastLoad(history([[0, 0.2], [1, 0.3], [2, 0.4]]), 10);
+  // One job and 10 points per 5s: 10s past the last point adds two more steps.
+  assert.equal(rising.queuedJobs, 4);
+  assert.equal(rising.peak, 0.6);
+  assert.equal(rising.queueSlopePerMinute, 12);
+  const clamped = forecastLoad(history([[6, 0.9], [3, 1], [0, 1]]), 60);
+  assert.equal(clamped.queuedJobs, 0, "a falling queue never predicts negative jobs");
+  assert.equal(clamped.peak, 1, "utilization never predicts above 100%");
+});
+test("ML scales up on a rising forecast before the measured load crosses the line", () => {
+  // Measured: one job waiting on a 45% reserved cluster, so REACTIVE holds.
+  const quiet = snapshot({ workers: [busy(), worker({ name: "worker-2" })], queuedJobs: 1 });
+  assert.equal(decideScaling(quiet, config, now).action, ScaleAction.NONE);
+  const forecast = { queuedJobs: 4, peak: 0.9, queueSlopePerMinute: 3, lookAheadSeconds: 60, points: 6 };
+  const decision = decideScaling({ ...quiet, forecast }, mlConfig, now);
+  assert.equal(decision.action, ScaleAction.SCALE_UP);
+  assert.equal(decision.strategy, ScalingStrategy.ML);
+  assert.match(decision.reason, /^\[ML\] Forecast 4\.0 job\(s\) waiting with the cluster 90% reserved in 60s \(now 1 job/);
+  assert.deepEqual(decision.signals.forecast, forecast);
+});
+test("ML holds on a falling forecast even while the measured load is high", () => {
+  const forecast = { queuedJobs: 0, peak: 0.3, queueSlopePerMinute: -6, lookAheadSeconds: 60, points: 6 };
+  assert.equal(decideScaling(snapshot(), config, now).action, ScaleAction.SCALE_UP);
+  const decision = decideScaling({ ...snapshot(), forecast }, mlConfig, now);
+  assert.equal(decision.action, ScaleAction.NONE);
+  assert.match(decision.reason, /^\[ML\] Within thresholds: forecast 0\.0 job/);
+});
+test("ML waits for enough history and keeps the same limits and cooldown as REACTIVE", () => {
+  const waiting = decideScaling({ ...snapshot(), forecast: null, historyPoints: 2 }, mlConfig, now);
+  assert.equal(waiting.action, ScaleAction.NONE);
+  assert.match(waiting.reason, /Collecting load history \(2\/3 points\)/);
+  const forecast = { queuedJobs: 9, peak: 1, queueSlopePerMinute: 6, lookAheadSeconds: 60, points: 6 };
+  const recent = snapshot({ forecast, lastActionAt: new Date(now.getTime() - 5_000) });
+  assert.match(decideScaling(recent, mlConfig, now).reason, /Cooling down for 10s/);
+  const atLimit = snapshot({ forecast, workers: [busy(), busy({ name: "auto-worker-1", autoscaled: true }),
+    busy({ name: "auto-worker-2", autoscaled: true })] });
+  assert.match(decideScaling(atLimit, mlConfig, now).reason, /2 autoscaled worker limit/);
+});
+test("ML retires a worker only when load is low now and predicted to stay low", () => {
+  const idle = worker({ name: "auto-worker-1", autoscaled: true });
+  const quiet = snapshot({
+    workers: [busy({ cpuAllocatedMillicores: 200, memoryAllocatedMiB: 100 }), idle], queuedJobs: 0 });
+  assert.equal(decideScaling(quiet, config, now).action, ScaleAction.SCALE_DOWN);
+  // Below the scale-up line but above the scale-down line: load is returning.
+  const returning = { queuedJobs: 1, peak: 0.6, queueSlopePerMinute: 1, lookAheadSeconds: 60, points: 6 };
+  assert.equal(decideScaling({ ...quiet, forecast: returning }, mlConfig, now).action, ScaleAction.NONE,
+    "load predicted to come back keeps the worker");
+  const staysLow = { queuedJobs: 0, peak: 0.1, queueSlopePerMinute: 0, lookAheadSeconds: 60, points: 6 };
+  const decision = decideScaling({ ...quiet, forecast: staysLow }, mlConfig, now);
+  assert.equal(decision.action, ScaleAction.SCALE_DOWN);
+  assert.match(decision.reason, /^\[ML\] auto-worker-1 idle .*; forecast 0\.0 job/);
+});
+test("the service records load every pass so either strategy can forecast", async () => {
+  const repository = new FakeRepository();
+  let clock = new Date(now.getTime() - 15_000);
+  for (const queuedJobs of [0, 1, 2, 3]) repository.snapshots.push(snapshot({ queuedJobs }));
+  const service = new AutoscalerService(repository, {
+    config: { ...config, mlWindowPoints: 3 }, intervalSeconds: 0, clock: () => clock });
+  for (let pass = 0; pass < 4; pass += 1) {
+    await service.evaluate();
+    clock = new Date(clock.getTime() + 5_000);
+  }
+  assert.equal(service.config.strategy, ScalingStrategy.REACTIVE, "REACTIVE is the default");
+  assert.deepEqual(service.loadHistory.map((point) => point.queuedJobs), [1, 2, 3],
+    "the window keeps only the newest points");
+  const status = await service.status();
+  assert.equal(status.forecast.points, 3);
+  assert.equal(status.loadHistory.length, 3);
+  assert.equal(typeof status.loadHistory[0].at, "string");
+  service.updateConfig({ mlWindowPoints: 2 });
+  assert.equal(service.loadHistory.length, 2, "shrinking the window trims at once");
+});
+test("the strategy setting accepts only REACTIVE or ML", () => {
+  assert.equal(updateAutoscalerSchema.safeParse({ strategy: "ML" }).success, true);
+  assert.equal(updateAutoscalerSchema.safeParse({ strategy: "BOTH" }).success, false,
+    "both at once would make the two impossible to compare");
+  assert.equal(updateAutoscalerSchema.safeParse({ mlWindowPoints: 2 }).success, false);
+  assert.equal(updateAutoscalerSchema.safeParse({ mlLookAheadSeconds: 60 }).success, true);
 });

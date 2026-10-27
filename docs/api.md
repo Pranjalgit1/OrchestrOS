@@ -226,10 +226,15 @@ PATCH accepts any subset of the following fields:
 | `scaleDownUtilization` | 0.05-1 |
 | `idleSeconds` | 0-3,600 |
 | `cooldownSeconds` | 0-3,600 |
+| `strategy` | `REACTIVE` (default) or `ML`. Only one is active at a time |
+| `mlWindowPoints` | 3-100: how many recent checks the ML forecast fits (default 20) |
+| `mlLookAheadSeconds` | 5-300: how far ahead the ML forecast predicts (default 60) |
 
 `scaleDownUtilization` must stay below `scaleUpUtilization`; otherwise the request returns 400 `INVALID_AUTOSCALER_CONFIG`. Settings last until the backend restarts.
 
-A decision's `action` is `SCALE_UP`, `SCALE_DOWN`, or `NONE`, with a plain-language `reason` and `applied` telling whether the change committed. `GET /workers` also lists retired autoscaled workers with status `RETIRED`. A reservation on a worker that is no longer schedulable returns 409 `WORKER_NOT_SCHEDULABLE` and withdraws the job's placement.
+GET also returns `forecast` (`null` until three checks are recorded, otherwise the predicted `queuedJobs`, `peak` utilization, `queueSlopePerMinute`, `lookAheadSeconds`, and `points`) and `loadHistory`, the measured points it is fitted to. Both are kept whichever strategy is active.
+
+A decision's `action` is `SCALE_UP`, `SCALE_DOWN`, or `NONE`, with a plain-language `reason`, the `strategy` that made it, and `applied` telling whether the change committed. Reasons from the ML strategy start with `[ML]`, including the ones stored in scaling events. `GET /workers` also lists retired autoscaled workers with status `RETIRED`. A reservation on a worker that is no longer schedulable returns 409 `WORKER_NOT_SCHEDULABLE` and withdraws the job's placement.
 
 ## 7. Policy benchmark
 

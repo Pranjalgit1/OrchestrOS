@@ -1863,6 +1863,56 @@ a {
   font-size: 0.75rem;
 }
 .autoscaler-more { margin-top: 8px; }
+/* Reactive or ML: a two-option segmented control, one strategy at a time. */
+.strategy-toggle {
+  display: inline-flex;
+  margin: 0;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-subtle);
+}
+.strategy-toggle label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.strategy-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.strategy-toggle label.is-selected {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+.strategy-toggle label:has(input:focus-visible) {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.strategy-toggle:disabled label { cursor: not-allowed; opacity: 0.6; }
+.autoscaler-forecast {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.autoscaler-forecast strong { color: var(--text); font-weight: 600; }
+.autoscaler-forecast small { color: var(--quiet); font-size: 0.75rem; }
+.forecast-sparkline { color: var(--accent-text); }
 .autoscaler-settings input {
   width: 100%;
   min-height: 44px;

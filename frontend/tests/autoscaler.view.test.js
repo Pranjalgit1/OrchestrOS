@@ -61,3 +61,58 @@ test("missing signals show dashes, and a benchmark hold is explained", () => {
   assert.match(html, /Held while a policy benchmark needs fixed capacity/);
   assert.match(render({ status: null }), /Loading autoscaler/);
 });
+
+const mlStatus = (overrides = {}) => status({
+  config: { ...config, strategy: "ML", mlWindowPoints: 20, mlLookAheadSeconds: 60 },
+  forecast: { queuedJobs: 3.25, peak: 0.82, queueSlopePerMinute: 1.5, lookAheadSeconds: 60, points: 6 },
+  loadHistory: [0, 1, 1, 2, 3, 3].map((queuedJobs, index) => ({
+    at: `2026-10-22T13:40:${String(index * 5).padStart(2, "0")}Z`, queuedJobs, peak: 0.5,
+  })),
+  ...overrides,
+});
+
+test("the strategy control selects exactly one of Reactive or ML predictive", () => {
+  const reactive = render({ status: status() });
+  assert.match(reactive, /<legend class="sr-only">Scaling strategy<\/legend>/);
+  assert.match(reactive, /checked="" value="REACTIVE"/);
+  assert.doesNotMatch(reactive, /checked="" value="ML"/);
+  assert.match(reactive, /predicted 60s ahead from the last 20 checks/,
+    "settings missing from an older backend fall back to defaults");
+  assert.match(reactive, /Reactive autoscaling/);
+  assert.doesNotMatch(reactive, /Forecast/, "the forecast only shows for the ML strategy");
+  const ml = render({ status: mlStatus() });
+  assert.match(ml, /checked="" value="ML"/);
+  assert.match(ml, /ML-assisted autoscaling/);
+});
+
+test("the ML strategy shows its forecast, or that it is still collecting history", () => {
+  const html = render({ status: mlStatus() });
+  assert.match(html, /<strong>Forecast in 60s<\/strong>/);
+  assert.match(html, /3\.3 waiting · 82% reserved · queue rising 1\.5 jobs\/min/);
+  assert.match(html, /Linear regression over the last 6 checks/);
+  assert.match(html, /<svg class="forecast-sparkline"[^>]*aria-hidden="true"/);
+  const warming = render({ status: mlStatus({ forecast: null, loadHistory: [] }) });
+  assert.match(warming, /Collecting load history \(0\/3 points\)/);
+});
+
+test("scaling history labels which strategy made each change", () => {
+  const events = [
+    { id: "1", createdAt: "2026-10-22T13:41:00Z", action: "SCALE_UP", workerName: "auto-worker-2",
+      queuedJobs: 1, cpuUtilization: 0.5, memoryUtilization: 0.4, reason: "[ML] Forecast 4.0 job(s) waiting" },
+    { id: "2", createdAt: "2026-10-22T13:40:00Z", action: "SCALE_UP", workerName: "auto-worker-1",
+      queuedJobs: 4, cpuUtilization: 0.9, memoryUtilization: 0.4, reason: "4 job(s) waiting" },
+  ];
+  const html = render({ status: status({ events }) });
+  const rows = [...html.matchAll(/<tr><td><time[^>]*>[^<]*<\/time><\/td><td>([^<]+)<\/td>/g)].map((match) => match[1]);
+  assert.deepEqual(rows, ["ML", "Reactive"]);
+  assert.match(html, /<th scope="col">Strategy<\/th>/);
+});
+
+test("the ML settings are editable alongside the shared thresholds", () => {
+  const html = render({ status: mlStatus() });
+  assert.match(html, /id="autoscale-mlWindowPoints"[^>]*value="20"/);
+  assert.match(html, /id="autoscale-mlLookAheadSeconds"[^>]*value="60"/);
+  const tuned = render({ status: mlStatus({ config: { ...config, strategy: "ML", mlWindowPoints: 8, mlLookAheadSeconds: 30 } }) });
+  assert.match(tuned, /id="autoscale-mlWindowPoints"[^>]*value="8"/);
+  assert.match(html, /predicted 60s ahead from the last 20 checks/);
+});

@@ -20,7 +20,7 @@ const currentCapabilities = [
   "Round Robin preemption with requeue",
   "Per-job cancellation, including running containers",
   "Automatic and manual retry of failed jobs",
-  "Reactive worker autoscaling with recorded decisions",
+  "Reactive and ML-predictive worker autoscaling with recorded decisions",
   "Multi-policy benchmark with comparison charts",
 ];
 /** One view per tab, so each feature fits on roughly one screen. */

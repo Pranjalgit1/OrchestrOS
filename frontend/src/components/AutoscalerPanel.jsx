@@ -13,10 +13,25 @@ function percent(value) {
 
 const ACTION_TEXT = { SCALE_UP: "Scaled up", SCALE_DOWN: "Scaled down", NONE: "No change" };
 
+/** One strategy runs at a time so the two can be compared on the same workload. */
+export const STRATEGIES = [
+  { value: "REACTIVE", label: "Reactive", eyebrow: "Reactive autoscaling",
+    hint: "Scales on the load measured now." },
+  { value: "ML", label: "ML predictive", eyebrow: "ML-assisted autoscaling",
+    hint: "Scales on the load a linear regression predicts ahead." },
+];
+const STRATEGY_DEFAULTS = { strategy: "REACTIVE", mlWindowPoints: 20, mlLookAheadSeconds: 60 };
+const ML_PREFIX = "[ML] ";
+
+/** Which strategy made a recorded event; ML reasons carry an [ML] prefix. */
+export function eventStrategy(reason) {
+  return reason.startsWith(ML_PREFIX) ? "ML" : "Reactive";
+}
+
 /**
- * Reactive autoscaling: its settings, the most recent decision and the signals
- * behind it, and the scaling history recorded in MySQL. The backend makes every
- * decision; this panel only switches it on or off and asks for an evaluation.
+ * Autoscaling: its strategy and settings, the most recent decision and the
+ * signals behind it, and the scaling history recorded in MySQL. The backend
+ * makes every decision; this panel only changes settings.
  */
 export function AutoscalerPanel({ onChanged }) {
   const [status, setStatus] = useState(null);
@@ -84,9 +99,12 @@ export function AutoscalerView({ status, error, busy = false, onToggle, onSave }
       </section>
     );
   }
-  const { config, lastDecision, events, pausedReason } = status;
+  const { lastDecision, events, pausedReason } = status;
+  // A backend from before the ML strategy sends none of its settings.
+  const config = { ...STRATEGY_DEFAULTS, ...status.config };
   const signals = lastDecision?.signals;
   const on = config.enabled;
+  const strategy = STRATEGIES.find((option) => option.value === config.strategy) ?? STRATEGIES[0];
   const decisionText = lastDecision
     ? `${ACTION_TEXT[lastDecision.action] ?? lastDecision.action}${
       lastDecision.action !== "NONE" && !lastDecision.applied ? " (not applied)" : ""}`
@@ -95,10 +113,26 @@ export function AutoscalerView({ status, error, busy = false, onToggle, onSave }
     <section className="panel autoscaler-panel" aria-label="Autoscaler">
       <header className="panel-head">
         <div>
-          <p className="eyebrow">Reactive autoscaling</p>
+          <p className="eyebrow">{strategy.eyebrow}</p>
           <h2>Autoscaler</h2>
         </div>
         <div className="autoscaler-head-actions">
+          <fieldset className="strategy-toggle" disabled={busy}>
+            <legend className="sr-only">Scaling strategy</legend>
+            {STRATEGIES.map((option) => (
+              <label key={option.value} title={option.hint}
+                className={option.value === strategy.value ? "is-selected" : undefined}>
+                <input
+                  type="radio"
+                  name="autoscale-strategy"
+                  value={option.value}
+                  checked={option.value === strategy.value}
+                  onChange={() => onSave?.({ strategy: option.value })}
+                />
+                {option.label}
+              </label>
+            ))}
+          </fieldset>
           <button
             type="button"
             role="switch"
@@ -142,6 +176,10 @@ export function AutoscalerView({ status, error, busy = false, onToggle, onSave }
         </div>
       </dl>
 
+      {strategy.value === "ML" ? (
+        <ForecastSummary forecast={status.forecast} history={status.loadHistory ?? []} />
+      ) : null}
+
       <p className="autoscaler-decision" role="status">
         {lastDecision ? (
           <>
@@ -173,6 +211,7 @@ export function AutoscalerView({ status, error, busy = false, onToggle, onSave }
                 <thead>
                   <tr>
                     <th scope="col">Time</th>
+                    <th scope="col">Strategy</th>
                     <th scope="col">Action</th>
                     <th scope="col">Worker</th>
                     <th scope="col">Waiting</th>
@@ -184,6 +223,7 @@ export function AutoscalerView({ status, error, busy = false, onToggle, onSave }
                   {events.map((event) => (
                     <tr key={event.id}>
                       <td><time dateTime={event.createdAt}>{new Date(event.createdAt).toLocaleTimeString()}</time></td>
+                      <td>{eventStrategy(event.reason)}</td>
                       <td>{event.action === "SCALE_UP" ? "Scale up" : "Scale down"}</td>
                       <td className="mono">{event.workerName}</td>
                       <td>{event.queuedJobs}</td>
@@ -201,6 +241,53 @@ export function AutoscalerView({ status, error, busy = false, onToggle, onSave }
   );
 }
 
+/**
+ * What the ML strategy currently predicts, and the measured queue it predicts
+ * from as a small trend line.
+ */
+export function ForecastSummary({ forecast, history }) {
+  if (!forecast) {
+    return (
+      <p className="autoscaler-forecast" role="status">
+        <strong>Forecast</strong>
+        <span>Collecting load history ({history.length}/3 points) before predicting.</span>
+      </p>
+    );
+  }
+  const slope = forecast.queueSlopePerMinute;
+  const trend = slope > 0 ? `rising ${slope.toFixed(1)}` : slope < 0 ? `falling ${Math.abs(slope).toFixed(1)}` : "flat at 0";
+  return (
+    <div className="autoscaler-forecast" role="status">
+      <strong>Forecast in {forecast.lookAheadSeconds}s</strong>
+      <span>
+        {forecast.queuedJobs.toFixed(1)} waiting · {percent(forecast.peak)} reserved · queue{" "}
+        {trend} jobs/min
+      </span>
+      <QueueSparkline history={history} />
+      <small>Linear regression over the last {forecast.points} checks</small>
+    </div>
+  );
+}
+
+/** Measured waiting jobs over the forecast window. Decorative; the text says the same. */
+function QueueSparkline({ history }) {
+  if (history.length < 2) return null;
+  const width = 120;
+  const height = 28;
+  const peak = Math.max(1, ...history.map((point) => point.queuedJobs));
+  const points = history.map((point, index) => {
+    const x = (index / (history.length - 1)) * width;
+    const y = height - (point.queuedJobs / peak) * (height - 2) - 1;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return (
+    <svg className="forecast-sparkline" viewBox={`0 0 ${width} ${height}`} width={width} height={height}
+      aria-hidden="true" focusable="false">
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 /** Fields an operator can tune. Utilizations are shown as percentages. */
 const SETTINGS = [
   { key: "scaleUpUtilization", label: "Scale up at (% reserved)", min: 5, max: 100, percent: true },
@@ -209,6 +296,8 @@ const SETTINGS = [
   { key: "maxWorkers", label: "Most extra workers", min: 0, max: 20 },
   { key: "idleSeconds", label: "Idle time before retiring (s)", min: 0, max: 3600 },
   { key: "cooldownSeconds", label: "Wait between changes (s)", min: 0, max: 3600 },
+  { key: "mlWindowPoints", label: "ML history points", min: 3, max: 100 },
+  { key: "mlLookAheadSeconds", label: "ML look-ahead (s)", min: 5, max: 300 },
 ];
 const DEMO_PRESET = {
   scaleUpUtilization: 0.6,
@@ -256,7 +345,9 @@ function AutoscalerSettings({ config, loop, busy, onSave }) {
         {config.scaleUpQueueThreshold} jobs wait and the cluster is {percent(config.scaleUpUtilization)}{" "}
         reserved, up to {config.maxWorkers} extra workers. Retires an idle extra worker after{" "}
         {config.idleSeconds}s once the cluster would stay below {percent(config.scaleDownUtilization)}.
-        Waits {config.cooldownSeconds}s between changes.
+        Waits {config.cooldownSeconds}s between changes. ML predictive applies the same rule to the load
+        predicted {config.mlLookAheadSeconds}s ahead from the last {config.mlWindowPoints} checks, and keeps
+        an idle worker while load is predicted to return.
         {loop.enabled
           ? ` Checked automatically every ${loop.intervalSeconds}s.`
           : " Automatic checks are off on the backend (AUTOSCALE_INTERVAL_SECONDS=0)."}

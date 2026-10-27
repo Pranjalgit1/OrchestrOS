@@ -1,8 +1,23 @@
 import { totalmem } from "node:os";
 import { env } from "../../config/env.js";
 import { AppError } from "../../errors/app-error.js";
-import { HOST_MEMORY_FRACTION, ScaleAction, decideScaling } from "./autoscaler.policy.js";
+import {
+  HOST_MEMORY_FRACTION,
+  ScaleAction,
+  ScalingStrategy,
+  currentLoad,
+  decideScaling,
+  forecastLoad,
+} from "./autoscaler.policy.js";
 import { prismaAutoscalerRepository } from "./autoscaler.repository.js";
+/** Strategy settings, which a caller-supplied config may leave out. */
+const STRATEGY_DEFAULTS = {
+  strategy: ScalingStrategy.REACTIVE,
+  /** Most recent load points the ML strategy fits its trend to. */
+  mlWindowPoints: 20,
+  /** How far ahead the ML strategy predicts load. */
+  mlLookAheadSeconds: 60,
+};
 /** Thresholds start here; capacity and limits come from the environment. */
 export function defaultAutoscalerConfig() {
   return {
@@ -15,17 +30,21 @@ export function defaultAutoscalerConfig() {
     scaleDownUtilization: 0.4,
     idleSeconds: 30,
     cooldownSeconds: 15,
+    ...STRATEGY_DEFAULTS,
   };
 }
 const EVENT_HISTORY = 20;
 /**
- * Reactive autoscaler for logical workers.
+ * Autoscaler for logical workers, with a reactive and an ML strategy.
  *
  * Each pass reads one snapshot, makes one pure decision, and applies at most
  * one change in a transaction that also records why. Passes never overlap, and
  * like the monitoring sampler the loop is started by `server.js`, so importing
  * the app in tests never starts a timer. Settings changed at runtime last until
  * the backend restarts; the scaling history is kept in MySQL.
+ *
+ * Exactly one strategy is active. Every pass records the measured load whichever
+ * strategy is active, so switching to ML can forecast straight away.
  */
 export class AutoscalerService {
   repository;
@@ -36,6 +55,8 @@ export class AutoscalerService {
   timer = null;
   running = false;
   lastDecision = null;
+  /** Recent measured load, oldest first; in memory, like the settings. */
+  loadHistory = [];
   /** Why evaluation is suspended, such as a benchmark needing fixed capacity. */
   pausedReason = null;
   constructor(
@@ -48,7 +69,7 @@ export class AutoscalerService {
     } = {},
   ) {
     this.repository = repository;
-    this.config = { ...config };
+    this.config = { ...STRATEGY_DEFAULTS, ...config };
     this.intervalSeconds = intervalSeconds;
     this.clock = clock;
     this.hostMemoryMiB = hostMemoryMiB;
@@ -84,6 +105,9 @@ export class AutoscalerService {
       );
     }
     this.config = next;
+    // A smaller window applies at once rather than on the next pass.
+    const excess = this.loadHistory.length - next.mlWindowPoints;
+    if (excess > 0) this.loadHistory.splice(0, excess);
     return this.config;
   }
   /**
@@ -108,8 +132,14 @@ export class AutoscalerService {
     try {
       const now = this.clock();
       const snapshot = await this.repository.readSnapshot(now);
+      this.recordLoad(currentLoad(snapshot, now));
       const decision = decideScaling(
-        { ...snapshot, hostMemoryLimitMiB: Math.floor(this.hostMemoryMiB() * HOST_MEMORY_FRACTION) },
+        {
+          ...snapshot,
+          hostMemoryLimitMiB: Math.floor(this.hostMemoryMiB() * HOST_MEMORY_FRACTION),
+          forecast: this.forecast(),
+          historyPoints: this.loadHistory.length,
+        },
         this.config,
         now,
       );
@@ -136,6 +166,16 @@ export class AutoscalerService {
       this.running = false;
     }
   }
+  /** Appends one measured point and keeps only the configured window. */
+  recordLoad(point) {
+    this.loadHistory.push(point);
+    const excess = this.loadHistory.length - this.config.mlWindowPoints;
+    if (excess > 0) this.loadHistory.splice(0, excess);
+  }
+  /** The ML prediction over the current window, or null with too little history. */
+  forecast() {
+    return forecastLoad(this.loadHistory, this.config.mlLookAheadSeconds);
+  }
   async status() {
     const events = await this.repository.listEvents(EVENT_HISTORY);
     return {
@@ -144,6 +184,8 @@ export class AutoscalerService {
       loop: { enabled: this.loopEnabled, intervalSeconds: this.intervalSeconds },
       hostMemoryLimitMiB: Math.floor(this.hostMemoryMiB() * HOST_MEMORY_FRACTION),
       lastDecision: this.lastDecision,
+      forecast: this.forecast(),
+      loadHistory: this.loadHistory.map((point) => ({ ...point, at: point.at.toISOString() })),
       events,
     };
   }

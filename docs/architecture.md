@@ -139,7 +139,7 @@ These built-in budgets total 3 GiB. They are scheduling limits, not preallocated
 
 New workers start `IDLE` with nothing reserved. A worker with a reservation becomes `BUSY`; it becomes `IDLE` again when its reserved CPU and memory reach zero. `RETIRED` marks an autoscaled worker taken out of service. The model also supports `STARTING`, `ACTIVE`, `STOPPING`, and `FAILED`.
 
-### Reactive autoscaling
+### Autoscaling: reactive and ML strategies
 
 The autoscaler (`backend/src/modules/autoscaler`) adds and removes extra logical workers named `auto-worker-N`. It never touches the three study workers or workers created through the API. Every few seconds (`AUTOSCALE_INTERVAL_SECONDS`, default 5) it reads one database snapshot, makes one decision, and applies at most one change. The decision rules are in `autoscaler.policy.js`.
 
@@ -159,7 +159,22 @@ Each change and its scaling event (the action, reason, waiting jobs, utilization
 
 Retirement rechecks the worker under its row lock. A job placed on it in the brief gap after that check is caught at reservation. Reservation refuses any worker that is not schedulable and withdraws the placement, so the job is placed again on its next pass.
 
-Autoscaling starts off (`AUTOSCALE_ENABLED=false`) and is switched on with the **Autoscaling: On/Off** button on the Autoscaling tab. Decisions are fully automatic; there is no manual evaluate button in the dashboard. While it is off, nothing is added, but idle autoscaled workers are still retired so the cluster drains back to its base size. A policy comparison pauses it entirely (scale-down included) until the comparison ends.
+#### Reactive and ML strategies
+
+There are two strategies, and exactly one is active (`strategy`, default `REACTIVE`). They share everything above: the same rule, thresholds, cooldown, worker limit, host memory limit, and the same transactional scale-up and retirement. Only the load the rule tests differs, so the two can be compared on the same seeded workload.
+
+| Strategy | Load the rule tests |
+| --- | --- |
+| Reactive | The waiting jobs and reserved utilization measured now |
+| ML | The waiting jobs and reserved utilization predicted `mlLookAheadSeconds` (default 60) ahead |
+
+The ML forecast is an ordinary least-squares linear regression over the last `mlWindowPoints` checks (default 20, so about 100 seconds at the 5-second interval). Each series, waiting jobs and peak reserved utilization, is fitted against time and extrapolated. Predictions are clamped to at least 0 jobs and 0–100% utilization. Every check records the measured load whichever strategy is active, so switching to ML can forecast at once; the forecast needs at least 3 points, and until then ML makes no change.
+
+ML scales up when the forecast crosses the scale-up line, which can happen before the measured load does. It retires an idle worker only when the measured load allows it **and** the forecast stays below the scale-down line, so it keeps capacity while load is predicted to return. Its reasons start with `[ML]`, which is also how the scaling history tells the strategies apart.
+
+The load history and forecast live in memory and reset when the backend restarts, like the runtime settings. The ML strategy was first written by a teammate as a separate `autoscaling` module; it was folded into this autoscaler so both strategies use the same worker lifecycle and recorded history.
+
+Autoscaling starts off (`AUTOSCALE_ENABLED=false`) and is switched on with the **Autoscaling: On/Off** button on the Autoscaling tab. The **Reactive / ML predictive** control next to it picks the strategy. Decisions are fully automatic; there is no manual evaluate button in the dashboard. While it is off, nothing is added, but idle autoscaled workers are still retired so the cluster drains back to its base size. A policy comparison pauses it entirely (scale-down included) until the comparison ends.
 
 ## 5. Repeatable workload generation
 

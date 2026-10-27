@@ -14,7 +14,7 @@ OrchestrOS schedules computing jobs, places them on logical workers, reserves CP
 - **Safe resource reservation.** CPU and memory are claimed in a MySQL transaction that locks the worker row, so concurrent jobs can never over-allocate a worker.
 - **Real execution.** Every job runs in a locked-down container limited to exactly its reservation: no network, read-only filesystem, and capped processes.
 - **Job control.** Cancel a job at any stage, including a running container. Failed jobs can be requeued, and infrastructure faults are retried automatically.
-- **Reactive autoscaling.** Extra logical workers are added when jobs wait on a busy cluster and retired when it is idle. Every decision is recorded with its reason.
+- **Reactive and ML autoscaling.** Extra logical workers are added when jobs wait on a busy cluster and retired when it is idle. A reactive strategy scales on the load measured now; an ML strategy scales on the load a linear regression predicts ahead. One runs at a time so they can be compared, and every decision is recorded with its reason.
 - **Policy comparison.** Run the same workload under several policies through the real pipeline and compare waiting, turnaround, response, makespan, and throughput in colour-coded charts.
 - **Live monitoring.** Reserved capacity, queue state, throughput, a reservation history chart, and lifecycle timings with p95.
 - **Restart recovery.** After a crash, the backend reconciles containers and executions it was tracking.
@@ -70,7 +70,7 @@ Open **http://localhost:5173**. To run everything in containers instead, use `np
 | Tab | What you do there |
 | --- | --- |
 | **Run** | Generate a workload, choose a policy and placement strategy, and press **Run orchestrator**. Watch jobs move through the pipeline, onto workers, and through the job queue. Click a job for its details |
-| **Autoscaling** | Switch autoscaling on, and watch workers being added and retired as load changes |
+| **Autoscaling** | Pick the Reactive or ML predictive strategy, switch autoscaling on, and watch workers being added and retired as load changes |
 | **Policy comparison** | Compare scheduling policies on identical work |
 | **Monitoring** | Read cluster capacity, throughput, history, and timings |
 
@@ -99,7 +99,8 @@ Start at [docs/README.md](docs/README.md). It links to:
 
 - Workers are logical capacity budgets on one computer, not separate machines.
 - A preempted Round Robin job restarts from the beginning; containers are not paused and resumed.
-- Worker-level failure detection (heartbeats) and machine-learning (predictive) autoscaling are planned but not implemented.
+- Worker-level failure detection (heartbeats) is planned but not implemented.
+- The ML autoscaling forecast is a linear trend over recent checks. It is kept in memory, so it restarts empty with the backend.
 - The API has no authentication. It is meant for a local development machine, and the backend controls the host's Docker engine.
 
 ## License
