@@ -115,7 +115,7 @@ a {
   align-items: center;
   gap: 24px;
   min-height: 80px;
-  margin: 0 -40px 44px;
+  margin: 0 -40px 24px;
   padding: 12px 40px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
@@ -2022,3 +2022,153 @@ a {
 }
 .bench-legend-best { color: var(--muted); }
 .bench-table thead th { color: var(--text); }
+
+/* ---------- Tabbed layout ---------- */
+:root { --header-height: 81px; }
+.tab-view > :first-child { margin-top: 0; }
+.tab-view > .panel:first-child, .tab-view > .run-bar:first-child { margin-top: 0; }
+.tab-monitoring .monitor { margin-top: 0; padding-top: 0; border-top: 0; }
+.header-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+/* A small live dot on the Run tab while auto-run continues elsewhere. */
+.tab-live {
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--go);
+}
+
+/* Run bar: everything needed during a run, kept under the header. */
+.run-bar {
+  position: sticky;
+  top: var(--header-height);
+  z-index: 15;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 14px;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 4%);
+}
+.run-bar .run-state {
+  margin: 0;
+  min-width: 96px;
+}
+.run-field {
+  display: grid;
+  gap: 4px;
+  min-width: 170px;
+  flex: 1 1 170px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.run-field-narrow { flex: 0 0 104px; min-width: 104px; }
+.run-field-wide { flex: 1.4 1 230px; }
+.run-field :is(select, input), .workload-grid :is(select, input) {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+}
+.run-field :is(select, input):focus-visible, .workload-grid :is(select, input):focus-visible {
+  border-color: var(--text);
+  box-shadow: 0 0 0 3px var(--surface-hover);
+}
+.run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.run-actions .btn { width: auto; white-space: nowrap; }
+.run-chevron { width: 14px; height: 14px; transform: rotate(90deg); transition: transform var(--motion-fast); }
+.run-chevron.is-open { transform: rotate(-90deg); }
+
+/* Workload: open on an empty cluster, folded after generating. */
+.workload-panel { margin-top: 16px; }
+.workload-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+  gap: 12px 16px;
+}
+.workload-grid > label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.workload-generate { width: 100%; }
+.workload-cleanup { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.workload-cleanup .btn { width: auto; }
+
+/* Workers use the full width now that job details is a drawer. */
+.worker-grid { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.worker-outcomes {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+.worker-running { height: auto; min-height: 32px; max-height: 64px; }
+
+/* Job details: a non-modal drawer, so other jobs stay clickable behind it. */
+.job-drawer {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  bottom: 0;
+  z-index: 18;
+  width: min(460px, 100vw);
+  padding: 16px;
+  overflow: auto;
+  border-left: 1px solid var(--border);
+  background: var(--page);
+  box-shadow: -12px 0 32px rgb(0 0 0 / 8%);
+}
+.job-drawer:focus { outline: none; }
+.job-drawer:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+.job-drawer .job-detail-panel { margin-top: 0; }
+.job-drawer .job-detail-viewport { height: auto; overflow: visible; }
+.job-drawer .facts { grid-template-columns: 1fr 1fr; }
+.job-detail-head-actions { display: flex; align-items: center; gap: 8px; }
+.drawer-close { width: 44px; padding: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .job-drawer { animation: drawer-in 260ms var(--ease-out); }
+}
+@keyframes drawer-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@media (max-width: 1100px) {
+  /* The header wraps here, so the run bar scrolls with the page instead. */
+  .run-bar { position: static; box-shadow: none; }
+  .run-actions { margin-left: 0; width: 100%; }
+  .job-drawer { top: 0; z-index: 40; }
+  .header-status-label { display: none; }
+}
+@media (max-width: 700px) {
+  .run-field, .run-field-wide { flex-basis: 100%; }
+  .run-actions .btn { flex: 1 1 auto; }
+  .job-drawer .facts { grid-template-columns: 1fr; }
+}

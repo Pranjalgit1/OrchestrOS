@@ -16,7 +16,7 @@ import {
 import { ActivityLog } from "./components/ActivityLog.jsx";
 import { AutoscalerPanel } from "./components/AutoscalerPanel.jsx";
 import { BenchmarkPanel } from "./components/BenchmarkPanel.jsx";
-import { ControlPanel } from "./components/ControlPanel.jsx";
+import { RunBar, WorkloadPanel } from "./components/ControlPanel.jsx";
 import { JobDetail } from "./components/JobDetail.jsx";
 import { JobQueue } from "./components/JobQueue.jsx";
 import { PipelineView } from "./components/PipelineView.jsx";
@@ -31,7 +31,8 @@ const DEFAULT_FORM = {
   seed: 42,
   profile: "SLEEP",
 };
-export function OrchestratorConsole() {
+/** Owns orchestrator state and auto-run; stays mounted so a run continues on every tab. */
+export function OrchestratorConsole({ view = "run", onStatusChange }) {
   const [state, setState] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -44,6 +45,8 @@ export function OrchestratorConsole() {
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [filter, setFilter] = useState("ALL");
   const [entries, setEntries] = useState([]);
+  // null until the first state read decides whether it starts open.
+  const [workloadOpen, setWorkloadOpen] = useState(null);
   const mounted = useRef(true);
   const logId = useRef(0);
   // Kept in a ref so the auto-run timer always sees the current selections.
@@ -136,6 +139,7 @@ export function OrchestratorConsole() {
         "Workload generated",
         `${batch.jobCount} jobs · pattern ${batch.parameters.arrivalPattern ?? batch.pattern} · seed ${batch.seed}`,
       );
+      setWorkloadOpen(false);
     });
   const onClearGenerated = () =>
     act("clear-generated", "Clear generated workload", async () => {
@@ -229,6 +233,7 @@ export function OrchestratorConsole() {
         "Demo workload generated",
         `${batch.jobCount} sleep jobs · seed ${batch.seed} · all eligible immediately`,
       );
+      setWorkloadOpen(false);
       setAutoRunning(true);
     });
   const onReset = () =>
@@ -243,138 +248,160 @@ export function OrchestratorConsole() {
     });
   const selected = state?.jobs.find((job) => job.id === selectedJobId)
     ?? state?.runningJobs?.find((job) => job.id === selectedJobId) ?? null;
+
+  // The workload panel opens on an empty cluster and stays as the user leaves it.
+  useEffect(() => {
+    if (state && workloadOpen === null) setWorkloadOpen(state.totals.jobs === 0);
+  }, [state, workloadOpen]);
+  useEffect(() => { onStatusChange?.({ autoRunning }); }, [autoRunning, onStatusChange]);
+
+  // The drawer closes on Escape and takes focus when it opens.
+  const drawer = useRef(null);
+  const drawerOpen = selected !== null;
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+    drawer.current?.focus();
+    const onKey = (event) => { if (event.key === "Escape") setSelectedJobId(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawerOpen]);
+
+  const needsState = view === "run" || view === "autoscaling";
+  const loading = (
+    <div className="console-loading" role="status">
+      <span className="loading-indicator" aria-hidden="true" />
+      <div>
+        <strong>{error ? "Waiting for a connection" : "Loading your workspace"}</strong>
+        <p>{error ? "The console will retry automatically." : "Reading jobs, workers, and reserved capacity."}</p>
+      </div>
+    </div>
+  );
+  const workerGrid = state ? (
+    <WorkerGrid workers={state.workers} onSelectJob={setSelectedJobId} />
+  ) : null;
+
   return (
     <>
-      <ControlPanel
-        form={form}
-        onFormChange={setForm}
-        policy={policy}
-        onPolicyChange={setPolicy}
-        strategy={strategy}
-        onStrategyChange={setStrategy}
-        timeQuantumSeconds={timeQuantumSeconds}
-        onTimeQuantumChange={setTimeQuantumSeconds}
-        jobsPerTick={jobsPerTick}
-        onJobsPerTickChange={setJobsPerTick}
-        autoRunning={autoRunning}
-        busy={busy}
-        onGenerate={onGenerate}
-        onKillAll={onKillAll}
-        onClearGenerated={onClearGenerated}
-        onToggleAuto={() => setAutoRunning((value) => !value)}
-        onReset={onReset}
-        onDemo={onDemo}
-      />
-
-      {error ? <p className="error-banner">{error}</p> : null}
-
-      {state ? (
+      {view === "run" ? (
         <>
-          <PipelineView stageCounts={state.stageCounts} selected={selected} />
+          <RunBar
+            policy={policy}
+            onPolicyChange={setPolicy}
+            strategy={strategy}
+            onStrategyChange={setStrategy}
+            timeQuantumSeconds={timeQuantumSeconds}
+            onTimeQuantumChange={setTimeQuantumSeconds}
+            jobsPerTick={jobsPerTick}
+            onJobsPerTickChange={setJobsPerTick}
+            autoRunning={autoRunning}
+            busy={busy}
+            onKillAll={onKillAll}
+            onToggleAuto={() => setAutoRunning((value) => !value)}
+            workloadOpen={Boolean(workloadOpen)}
+            onToggleWorkload={() => setWorkloadOpen((open) => !open)}
+          />
+          {workloadOpen ? (
+            <WorkloadPanel
+              form={form}
+              onFormChange={setForm}
+              autoRunning={autoRunning}
+              busy={busy}
+              onGenerate={onGenerate}
+              onDemo={onDemo}
+              onClearGenerated={onClearGenerated}
+              onReset={onReset}
+            />
+          ) : null}
+        </>
+      ) : null}
 
-          <div className="split">
-            <WorkerGrid
+      {needsState && error ? <p className="error-banner">{error}</p> : null}
+
+      {view === "run" ? (
+        state ? (
+          <>
+            <PipelineView stageCounts={state.stageCounts} selected={selected} />
+            {workerGrid}
+            <JobQueue
+              jobs={state.jobs}
               workers={state.workers}
+              capturedAt={state.capturedAt}
+              totalJobs={state.totals.jobs}
+              selectedJobId={selectedJobId}
+              filter={filter}
+              onFilterChange={setFilter}
               onSelectJob={setSelectedJobId}
             />
-            <JobDetail
-              job={selected}
-              strategy={strategy}
-              busy={busy}
-              onPlace={(jobId) =>
-                act("stage", "Placement", async () => {
-                  await assignPlacement(jobId, strategy);
-                  log(
-                    "stage",
-                    "Placement",
-                    `Assigned ${jobId.slice(0, 8)} with ${strategy}`,
-                  );
-                })
-              }
-              onReserve={(jobId) =>
-                act("stage", "Reservation", async () => {
-                  await reserveResources(jobId);
-                  log(
-                    "stage",
-                    "Reservation",
-                    `Capacity committed for ${jobId.slice(0, 8)}`,
-                  );
-                })
-              }
-              onExecute={(jobId) =>
-                act("stage", "Execution", async () => {
-                  await startExecution(jobId);
-                  log(
-                    "stage",
-                    "Execution",
-                    `Container started for ${jobId.slice(0, 8)}`,
-                  );
-                })
-              }
-              onRelease={(jobId) =>
-                act("stage", "Release", async () => {
-                  await releaseResources(jobId);
-                  log(
-                    "stage",
-                    "Release",
-                    `Capacity released for ${jobId.slice(0, 8)}`,
-                  );
-                })
-              }
-              onCancel={(jobId) =>
-                act("stage", "Cancel", async () => {
-                  const job = await cancelJob(jobId);
-                  log("stage", "Cancel", `${job.name} cancelled; any container was stopped and its reservation released`);
-                })
-              }
-              onRequeue={(jobId) =>
-                act("stage", "Requeue", async () => {
-                  const job = await requeueJob(jobId);
-                  log("stage", "Requeue", `${job.name} returned to the queue (retry ${job.retryCount})`);
-                })
-              }
-            />
-          </div>
+            <ActivityLog entries={entries} onClear={() => setEntries([])} />
+            <p className="muted footnote">
+              Reading backend state every {POLL_MS / 1000}s · last read{" "}
+              {new Date(state.capturedAt).toLocaleTimeString()} ·{" "}
+              {state.totals.jobs} job(s), {state.totals.activeReservations} active
+              reservation(s), {state.totals.runningContainers} running
+              container(s)
+              {state.totals.waitingForArrival > 0
+                ? ` · ${state.totals.waitingForArrival} waiting for arrival time`
+                : ""}
+            </p>
+          </>
+        ) : loading
+      ) : null}
 
+      {view === "autoscaling" ? (
+        <>
           <AutoscalerPanel onChanged={() => void refresh()} />
-
-          <div id="benchmark">
-            <BenchmarkPanel />
-          </div>
-
-          <JobQueue
-            jobs={state.jobs}
-            workers={state.workers}
-            capturedAt={state.capturedAt}
-            totalJobs={state.totals.jobs}
-            selectedJobId={selectedJobId}
-            filter={filter}
-            onFilterChange={setFilter}
-            onSelectJob={setSelectedJobId}
-          />
-
-          <ActivityLog entries={entries} onClear={() => setEntries([])} />
-
-          <p className="muted footnote">
-            Reading backend state every {POLL_MS / 1000}s · last read{" "}
-            {new Date(state.capturedAt).toLocaleTimeString()} ·{" "}
-            {state.totals.jobs} job(s), {state.totals.activeReservations} active
-            reservation(s), {state.totals.runningContainers} running
-            container(s)
-            {state.totals.waitingForArrival > 0
-              ? ` · ${state.totals.waitingForArrival} waiting for arrival time`
-              : ""}
-          </p>
+          {workerGrid ?? loading}
         </>
-      ) : (
-        <div className="console-loading" role="status">
-          <span className="loading-indicator" aria-hidden="true" />
-          <div>
-            <strong>{error ? "Waiting for a connection" : "Loading your workspace"}</strong>
-            <p>{error ? "The console will retry automatically." : "Reading jobs, workers, and reserved capacity."}</p>
-          </div>
-        </div>
-      )}
+      ) : null}
+
+      {view === "comparison" ? <BenchmarkPanel /> : null}
+
+      {drawerOpen ? (
+        <aside className="job-drawer" aria-label="Job details" tabIndex={-1} ref={drawer}>
+          <JobDetail
+            job={selected}
+            strategy={strategy}
+            busy={busy}
+            onClose={() => setSelectedJobId(null)}
+            onPlace={(jobId) =>
+              act("stage", "Placement", async () => {
+                await assignPlacement(jobId, strategy);
+                log("stage", "Placement", `Assigned ${jobId.slice(0, 8)} with ${strategy}`);
+              })
+            }
+            onReserve={(jobId) =>
+              act("stage", "Reservation", async () => {
+                await reserveResources(jobId);
+                log("stage", "Reservation", `Capacity committed for ${jobId.slice(0, 8)}`);
+              })
+            }
+            onExecute={(jobId) =>
+              act("stage", "Execution", async () => {
+                await startExecution(jobId);
+                log("stage", "Execution", `Container started for ${jobId.slice(0, 8)}`);
+              })
+            }
+            onRelease={(jobId) =>
+              act("stage", "Release", async () => {
+                await releaseResources(jobId);
+                log("stage", "Release", `Capacity released for ${jobId.slice(0, 8)}`);
+              })
+            }
+            onCancel={(jobId) =>
+              act("stage", "Cancel", async () => {
+                const job = await cancelJob(jobId);
+                log("stage", "Cancel", `${job.name} cancelled; any container was stopped and its reservation released`);
+              })
+            }
+            onRequeue={(jobId) =>
+              act("stage", "Requeue", async () => {
+                const job = await requeueJob(jobId);
+                log("stage", "Requeue", `${job.name} returned to the queue (retry ${job.retryCount})`);
+              })
+            }
+          />
+        </aside>
+      ) : null}
     </>
   );
 }

@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   STATE_CHANGED_EVENT,
-  evaluateAutoscaler,
   fetchAutoscaler,
   updateAutoscaler,
 } from "../api";
-import { Icon } from "./Icon.jsx";
 
 const POLL_MS = 3_000;
 
@@ -68,7 +66,6 @@ export function AutoscalerPanel({ onChanged }) {
       error={error}
       busy={busy}
       onToggle={() => act(() => updateAutoscaler({ enabled: !status.config.enabled }))}
-      onEvaluate={() => act(evaluateAutoscaler)}
       onSave={(patch) => act(() => updateAutoscaler(patch))}
     />
   );
@@ -78,7 +75,7 @@ export function AutoscalerPanel({ onChanged }) {
  * Pure view. The switch and the four signals are what an operator watches; the
  * rules, thresholds, and history stay one click away.
  */
-export function AutoscalerView({ status, error, busy = false, onToggle, onEvaluate, onSave }) {
+export function AutoscalerView({ status, error, busy = false, onToggle, onSave }) {
   if (!status) {
     return (
       <section className="panel autoscaler-panel" aria-label="Autoscaler">
@@ -102,10 +99,6 @@ export function AutoscalerView({ status, error, busy = false, onToggle, onEvalua
           <h2>Autoscaler</h2>
         </div>
         <div className="autoscaler-head-actions">
-          <button type="button" className="btn btn-ghost" disabled={busy} onClick={onEvaluate}
-            title="Run one scaling decision now">
-            <Icon name="refresh" />Evaluate now
-          </button>
           <button
             type="button"
             role="switch"
@@ -264,7 +257,9 @@ function AutoscalerSettings({ config, loop, busy, onSave }) {
         reserved, up to {config.maxWorkers} extra workers. Retires an idle extra worker after{" "}
         {config.idleSeconds}s once the cluster would stay below {percent(config.scaleDownUtilization)}.
         Waits {config.cooldownSeconds}s between changes.
-        {loop.enabled ? ` Checked every ${loop.intervalSeconds}s.` : " The timer is off; use Evaluate now."}
+        {loop.enabled
+          ? ` Checked automatically every ${loop.intervalSeconds}s.`
+          : " Automatic checks are off on the backend (AUTOSCALE_INTERVAL_SECONDS=0)."}
       </p>
       <form
         className="autoscaler-settings"

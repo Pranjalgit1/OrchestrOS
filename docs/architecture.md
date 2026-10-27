@@ -20,9 +20,9 @@ Backend: Express application
 
 | Part | Main job | Where to look |
 | --- | --- | --- |
-| Dashboard | Show controls, jobs, workers, results, and graphs | `frontend/src/` |
+| Dashboard | Show controls, jobs, workers, results, and graphs in four tabs | `frontend/src/` |
 | API setup | Connect routes, validate request bodies, and report errors | `backend/src/app.js` |
-| Server | Listen for requests, start monitoring, and handle shutdown | `backend/src/server.js` |
+| Server | Listen for requests, start monitoring and the autoscaler, recover after restarts, and handle shutdown | `backend/src/server.js` |
 | Orchestrator | Call scheduling, placement, reservation, and execution in order | `backend/src/modules/orchestrator/` |
 | Jobs and workers | Create and read their database records | `backend/src/modules/jobs/`, `backend/src/modules/workers/` |
 | Workload generator | Create repeatable batches of job specifications | `backend/src/modules/workloads/` |
@@ -31,6 +31,8 @@ Backend: Express application
 | Resources | Reserve and release CPU and memory | `backend/src/modules/resources/` |
 | Executions | Start Docker containers and record results | `backend/src/modules/executions/` |
 | Monitoring | Read current values and save usage history | `backend/src/modules/monitoring/` |
+| Autoscaler | Add and retire extra logical workers from waiting jobs and reserved capacity | `backend/src/modules/autoscaler/` |
+| Benchmarks | Run one workload under several policies and compare the measured results | `backend/src/modules/benchmarks/` |
 | Workload program | Do the actual calculation inside a container | `workload-runner/run.js` |
 | Tests | Check backend and frontend behavior separately from application source | `backend/tests/`, `frontend/tests/` |
 
@@ -45,7 +47,20 @@ Most backend features use the same file pattern:
 
 Tests live in `backend/tests/` and `frontend/tests/`, outside the source folders. Files ending in `.test.js` check behavior with controlled inputs; backend `.integration.test.js` files use a real database or container when enabled.
 
-Some features also have calculation-only files, such as `scheduler.policies.js` and `placement.accounting.js`. These are easier to test because they do not need a server or database.
+Some features also have calculation-only files, such as `scheduler.policies.js`, `placement.accounting.js`, `autoscaler.policy.js`, and `benchmark.metrics.js`. These are easier to test because they do not need a server or database.
+
+### The dashboard
+
+The React app shows one tab at a time. `App.jsx` owns the tabs and keeps the current one in the URL hash. `OrchestratorConsole.jsx` holds the orchestrator state and the auto-run timer; it stays mounted on every tab, so a run keeps going while you look at Monitoring or the policy comparison.
+
+| Tab | Main components |
+| --- | --- |
+| Run | `RunBar` and `WorkloadPanel` (`ControlPanel.jsx`), `PipelineView`, `WorkerGrid`, `JobQueue`, `ActivityLog`, and `JobDetail` in a side drawer |
+| Autoscaling | `AutoscalerPanel` and `WorkerGrid` |
+| Policy comparison | `BenchmarkPanel`, with chart geometry in `benchmark.chart.js` |
+| Monitoring | `MonitoringPanel`, with chart geometry in `reservation.chart.js` |
+
+Each worker card shows its reserved CPU and memory (outer blue ring and inner green ring), its running containers, and its finished attempts, so there is one place to read a worker. Charts are plain SVG drawn from small pure functions; there is no chart library. Panels with a pure `...View` component (`AutoscalerView`, `BenchmarkView`, `MonitoringView`) can be rendered in tests without a backend.
 
 ## 2. What MySQL stores
 
@@ -144,7 +159,7 @@ Each change and its scaling event (the action, reason, waiting jobs, utilization
 
 Retirement rechecks the worker under its row lock. A job placed on it in the brief gap after that check is caught at reservation. Reservation refuses any worker that is not schedulable and withdraws the placement, so the job is placed again on its next pass.
 
-Autoscaling starts off (`AUTOSCALE_ENABLED=false`) and is switched on from the dashboard. While it is off, nothing is added, but idle autoscaled workers are still retired so the cluster drains back to its base size.
+Autoscaling starts off (`AUTOSCALE_ENABLED=false`) and is switched on with the **Autoscaling: On/Off** button on the Autoscaling tab. Decisions are fully automatic; there is no manual evaluate button in the dashboard. While it is off, nothing is added, but idle autoscaled workers are still retired so the cluster drains back to its base size. A policy comparison pauses it entirely (scale-down included) until the comparison ends.
 
 ## 5. Repeatable workload generation
 
@@ -301,7 +316,7 @@ The suite runner lives in the backend process. A restart abandons it, and the ne
 
 ## 12. What is unfinished
 
-Worker-level failure recovery and machine-learning (predictive) scaling are still planned. Autoscaled workers are logical capacity on the same computer, like the study workers; scaling does not add physical hardware. Round Robin preemption does not pause and resume a container; a preempted job restarts from the beginning. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
+Worker-level failure detection (heartbeats) and machine-learning (predictive) scaling are still planned. Autoscaled workers are logical capacity on the same computer, like the study workers; scaling does not add physical hardware. Round Robin preemption does not pause and resume a container; a preempted job restarts from the beginning. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
 
 After a backend crash, startup recovery and a 30-second reconciliation pass settle untracked exited/missing containers and resume tracking live executions against their original deadline. The manual settle endpoint remains available. Completion uses the Docker finish timestamp when available, so stale recovery does not inflate execution duration.
 

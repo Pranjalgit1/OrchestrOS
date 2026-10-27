@@ -70,6 +70,25 @@ export const prismaOrchestratorRepository = {
       orderBy: { name: "asc" },
     });
   },
+  /**
+   * Finished attempts per worker, counted the same way monitoring counts them:
+   * completed executions, and failed or interrupted ones.
+   */
+  async countOutcomesByWorker(client = prisma) {
+    const groups = await client.jobExecution.groupBy({
+      by: ["workerId", "status"],
+      where: { status: { in: [ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.INTERRUPTED] } },
+      _count: { _all: true },
+    });
+    const counts = new Map();
+    for (const group of groups) {
+      const entry = counts.get(group.workerId) ?? { completed: 0, failed: 0 };
+      if (group.status === ExecutionStatus.COMPLETED) entry.completed += group._count._all;
+      else entry.failed += group._count._all;
+      counts.set(group.workerId, entry);
+    }
+    return counts;
+  },
   async countJobsByStatus(client = prisma) {
     const groups = await client.job.groupBy({
       by: ["status"],
@@ -85,7 +104,7 @@ export const prismaOrchestratorRepository = {
   async readState(limit, now) {
     return prisma.$transaction(async (tx) => {
       const [rows, workers, statusCounts, runningRows, scheduledUnplaced,
-        scheduledReserved, eligibleNow, waitingForArrival, activeReservations] = await Promise.all([
+        scheduledReserved, eligibleNow, waitingForArrival, activeReservations, outcomesByWorker] = await Promise.all([
         this.listJobStates(limit, tx),
         this.listWorkers(tx),
         this.countJobsByStatus(tx),
@@ -101,9 +120,10 @@ export const prismaOrchestratorRepository = {
         } }),
         tx.job.count({ where: { status: JobStatus.QUEUED, arrivalAt: { gt: now } } }),
         tx.resourceAllocation.count({ where: { status: AllocationStatus.RESERVED } }),
+        this.countOutcomesByWorker(tx),
       ]);
       return { rows, workers, statusCounts, runningRows, scheduledUnplaced,
-        scheduledReserved, eligibleNow, waitingForArrival, activeReservations };
+        scheduledReserved, eligibleNow, waitingForArrival, activeReservations, outcomesByWorker };
     }, { isolationLevel: "RepeatableRead" });
   },
   findJobById(jobId) {

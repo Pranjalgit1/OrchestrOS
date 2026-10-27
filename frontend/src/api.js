@@ -120,9 +120,6 @@ export async function updateAutoscaler(patch) {
   }
   return result;
 }
-export function evaluateAutoscaler() {
-  return postJson("/api/autoscaler/evaluate", {});
-}
 export function clearFinishedJobs() {
   return postJson("/api/orchestrator/clear-finished", {});
 }

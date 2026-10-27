@@ -313,53 +313,6 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
             <Sparkline history={history} status={readStatus.history} />
           </article>
 
-          <article className="tile wide">
-            <h3>Workers</h3>
-            <div className="table-scroll">
-              <table className="grid">
-                <thead>
-                  <tr>
-                    <th scope="col">Worker</th>
-                    <th scope="col">Status</th>
-                    <th scope="col" title="Millicores: 1000m = 1 CPU core">CPU (m)</th>
-                    <th scope="col">Memory</th>
-                    <th scope="col">Reserved</th>
-                    <th scope="col">Running</th>
-                    <th scope="col">Completed</th>
-                    <th scope="col">Failed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {overview.workers.map((worker) => (
-                    <tr key={worker.workerId}>
-                      <td>{worker.name}</td>
-                      <td
-                        className={
-                          worker.status === "BUSY" ? "pending" : "healthy"
-                        }
-                      >
-                        {worker.status}
-                      </td>
-                      <td>
-                        {worker.cpuAllocatedMillicores}/
-                        {worker.cpuCapacityMillicores}m
-                        <small> ({percent(worker.cpuUtilization)})</small>
-                      </td>
-                      <td>
-                        {worker.memoryAllocatedMiB}/{worker.memoryCapacityMiB} MiB
-                        <small> ({percent(worker.memoryUtilization)})</small>
-                      </td>
-                      <td>{worker.reservedAllocations}</td>
-                      <td>{worker.runningExecutions}</td>
-                      <td>{worker.jobsCompleted}</td>
-                      <td>{worker.jobsFailed}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </article>
-
           <article className="tile timings-tile">
               <h3>Lifecycle timings</h3>
               <div className="table-scroll">

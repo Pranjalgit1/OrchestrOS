@@ -23,15 +23,23 @@ const currentCapabilities = [
   "Reactive worker autoscaling with recorded decisions",
   "Multi-policy benchmark with comparison charts",
 ];
-/** Navigation entries, in page order. */
-const SECTIONS = [
-  ["console", "Control panel"],
-  ["pipeline", "Pipeline"],
-  ["benchmark", "Policy comparison"],
-  ["job-queue", "Job queue"],
+/** One view per tab, so each feature fits on roughly one screen. */
+export const TABS = [
+  ["run", "Run"],
+  ["autoscaling", "Autoscaling"],
+  ["comparison", "Policy comparison"],
   ["monitoring", "Monitoring"],
 ];
-const SECTION_IDS = SECTIONS.map(([id]) => id);
+const TAB_IDS = TABS.map(([id]) => id);
+/** Older section links still land on the tab that now holds that section. */
+const LEGACY_HASHES = {
+  console: "run", pipeline: "run", "job-queue": "run", benchmark: "comparison",
+};
+export function tabFromHash(hash) {
+  const id = hash.replace(/^#/, "");
+  if (TAB_IDS.includes(id)) return id;
+  return LEGACY_HASHES[id] ?? "run";
+}
 const futureCapabilities = [
   "Worker-level failure recovery",
 ];
@@ -61,38 +69,18 @@ export function App() {
       return "light";
     }
   });
-  const [activeSection, setActiveSection] = useState("console");
+  // The tab lives in the URL hash, so reloads and links keep the same view.
+  const [tab, setTab] = useState(() =>
+    typeof window === "undefined" ? "run" : tabFromHash(window.location.hash));
   useEffect(() => {
-    const updateSection = () => {
-      const section = window.location.hash.slice(1);
-      if (SECTION_IDS.includes(section)) setActiveSection(section);
+    const onHashChange = () => {
+      setTab(tabFromHash(window.location.hash));
+      window.scrollTo({ top: 0 });
     };
-    updateSection();
-    window.addEventListener("hashchange", updateSection);
-    return () => window.removeEventListener("hashchange", updateSection);
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
-  useEffect(() => {
-    // The header stays on screen, so it follows the reader: the last section
-    // whose top has passed just below the header is the current one.
-    let frame = 0;
-    const onScroll = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const line = (document.querySelector(".console-header")?.offsetHeight ?? 80) + 24;
-        let current = SECTION_IDS[0];
-        for (const id of SECTION_IDS) {
-          const element = document.getElementById(id);
-          if (element && element.getBoundingClientRect().top <= line) current = id;
-        }
-        setActiveSection(current);
-      });
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      cancelAnimationFrame(frame);
-      window.removeEventListener("scroll", onScroll);
-    };
-  }, []);
+  const [orchestrator, setOrchestrator] = useState({ autoRunning: false });
   const [health, setHealth] = useState(null);
   const [error, setError] = useState(null);
   const [healthStatus, setHealthStatus] = useState(null);
@@ -119,19 +107,29 @@ export function App() {
       : health?.status === "degraded" ? "Service degraded" : "Connecting to services";
   return (
     <main className="shell" id="overview">
-      <a className="skip-link" href="#console">Skip to controls</a>
+      <a className="skip-link" href="#content">Skip to content</a>
       <header className="console-header">
-        <a className="console-identity" href="#console" aria-label="OrchestrOS control panel">
+        <a className="console-identity" href="#run" aria-label="OrchestrOS, go to Run">
           <span className="logo-mark"><Icon name="workflow" /></span>
           <strong>OrchestrOS</strong>
           <span className="console-label">Workload console</span>
         </a>
-        <nav aria-label="Dashboard sections">
-          {SECTIONS.map(([id, label]) => (
-            <a key={id} href={`#${id}`} aria-current={activeSection === id ? "location" : undefined}
-              onClick={() => setActiveSection(id)}>{label}</a>
+        <nav aria-label="Dashboard views">
+          {TABS.map(([id, label]) => (
+            <a key={id} href={`#${id}`} aria-current={tab === id ? "page" : undefined}>
+              {label}
+              {id === "run" && orchestrator.autoRunning && tab !== "run" ? (
+                <span className="tab-live" title="The orchestrator is running">
+                  <span className="sr-only"> (running)</span>
+                </span>
+              ) : null}
+            </a>
           ))}
         </nav>
+        <span className="header-status" role="status" title={connectionLabel}>
+          <span className={`connection-indicator${servicesConnected ? " is-connected" : ""}`} aria-hidden="true" />
+          <span className="header-status-label">{servicesConnected ? "Connected" : connectionLabel}</span>
+        </span>
         <select className="theme-select" aria-label="Color theme" value={theme}
           onChange={(event) => setTheme(event.target.value)}>
           <option value="light">Light</option>
@@ -140,33 +138,16 @@ export function App() {
         </select>
       </header>
 
-      <div className="workspace-heading">
-        <div>
-          <p className="workspace-kicker">Local workspace</p>
-          <h1>Workload console<span className="heading-period">.</span></h1>
-          <p>Create jobs, choose a policy, and follow each run.</p>
-        </div>
-        <div className="workspace-status" role="status">
-          <span className={`connection-indicator${servicesConnected ? " is-connected" : ""}`} aria-hidden="true" />
-          <div>
-            <strong>{connectionLabel}</strong>
-            <span>Local compute. Persistent state.</span>
-          </div>
-        </div>
-      </div>
-
       {error ? (
         <p className="error-banner">
           {error}. Check that the backend and MySQL are running.
         </p>
       ) : null}
 
-      <div id="console" tabIndex={-1}>
-        <OrchestratorConsole />
-      </div>
-
-      <div id="monitoring">
-        <MonitoringPanel />
+      <div id="content" tabIndex={-1} className={`tab-view tab-${tab}`}>
+        {/* Always mounted: auto-run and polling continue while another tab is open. */}
+        <OrchestratorConsole view={tab} onStatusChange={setOrchestrator} />
+        {tab === "monitoring" ? <MonitoringPanel /> : null}
       </div>
 
       <details className="foundation-details">

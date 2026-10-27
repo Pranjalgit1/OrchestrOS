@@ -1,3 +1,53 @@
+# Change record
+
+Newest work first. Each section records what was verified at the time; later edits are not automatically covered by an earlier check.
+
+# Work completed on 21-23 October 2026
+
+## A. Scheduling and job control
+
+- **Round Robin preemption.** The quantum is enforced while the container runs. When it expires and another job is waiting, the container is stopped, the execution is recorded as `PREEMPTED`, and the job is requeued with its reservation released in one transaction. `ROUND_ROBIN_MAX_PREEMPTIONS` (default 3) caps evictions per job. A preempted job restarts from the beginning; containers are not paused and resumed.
+- **Cancel at any stage.** `POST /api/jobs/:id/cancel` now also stops a running job's container before recording the cancellation.
+- **Requeue and automatic retry.** `POST /api/jobs/:id/requeue` returns a failed or interrupted job to the queue. Infrastructure faults are retried automatically up to `EXECUTION_MAX_RETRIES` (default 2).
+- **Placement ties** between equally loaded workers are broken by saved assignment count, so short jobs spread across workers.
+- **Deadlock retries.** Reservation and execution transactions retry when MySQL picks them as a deadlock victim.
+- Migration [20261021000000_preemption_and_requeue](../backend/prisma/migrations/20261021000000_preemption_and_requeue/migration.sql) adds the `PREEMPTED` status and the `preemptionCount` and `retryCount` columns.
+
+## B. Reactive autoscaling
+
+- The new autoscaler module adds `auto-worker-N` workers when jobs wait on a busy cluster and retires idle ones, with a cooldown and a host-memory ceiling. Every change is recorded in `scaling_events`.
+- Thresholds can be changed at runtime from the dashboard or `PATCH /api/autoscaler`.
+- Migration [20261021120000_reactive_autoscaling](../backend/prisma/migrations/20261021120000_reactive_autoscaling/migration.sql) adds the `RETIRED` worker status, the `autoscaled` flag, and `scaling_events`.
+
+## C. Multi-policy benchmark
+
+- The new benchmarks module runs one seeded workload once per scheduling policy through the real pipeline and stores waiting, turnaround, response, makespan, throughput, and preemption metrics per run.
+- Fairness is enforced, not assumed: a suite needs an idle cluster, pipeline-changing routes return 409 `BENCHMARK_RUNNING` while it runs, the autoscaler is paused, later runs reuse the first batch, and equal checksum digests prove identical work.
+- Migration [20261023000000_policy_benchmarks](../backend/prisma/migrations/20261023000000_policy_benchmarks/migration.sql) adds `benchmark_suites` and `benchmark_runs`.
+- A live check on 23 October ran FCFS, SJF, and Round Robin on 10 sleep jobs each: all runs completed with identical checksums and equal capacity, and the stop button left nothing unfinished.
+
+## D. Dashboard redesign
+
+- Four tabs replace the single long page: **Run**, **Autoscaling**, **Policy comparison**, and **Monitoring**, under a sticky header that shows the connection state.
+- A sticky run bar holds policy, placement, jobs per tick, Run / Pause, and Kill all. Generating and cleaning up work moved into a collapsible Workload panel.
+- Job details open in a side drawer. Worker cards show finished attempts (`jobsCompleted` and `jobsFailed` were added to `GET /api/orchestrator/state`), and the duplicate workers table in Monitoring was removed.
+- The autoscaler panel was simplified to an **Autoscaling: On/Off** switch, four signal cards, and one decision line, with the rules and history collapsed. The manual **Evaluate now** button was removed; scaling is automatic.
+- Monitoring shows reserved capacity, queue, throughput, and running containers as a 2 × 2 block.
+- Colour is used for meaning only: green start and red stop buttons with white text, blue CPU and green memory everywhere, and one colour per policy in the comparison charts.
+
+## E. Verification
+
+| Check | Recorded result |
+| --- | --- |
+| Full backend suite with MySQL and Docker enabled (23 October, before the dashboard redesign) | **210 passed, 0 failed, 0 skipped** |
+| Backend suite without database or Docker (after the redesign) | 158 passed, 52 skipped, 0 failed |
+| Frontend suite (after the redesign) | **33 passed, 0 failed** |
+| Frontend production build | Passed |
+| Prisma schema validation | Passed |
+| npm dependency audit | One high-severity advisory in the Vite 8.3.0 dev server; fixed in Vite 8.3.2 and later |
+
+The per-worker finished-attempt counts added during the redesign were checked against live data and matched `/api/monitoring/overview`; the database-enabled suite was not rerun after that change.
+
 # Work completed on 5 October 2026
 
 This records the JavaScript/MySQL migration and the documentation update. The scheduling, placement, workload, execution, and monitoring features already existed; the migration converted and verified them rather than claiming they were all newly built that day.

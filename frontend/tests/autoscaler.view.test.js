@@ -38,6 +38,12 @@ test("the switch states the current setting and uses red for off, green for on",
   assert.match(on, /Autoscaling: On/);
 });
 
+test("scaling is automatic: there is no manual evaluate button", () => {
+  const html = render({ status: status() });
+  assert.doesNotMatch(html, /Evaluate now/);
+  assert.match(html, /Checked automatically every 5s/);
+});
+
 test("signals are four compact stats and the rules stay inside a collapsed section", () => {
   const html = render({ status: status() });
   const stats = html.match(/<dl class="autoscaler-stats">([\s\S]*?)<\/dl>/)[1];

@@ -25,7 +25,11 @@ In a second terminal, from the same project folder:
 npm run dev:frontend
 ```
 
-Open **http://localhost:5173**. Keep the two terminals open. Press `Ctrl+C` in each to stop the app.e
+Open **http://localhost:5173**. Keep the two terminals open. Press `Ctrl+C` in each to stop the app.
+
+The dashboard opens on the **Run** tab. Open **Workload**, generate jobs (or press **Try a demo · 10 jobs**), then press **Run orchestrator** in the run bar. The other tabs are **Autoscaling**, **Policy comparison**, and **Monitoring**; see [the job flow](flow.md) for what each one does.
+
+After pulling changes that add a migration, stop the backend first, then run `npm run db:deploy` and `npm run prisma:generate`. A running backend locks Prisma's engine file on Windows, and an unapplied migration shows up as "column does not exist" errors.
 
 `docker:images` builds the fixed program used by workload containers. You can skip rebuilding it on later runs unless the workload-runner code changed or the image was removed.
 
@@ -188,7 +192,9 @@ Remove-Item Env:RUN_DATABASE_TESTS -ErrorAction SilentlyContinue
 Remove-Item Env:RUN_DOCKER_TESTS -ErrorAction SilentlyContinue
 ```
 
-The recorded migration check on 5 October 2026 passed all 130 tests with both flags enabled and no skipped tests. See [the change record](changes.md).
+The latest recorded run, on 23 October 2026, passed all 210 backend tests with both flags enabled and none skipped. Without the flags, 158 run and 52 are skipped. The frontend suite has 33 tests and needs neither flag. See [the change record](changes.md).
+
+Run the database tests against `orchestr_os_test`, not your everyday `orchestr_os` database: one test clears all finished jobs, and the benchmark tests need an idle cluster.
 
 ## 8. Common problems
 

@@ -42,9 +42,17 @@ export function JobDetail(props) {
           <p className="eyebrow">Job detail</p>
           <h2>{job.name}</h2>
         </div>
-        <span className={`status status-${job.status.toLowerCase()}`}>
-          {job.status}
-        </span>
+        <div className="job-detail-head-actions">
+          <span className={`status status-${job.status.toLowerCase()}`}>
+            {job.status}
+          </span>
+          {props.onClose ? (
+            <button type="button" className="btn btn-ghost drawer-close" onClick={props.onClose}
+              aria-label="Close job details" title="Close (Esc)">
+              <Icon name="close" />
+            </button>
+          ) : null}
+        </div>
       </header>
 
       <div className="job-detail-viewport">

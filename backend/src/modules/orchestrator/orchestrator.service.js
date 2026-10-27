@@ -305,8 +305,8 @@ export class OrchestratorService {
   async state(query) {
     const now = this.clock();
     const { rows, workers, statusCounts, runningRows, scheduledUnplaced,
-      scheduledReserved, eligibleNow, waitingForArrival, activeReservations } =
-      await this.repository.readState(query.limit, now);
+      scheduledReserved, eligibleNow, waitingForArrival, activeReservations,
+      outcomesByWorker = new Map() } = await this.repository.readState(query.limit, now);
     const stageCounts = {
       QUEUE: 0,
       SCHEDULER: 0,
@@ -433,6 +433,8 @@ export class OrchestratorService {
           entry.memoryCapacityMiB,
         ),
         runningJobs: runningByWorker.get(entry.id) ?? [],
+        jobsCompleted: outcomesByWorker.get(entry.id)?.completed ?? 0,
+        jobsFailed: outcomesByWorker.get(entry.id)?.failed ?? 0,
       })),
       stageCounts,
       statusCounts,

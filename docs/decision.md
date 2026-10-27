@@ -1,6 +1,6 @@
 # Why the project works this way
 
-This is a plain-language summary of the current design choices. It includes the early project decisions and the JavaScript/MySQL update completed on 5 October 2026.
+This is a plain-language summary of the current design choices. It includes the early project decisions, the JavaScript/MySQL update completed on 5 October 2026, and the scheduling, autoscaling, benchmark, and dashboard work from 21-23 October 2026.
 
 ## 1. Keep the app in one repository
 
@@ -136,7 +136,9 @@ MySQL calculates timing differences and p95. JavaScript converts the returned nu
 
 The dashboard is the normal demonstration interface. It calls the orchestrator API rather than making users run four separate API commands for each job.
 
-The backend still owns all decisions. Per-stage buttons remain useful for learning and debugging. Browser auto mode repeats run requests; pausing it does not kill running work.
+The backend still owns all decisions. Per-stage buttons, now inside the job details drawer, remain useful for learning and debugging. Browser auto mode repeats run requests; pausing it does not kill running work.
+
+Autoscaling is automatic only. The dashboard has no manual evaluate button, because the backend timer already checks every few seconds and a second trigger mostly caused confusion with a refresh. `POST /api/autoscaler/evaluate` stays for tests and direct API use.
 
 The Immediate demo uses a valid custom batch with all arrival offsets set to zero. It does not need a separate demo-only backend path.
 
@@ -160,10 +162,19 @@ A comparison is only fair if every policy does the same work on the same capacit
 - **Store results as columns.** Metrics are copied onto the run row when it ends, and the batch link is `ON DELETE SET NULL`. Clearing finished jobs therefore keeps the results. CHECK constraints keep counts and timings non-negative.
 - **Waiting excludes run time.** Waiting subtracts the time spent running across all attempts, so a preempted Round Robin job's second queue stay counts as waiting.
 
-## 19. Use both small tests and real-system tests
+## 19. Organise the dashboard by task, and use colour only for meaning
 
-Services can receive simple in-memory replacements for database or Docker operations. This lets small tests check their rules quickly.
+The single long page needed a lot of scrolling and showed some information two or three times. It is now four tabs, each roughly one screen: Run, Autoscaling, Policy comparison, and Monitoring.
+
+- **Tabs, not a longer page.** The current tab lives in the URL hash, so reloads and links keep the view. The orchestrator component stays mounted on every tab, so leaving the Run tab never stops a run.
+- **Controls always in reach.** Policy, placement, jobs per tick, Run / Pause, and Kill all sit in one sticky run bar. Generating work is a separate Workload panel that starts open on an empty cluster and folds away afterwards.
+- **One place per fact.** Worker cards carry each worker's finished attempts, which replaced the second workers table in Monitoring. Job details open in a drawer instead of keeping a mostly empty column on screen.
+- **Colour is a signal.** Surfaces stay white and monochrome. Green buttons start actions and red buttons stop them, both with white text. CPU is always blue and memory always green. Each policy keeps one colour across the comparison. Labels, icons, ★, and BEST text still carry the meaning for anyone who cannot rely on colour.
+
+## 20. Use both small tests and real-system tests
+
+Services can receive simple in-memory replacements for database or Docker operations. This lets small tests check their rules quickly. Frontend views are rendered on the server in tests, so their states can be checked without a browser or backend.
 
 Separate integration tests use real MySQL and Docker to check constraints, concurrent requests, rollback, resource release, and actual container results. Test files run one at a time because some operations work across the whole test database.
 
-The migration's full verification passed 130 tests. See [the change record](changes.md) for the tested setup and [the run guide](running.md) for the commands.
+The migration's full verification passed 130 tests. The latest full backend run with MySQL and Docker enabled passed 210 tests (23 October 2026), and the frontend suite has 33 tests. See [the change record](changes.md) for details and [the run guide](running.md) for the commands.

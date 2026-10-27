@@ -31,7 +31,7 @@ Example run request:
 
 State accepts `limit` from 1-200, default 60. A run response reports which steps happened; it does not mean all started containers have finished.
 
-State jobs are ordered by `updatedAt` descending before applying `limit`; each job includes its `updatedAt` timestamp. This is dashboard display ordering and does not affect job scheduling. `statusCounts`, `stageCounts`, and all `totals` cover all jobs, including those outside the displayed limit. The read uses a repeatable database snapshot. Worker `runningJobs` lists and the top-level `runningJobs` inspector records include all running jobs independently of the table limit.
+State jobs are ordered by `updatedAt` descending before applying `limit`; each job includes its `updatedAt` timestamp. This is dashboard display ordering and does not affect job scheduling. `statusCounts`, `stageCounts`, and all `totals` cover all jobs, including those outside the displayed limit. The read uses a repeatable database snapshot. Worker `runningJobs` lists and the top-level `runningJobs` inspector records include all running jobs independently of the table limit. Each worker also reports `jobsCompleted` and `jobsFailed`: its completed executions, and its failed or interrupted ones, counted the same way as `/monitoring/overview`.
 
 ## 2. Job and worker records
 
@@ -207,9 +207,11 @@ A successful start returns HTTP 202: the run has started, but it has not necessa
 
 | Method | Path | What it does |
 | --- | --- | --- |
-| GET | `/autoscaler` | Read settings, the latest decision with its signals, and the 20 most recent scaling events |
+| GET | `/autoscaler` | Read settings, the timer (`loop`), `pausedReason`, the latest decision with its signals, and the 20 most recent scaling events |
 | PATCH | `/autoscaler` | Change runtime settings, for example `{ "enabled": true }` |
-| POST | `/autoscaler/evaluate` | Run one scaling evaluation now and return its decision |
+| POST | `/autoscaler/evaluate` | Run one scaling evaluation now and return its decision. The dashboard does not call this; the backend timer evaluates automatically |
+
+`pausedReason` is `null` normally and holds a short reason while a policy comparison has autoscaling on hold. During that time every evaluation returns `NONE`.
 
 PATCH accepts any subset of the following fields:
 

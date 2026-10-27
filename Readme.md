@@ -1,241 +1,107 @@
 # OrchestrOS
 
-**A software project focused on operating system concepts and system orchestration.**
+**A Kubernetes-inspired container orchestrator that runs on one computer.**
 
-> Replace this description with the exact purpose and functionality implemented in this repository.
+OrchestrOS schedules computing jobs, places them on logical workers, reserves CPU and memory inside MySQL transactions, and runs each job as a resource-limited Docker container. A React dashboard drives the whole pipeline and shows every decision as it happens.
 
-## Overview
-
-OrchestrOS is a software project designed to demonstrate and implement its core system-level functionality through a structured and maintainable codebase.
-
-The project aims to provide an organized implementation of its primary components, with an emphasis on usability, modularity, and ease of development.
-
-**Project repository:** [Pranjalgit1/OrchestrOS](https://github.com/Pranjalgit1/OrchestrOS)
-
-## Objectives
-
-- Provide a clear and modular software architecture.
-- Implement the core functionality defined by the project requirements.
-- Make the application straightforward to install and use.
-- Maintain readable, maintainable, and reusable code.
-- Provide a foundation for future enhancements and contributions.
+**Repository:** [Pranjalgit1/OrchestrOS](https://github.com/Pranjalgit1/OrchestrOS)
 
 ## Features
 
-The final feature list should reflect the functionality actually implemented in the repository.
+- **Repeatable workloads.** A seeded generator creates batches of 10, 25, 50, or 100 jobs with nine arrival patterns. The same seed reproduces the same jobs and result checksums.
+- **Four scheduling policies.** FCFS, SJF, Priority with aging, and Round Robin. Round Robin preempts a running job when its quantum expires and another job is waiting.
+- **Three placement strategies.** First Fit, Least Loaded, and Resource-Aware.
+- **Safe resource reservation.** CPU and memory are claimed in a MySQL transaction that locks the worker row, so concurrent jobs can never over-allocate a worker.
+- **Real execution.** Every job runs in a locked-down container limited to exactly its reservation: no network, read-only filesystem, and capped processes.
+- **Job control.** Cancel a job at any stage, including a running container. Failed jobs can be requeued, and infrastructure faults are retried automatically.
+- **Reactive autoscaling.** Extra logical workers are added when jobs wait on a busy cluster and retired when it is idle. Every decision is recorded with its reason.
+- **Policy comparison.** Run the same workload under several policies through the real pipeline and compare waiting, turnaround, response, makespan, and throughput in colour-coded charts.
+- **Live monitoring.** Reserved capacity, queue state, throughput, a reservation history chart, and lifecycle timings with p95.
+- **Restart recovery.** After a crash, the backend reconciles containers and executions it was tracking.
 
-- **Core functionality:** The primary capabilities of OrchestrOS.
-- **Modular architecture:** Separation of components into manageable units, where supported.
-- **Configuration:** Customizable settings, if available.
-- **Error handling:** Appropriate handling of invalid inputs and runtime failures.
-- **Testing:** Verification of expected application behavior.
-- **Documentation:** Installation and usage guidance for developers and users.
+## Technology stack
 
-## Technology Stack
+| Part | Technology |
+| --- | --- |
+| Frontend | React 19, Vite, plain SVG charts |
+| Backend | Node.js 22, Express 5, Zod validation |
+| Database | MySQL 8, Prisma 6 |
+| Execution | Docker Engine API, fixed workload-runner image |
+| Tests | Node's built-in test runner |
 
-| Component | Technology |
-|---|---|
-| Primary language | To be verified |
-| Framework | To be verified |
-| Build system | To be verified |
-| Dependencies | See project dependency files |
-| Development environment | To be verified |
-| Testing framework | To be verified |
-
-## Project Structure
-
-The directory structure depends on the actual implementation. A representative layout is shown below; replace it with the repository's real file structure.
+## Project structure
 
 ```text
 OrchestrOS/
-├── README.md
-├── src/                 # Application source code
-├── tests/               # Automated tests
-├── docs/                # Documentation
-├── config/              # Configuration files, if applicable
-├── scripts/             # Utility scripts, if applicable
-└── LICENSE              # License, if included
+├── backend/            Express API, Prisma schema and migrations, tests
+│   └── src/modules/    jobs, workers, workloads, scheduler, placement, resources,
+│                       executions, orchestrator, monitoring, autoscaler, benchmarks
+├── frontend/           React dashboard and its tests
+├── workload-runner/    Program that runs inside each workload container
+├── docs/               Project documentation
+└── compose.yaml        Optional all-in-one Docker Compose setup
 ```
 
-## Prerequisites
+## Quick start
 
-Before installing OrchestrOS, verify the project's required environment:
+You need Node.js 22.12+, Docker Desktop (Linux containers), and MySQL 8.0.16+.
 
-- Git
-- The programming language runtime or compiler used by the project
-- Required build tools
-- Dependencies specified in the project's manifest
-- Any additional system requirements documented by the developers
-
-## Installation
-
-### 1. Clone the repository
-
-```bash
+```powershell
 git clone https://github.com/Pranjalgit1/OrchestrOS.git
 cd OrchestrOS
+Copy-Item .env.example .env        # then set DATABASE_URL to your MySQL database
+npm ci
+npm run prisma:generate
+npm run db:setup                   # create tables and the three starting workers
+npm run docker:images              # build the workload container image
 ```
 
-### 2. Install dependencies
+Then start the app in two terminals:
 
-Install the dependencies using the package manager appropriate for the project's language and dependency files.
-
-For example, a Python project may use:
-
-```bash
-python -m pip install -r requirements.txt
+```powershell
+npm run dev:backend
+npm run dev:frontend
 ```
 
-A Node.js project may use:
+Open **http://localhost:5173**. To run everything in containers instead, use `npm run docker:up`.
 
-```bash
-npm install
-```
+## Using the dashboard
 
-**Important:** These are examples, not verified installation commands for OrchestrOS. Use only the command that matches the repository's actual files.
-
-### 3. Build the project
-
-Run the build command specified by the project's build system, if compilation is required.
-
-### 4. Start the application
-
-Use the project's documented entry point or startup command.
-
-The exact build and launch commands must be confirmed from the source code before use.
-
-## Usage
-
-After successfully installing and configuring the project:
-
-1. Launch the application using its supported startup command.
-2. Configure any required settings or environment variables.
-3. Use the application's available commands, interface, or APIs.
-4. Review application output and logs to verify correct operation.
-5. Consult the documentation for advanced functionality.
-
-### Example
-
-```text
-Start the application
-        |
-        v
-Initialize required components
-        |
-        v
-Execute the requested operation
-        |
-        v
-Display results or report errors
-```
-
-This illustrates a general application workflow and is not a verified description of OrchestrOS's internal execution.
-
-## Architecture
-
-OrchestrOS should be documented in terms of its actual modules and their responsibilities.
-
-For each major component, explain:
-
-- Its purpose.
-- Its inputs and outputs.
-- How it interacts with other components.
-- How errors and exceptional conditions are handled.
-- Whether it runs independently or depends on other modules.
-
-A component-level architecture diagram can be added once the actual implementation has been reviewed.
-
-## Configuration
-
-Document all configuration options supported by the project, including:
-
-- Configuration file locations.
-- Environment variables.
-- Default values.
-- Required settings.
-- Optional settings.
-- Platform-specific configuration.
-
-Do not include passwords, API keys, tokens, or other secrets in the repository.
+| Tab | What you do there |
+| --- | --- |
+| **Run** | Generate a workload, choose a policy and placement strategy, and press **Run orchestrator**. Watch jobs move through the pipeline, onto workers, and through the job queue. Click a job for its details |
+| **Autoscaling** | Switch autoscaling on, and watch workers being added and retired as load changes |
+| **Policy comparison** | Compare scheduling policies on identical work |
+| **Monitoring** | Read cluster capacity, throughput, history, and timings |
 
 ## Testing
 
-If automated tests are included, document how to execute them.
-
-For example, a Python project might use:
-
-```bash
-python -m pytest
+```powershell
+npm run check     # backend syntax
+npm run build     # backend check and frontend production build
+npm test          # backend and frontend tests
 ```
 
-A Node.js project might use:
+Database and container tests are skipped unless `RUN_DATABASE_TESTS=true` (and `RUN_DOCKER_TESTS=true`) are set. Run them against a separate test database. See [the run guide](docs/running.md).
 
-```bash
-npm test
-```
+## Documentation
 
-Replace these examples with the actual test commands supported by OrchestrOS.
+Start at [docs/README.md](docs/README.md). It links to:
 
-Recommended testing areas include:
+- [Running and testing](docs/running.md)
+- [Architecture](docs/architecture.md)
+- [A job's journey](docs/flow.md)
+- [Design choices](docs/decision.md)
+- [API guide](docs/api.md)
+- [Change record](docs/changes.md)
 
-- Core functionality.
-- Invalid input handling.
-- Component integration.
-- Error recovery.
-- Platform compatibility, where applicable.
+## Current limitations
 
-## Troubleshooting
-
-### Installation fails
-
-- Verify that the required runtime and build tools are installed.
-- Check that dependency versions match the project requirements.
-- Review the complete error message before retrying.
-
-### Application fails to start
-
-- Verify that the startup command is correct.
-- Check for missing configuration or dependencies.
-- Review logs and error output.
-
-### Unexpected behavior
-
-- Reproduce the issue using the same inputs.
-- Check whether the behavior is documented.
-- Create a bug report with the steps to reproduce the problem.
-
-## Future Improvements
-
-Potential improvements should be selected based on the project's actual scope and current limitations.
-
-- Improve error reporting and diagnostics.
-- Expand automated test coverage.
-- Improve documentation and onboarding.
-- Optimize performance where measurements identify bottlenecks.
-- Improve cross-platform compatibility, if relevant.
-- Introduce additional functionality based on user feedback.
-
-## Contributing
-
-Contributions are welcome, subject to the repository owner's contribution guidelines.
-
-1. Fork the repository.
-2. Create a branch for your changes.
-3. Implement and test your changes.
-4. Write clear commit messages.
-5. Submit a pull request describing the changes.
-
-Please include reproduction steps for bug fixes and tests for new functionality where appropriate.
+- Workers are logical capacity budgets on one computer, not separate machines.
+- A preempted Round Robin job restarts from the beginning; containers are not paused and resumed.
+- Worker-level failure detection (heartbeats) and machine-learning (predictive) autoscaling are planned but not implemented.
+- The API has no authentication. It is meant for a local development machine, and the backend controls the host's Docker engine.
 
 ## License
 
-Refer to the repository's `LICENSE` file for the applicable license and usage terms.
-
-If the repository does not currently contain a license, the owner should select and add one before explicitly granting reuse or redistribution permissions.
-
-
-## Support
-
-For questions, bug reports, or feature requests, use the repository's GitHub Issues section if issues are enabled.
-
-**Repository:** https://github.com/Pranjalgit1/OrchestrOS
+No license file has been added yet. Until one is chosen, all rights are reserved by the repository owner.

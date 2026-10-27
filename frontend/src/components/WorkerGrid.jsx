@@ -1,12 +1,16 @@
 import { CapacityGauge } from "./CapacityGauge.jsx";
 
-/** Worker counters reflect capacity committed by transactional reservations. */
-export function WorkerGrid({ workers, onSelectJob }) {
+/**
+ * Worker counters reflect capacity committed by transactional reservations.
+ * Each card also carries the worker's finished attempts, so there is one place
+ * to read a worker rather than a card here and a table elsewhere.
+ */
+export function WorkerGrid({ workers, onSelectJob, title = "Workers" }) {
   return (
     <section className="panel worker-panel" aria-label="Workers">
       <header className="panel-head">
         <div>
-          <h2>Workers</h2>
+          <h2>{title}</h2>
         </div>
       </header>
       <p className="hint worker-explanation">
@@ -36,6 +40,9 @@ export function WorkerGrid({ workers, onSelectJob }) {
                 <dd>{worker.memoryAllocatedMiB} / {worker.memoryCapacityMiB} MiB</dd>
               </div>
             </dl>
+            <p className="worker-outcomes" title="Finished container attempts on this worker">
+              {worker.jobsCompleted ?? 0} completed · {worker.jobsFailed ?? 0} failed
+            </p>
             <div className="worker-running">
               {worker.runningJobs.length === 0 ? (
                 <small className="muted">No container running</small>
