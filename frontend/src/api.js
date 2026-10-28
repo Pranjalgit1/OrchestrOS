@@ -139,3 +139,16 @@ export function startBenchmark(input) {
 export function abortBenchmark(id) {
   return postJson(`/api/benchmarks/${id}/abort`, {});
 }
+/* Reactive-vs-ML autoscaling comparisons: same pattern as the benchmarks. */
+export function fetchScalingComparisons(signal) {
+  return requestJson("/api/scaling-comparisons?limit=10", { signal, cache: "no-store" });
+}
+export function fetchScalingComparison(id, signal) {
+  return requestJson(`/api/scaling-comparisons/${id}`, { signal, cache: "no-store" });
+}
+export function startScalingComparison(input) {
+  return postJson("/api/scaling-comparisons", input);
+}
+export function abortScalingComparison(id) {
+  return postJson(`/api/scaling-comparisons/${id}/abort`, {});
+}

@@ -172,6 +172,14 @@ export class AutoscalerService {
     const excess = this.loadHistory.length - this.config.mlWindowPoints;
     if (excess > 0) this.loadHistory.splice(0, excess);
   }
+  /**
+   * Forgets recorded load and the last decision, so a measured run starts
+   * from nothing instead of carrying over another run's history.
+   */
+  resetHistory() {
+    this.loadHistory = [];
+    this.lastDecision = null;
+  }
   /** The ML prediction over the current window, or null with too little history. */
   forecast() {
     return forecastLoad(this.loadHistory, this.config.mlLookAheadSeconds);

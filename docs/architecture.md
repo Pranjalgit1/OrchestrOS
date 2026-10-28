@@ -57,7 +57,7 @@ The React app shows one tab at a time. `App.jsx` owns the tabs and keeps the cur
 | --- | --- |
 | Run | `RunBar` and `WorkloadPanel` (`ControlPanel.jsx`), `PipelineView`, `WorkerGrid`, `JobQueue`, `ActivityLog`, and `JobDetail` in a side drawer |
 | Autoscaling | `AutoscalerPanel` and `WorkerGrid` |
-| Policy comparison | `BenchmarkPanel`, with chart geometry in `benchmark.chart.js` |
+| Comparison | `ComparisonTab` switches between `BenchmarkPanel` (scheduling policies, chart geometry in `benchmark.chart.js`) and `ScalingComparisonPanel` (Reactive vs ML, wording and chart geometry in `scaling.chart.js`) |
 | Monitoring | `MonitoringPanel`, with chart geometry in `reservation.chart.js` |
 
 Each worker card shows its reserved CPU and memory (outer blue ring and inner green ring), its running containers, and its finished attempts, so there is one place to read a worker. Charts are plain SVG drawn from small pure functions; there is no chart library. Panels with a pure `...View` component (`AutoscalerView`, `BenchmarkView`, `MonitoringView`) can be rendered in tests without a backend.
@@ -77,6 +77,9 @@ The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). T
 | `scaling_events` | One autoscaler action, the worker it changed, and the signals behind it |
 | `benchmark_suites` | One policy comparison: the workload settings and its overall outcome |
 | `benchmark_runs` | One policy's run in a suite, the capacity it saw, and its measured metrics |
+| `scaling_comparisons` | One Reactive-vs-ML comparison: the workload, the fixed settings, and its outcome |
+| `scaling_comparison_runs` | One strategy's run: job metrics, scaling metrics, and its scaling actions |
+| `scaling_comparison_samples` | One timeline point of a run: waiting jobs, workers, utilization, and the ML forecast |
 
 The queue is saved in `jobs`. There is no second queue that must be kept in sync with MySQL.
 
@@ -329,9 +332,32 @@ p95 values use the same interpolation as monitoring. A run's `checksumDigest` is
 
 The suite runner lives in the backend process. A restart abandons it, and the next boot marks the suite as aborted.
 
+### Autoscaling comparison: Reactive vs ML
+
+The scaling-comparisons module (`backend/src/modules/scaling-comparisons`) answers one question: when load changes, does predicting it (ML) give jobs shorter waits than reacting to it, and how much extra worker time does that cost? It runs one seeded workload twice through the real pipeline, Reactive first and ML second. Only the autoscaling strategy changes.
+
+- **Same everything else.** The second run reuses the first run's batch, so the work and result checksums match. Scheduling policy, placement, thresholds, limits, and cooldown are identical; the autoscaler settings are stored with the comparison.
+- **Equal starts.** Before each run the autoscaler is paused, every extra worker is retired so the run starts on the base workers, any cooldown left from earlier scaling is waited out, and the ML load history is cleared. The ML run therefore needs about three checks before it can forecast, which is part of how it behaves.
+- **A timeline.** Every 2 seconds the runner records waiting jobs, workers in service, extra and idle extra workers, peak reserved utilization, and (for ML) the forecast. Scaling actions during the run are copied from `scaling_events`.
+- **Exclusive.** A policy benchmark and an autoscaling comparison refuse to start while the other runs, and the same routes are locked during either (`experiment.registry.js`). The autoscaler's on/off state and strategy are restored afterwards.
+
+| Metric | Definition |
+| --- | --- |
+| Waiting, slowest 5% waiting, turnaround, makespan | As in the policy benchmark |
+| Backlog begins (`pressureAt`) | The first sample where the reactive rule would fire: at least the scale-up threshold of jobs waiting on a cluster at or above the scale-up utilization |
+| First extra worker (`reactionSeconds`) | First scale-up minus `pressureAt`. Negative means the worker came first. If a worker came and no backlog ever formed, the outcome is `BEFORE_ANY_BACKLOG`, which beats any measured reaction |
+| Time with a backlog | Time at least the threshold of jobs were waiting |
+| Extra worker time | Extra workers in service multiplied by seconds; the idle part is when they held nothing |
+| Scaling changes, flaps | Workers added plus retired; a flap is a worker added within 60 s of a retirement |
+| Forecast error | Each ML forecast compared with the queue measured `mlLookAheadSeconds` later; the mean absolute gap in jobs |
+
+Time-weighted metrics treat each sample as holding until the next. Differences under 5% (or under 0.5 s, 5 worker-seconds, or half a change) count as a tie, because Docker timing varies a little between identical runs. The headline verdict combines waiting time and extra worker time: better on one without losing on the other is a win, better on one and worse on the other is a trade-off.
+
+The tables are added by [the scaling comparison migration](../backend/prisma/migrations/20261101000000_scaling_comparisons/migration.sql) and only add to the schema. A live check ran 25 BURST sleep jobs with both strategies: both completed with identical checksums on the same 3-worker base. ML added its first worker before any backlog formed and cut average waiting time from 2.5 s to 1.9 s, at the cost of 32 extra worker-seconds and one flap, so the dashboard reported a trade-off.
+
 ## 12. What is unfinished
 
-Worker-level failure detection (heartbeats) and machine-learning (predictive) scaling are still planned. Autoscaled workers are logical capacity on the same computer, like the study workers; scaling does not add physical hardware. Round Robin preemption does not pause and resume a container; a preempted job restarts from the beginning. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
+Worker-level failure detection (heartbeats) is still planned. Autoscaled workers are logical capacity on the same computer, like the study workers; scaling does not add physical hardware. Round Robin preemption does not pause and resume a container; a preempted job restarts from the beginning. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
 
 After a backend crash, startup recovery and a 30-second reconciliation pass settle untracked exited/missing containers and resume tracking live executions against their original deadline. The manual settle endpoint remains available. Completion uses the Docker finish timestamp when available, so stale recovery does not inflate execution duration.
 

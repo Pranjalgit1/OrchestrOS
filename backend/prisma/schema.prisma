@@ -68,6 +68,12 @@ enum ScalingAction {
   SCALE_DOWN
 }
 
+/// How the autoscaler reads load: measured now, or predicted ahead.
+enum ScalingStrategy {
+  REACTIVE
+  ML
+}
+
 enum BenchmarkStatus {
   PENDING
   RUNNING
@@ -107,6 +113,7 @@ model WorkloadBatch {
   reusedBatches    WorkloadBatch[]   @relation("BatchReuse")
   jobs             Job[]
   benchmarkRuns    BenchmarkRun[]
+  scalingComparisonRuns ScalingComparisonRun[]
 
   @@index([sourceBatchId])
   @@index([createdAt])
@@ -270,6 +277,113 @@ model ScalingEvent {
   @@index([createdAt])
   @@index([workerId])
   @@map("scaling_events")
+}
+
+/// One Reactive-vs-ML comparison: the same seeded workload run once per
+/// autoscaling strategy, with every other setting held fixed.
+model ScalingComparison {
+  id                 String                 @id @default(uuid()) @db.Char(36)
+  status             BenchmarkStatus        @default(RUNNING)
+  schedulingPolicy   SchedulingPolicy
+  placementStrategy  PlacementStrategy
+  /// Arrival pattern as requested, including IMMEDIATE.
+  pattern            String                 @db.VarChar(16)
+  seed               Int
+  jobCount           Int
+  workloadTypes      Json
+  timeQuantumSeconds Int
+  jobsPerTick        Int
+  /// Autoscaler thresholds and limits that both runs used.
+  autoscalerSettings Json
+  failureReason      String?                @db.Text
+  startedAt          DateTime               @default(now())
+  completedAt        DateTime?
+  createdAt          DateTime               @default(now())
+  runs               ScalingComparisonRun[]
+
+  @@index([createdAt])
+  @@index([status])
+  @@map("scaling_comparisons")
+}
+
+/// One strategy's run inside a comparison. Results are copied in when the run
+/// ends, so they survive clearing the jobs they measured.
+model ScalingComparisonRun {
+  id                     String                    @id @default(uuid()) @db.Char(36)
+  comparisonId           String                    @db.Char(36)
+  position               Int
+  strategy               ScalingStrategy
+  status                 BenchmarkStatus           @default(PENDING)
+  workloadBatchId        String?                   @db.Char(36)
+  startedAt              DateTime?
+  completedAt            DateTime?
+  failureReason          String?                   @db.Text
+  /// Base cluster when the run started, so fairness can be checked.
+  workerCount            Int?
+  cpuCapacityMillicores  Int?
+  memoryCapacityMiB      Int?
+  jobCount               Int                       @default(0)
+  completedJobs          Int                       @default(0)
+  failedJobs             Int                       @default(0)
+  cancelledJobs          Int                       @default(0)
+  avgWaitSeconds         Float?
+  p95WaitSeconds         Float?
+  avgTurnaroundSeconds   Float?
+  makespanSeconds        Float?
+  throughputPerMinute    Float?
+  /// Digest of every completed job's result checksum, to prove identical work.
+  checksumDigest         String?                   @db.VarChar(64)
+  /// First moment the cluster was under scale-up pressure.
+  pressureAt             DateTime?
+  firstScaleUpAt         DateTime?
+  /// firstScaleUpAt minus pressureAt; negative means it scaled up early.
+  reactionSeconds        Float?
+  /// Time at least the scale-up threshold of jobs were waiting.
+  backedUpSeconds        Float?
+  /// Autoscaled workers in service, integrated over the run.
+  extraWorkerSeconds     Float?
+  /// The part of extraWorkerSeconds when those workers held nothing.
+  idleExtraWorkerSeconds Float?
+  peakWorkers            Int?
+  scaleUps               Int                       @default(0)
+  scaleDowns             Int                       @default(0)
+  /// Workers added back within 60 seconds of a retirement.
+  flaps                  Int                       @default(0)
+  /// Mean absolute error, in jobs, of the ML queue forecast (ML runs only).
+  forecastMeanAbsError   Float?
+  forecastPairs          Int                       @default(0)
+  /// Scaling actions during the run, copied from scaling_events.
+  scalingActions         Json?
+  createdAt              DateTime                  @default(now())
+  comparison             ScalingComparison         @relation(fields: [comparisonId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+  workloadBatch          WorkloadBatch?            @relation(fields: [workloadBatchId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  samples                ScalingComparisonSample[]
+
+  @@unique([comparisonId, position])
+  @@unique([comparisonId, strategy])
+  @@index([workloadBatchId])
+  @@map("scaling_comparison_runs")
+}
+
+/// One timeline point of a comparison run: load, workers, and the forecast.
+model ScalingComparisonSample {
+  id                 String               @id @default(uuid()) @db.Char(36)
+  runId              String               @db.Char(36)
+  at                 DateTime
+  /// Seconds since the run started, so the two runs share one time axis.
+  offsetSeconds      Float
+  queuedJobs         Int
+  workersInService   Int
+  extraWorkers       Int
+  idleExtraWorkers   Int
+  peakUtilization    Float
+  /// What the ML strategy predicted at this moment, for its look-ahead.
+  forecastQueuedJobs Float?
+  forecastPeak       Float?
+  run                ScalingComparisonRun @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([runId, offsetSeconds])
+  @@map("scaling_comparison_samples")
 }
 
 

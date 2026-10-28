@@ -264,6 +264,32 @@ While a suite runs, these return 409 `BENCHMARK_RUNNING`: creating, cancelling, 
 
 `comparison` contains `comparable`, `fairCapacity`, `identicalWork`, `notes`, and one entry per metric with each policy's value and `best` (an empty list means a tie).
 
+### Autoscaling comparison (Reactive vs ML)
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| GET | `/scaling-comparisons?limit=10` | List recent comparisons, newest first, with `activeComparisonId` (`null` when idle). Runs are listed without timelines |
+| POST | `/scaling-comparisons` | Start a comparison: Reactive first, then ML. Returns 202 and a `Location` header |
+| GET | `/scaling-comparisons/:id` | Read one comparison with both runs, each run's `samples` timeline (live while it runs), `progress`, and `comparison` |
+| POST | `/scaling-comparisons/:id/abort` | Ask the running comparison to stop; returns 202 |
+
+POST accepts any subset of these fields:
+
+| Field | Allowed values | Default |
+| --- | --- | --- |
+| `count` | 10, 25, or 50 | 25 |
+| `pattern` | Any predefined pattern or `IMMEDIATE` (not `CUSTOM`) | `INCREASING` |
+| `seed` | 0-2,147,483,647 | 42 |
+| `workloadTypes` | 1-5 distinct workload types | `["SLEEP"]` |
+| `policy` | `FCFS`, `SJF`, `PRIORITY`, `ROUND_ROBIN` | `FCFS` |
+| `strategy` | `FIRST_FIT`, `LEAST_LOADED`, `RESOURCE_AWARE` (placement) | `LEAST_LOADED` |
+| `timeQuantumSeconds` | 1-3,600, Round Robin only | 5 |
+| `jobsPerTick` | 1-25 | 25 |
+
+The autoscaler thresholds and limits come from the current autoscaler settings and are stored with the comparison as `autoscalerSettings`. Starting returns the same 409/503 errors as a policy benchmark, plus 409 `COMPARISON_RUNNING` (one is already running), 409 `BENCHMARK_RUNNING` (a policy benchmark is running), 409 `AUTOSCALER_LOOP_DISABLED` (`AUTOSCALE_INTERVAL_SECONDS=0`), and 409 `AUTOSCALER_NO_CAPACITY` (`maxWorkers` is 0). While it runs, the same routes are locked as during a policy benchmark, with the message naming the comparison. Aborting one that is not running returns 409 `COMPARISON_NOT_RUNNING`.
+
+`comparison` contains `comparable`, `fairCapacity`, `identicalWork`, `notes`, `waitVerdict` and `costVerdict` (`REACTIVE`, `ML`, `TIE`, or `null` until both runs complete), `forecast` (the ML run's mean absolute error and number of checks), and one entry per metric with `reactive`, `ml`, `change` (ML relative to Reactive), and `winner`. For the reaction metric, `reactiveOutcome` and `mlOutcome` are `MEASURED`, `BEFORE_ANY_BACKLOG`, `NEVER_SCALED_UP`, or `NOT_NEEDED`.
+
 ## 8. Monitoring
 
 | Method | Path | What it does |

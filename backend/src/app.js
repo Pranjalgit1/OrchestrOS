@@ -15,6 +15,7 @@ import { workloadRouter } from "./modules/workloads/workload.routes.js";
 import { workerRouter } from "./modules/workers/worker.routes.js";
 import { autoscalerRouter } from "./modules/autoscaler/autoscaler.routes.js";
 import { benchmarkRouter } from "./modules/benchmarks/benchmark.routes.js";
+import { scalingComparisonRouter } from "./modules/scaling-comparisons/scaling-comparison.routes.js";
 export const app = express();
 app.disable("x-powered-by");
 app.use(
@@ -42,6 +43,7 @@ app.use("/api/monitoring", monitoringRouter);
 app.use("/api/workers", workerRouter);
 app.use("/api/autoscaler", autoscalerRouter);
 app.use("/api/benchmarks", benchmarkRouter);
+app.use("/api/scaling-comparisons", scalingComparisonRouter);
 app.use((_request, response) => {
   response.status(404).json({
     error: {

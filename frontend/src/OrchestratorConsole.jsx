@@ -15,7 +15,7 @@ import {
 } from "./api";
 import { ActivityLog } from "./components/ActivityLog.jsx";
 import { AutoscalerPanel } from "./components/AutoscalerPanel.jsx";
-import { BenchmarkPanel } from "./components/BenchmarkPanel.jsx";
+import { ComparisonTab } from "./components/ComparisonTab.jsx";
 import { RunBar, WorkloadPanel } from "./components/ControlPanel.jsx";
 import { JobDetail } from "./components/JobDetail.jsx";
 import { JobQueue } from "./components/JobQueue.jsx";
@@ -354,7 +354,7 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
         </>
       ) : null}
 
-      {view === "comparison" ? <BenchmarkPanel /> : null}
+      {view === "comparison" ? <ComparisonTab /> : null}
 
       {drawerOpen ? (
         <aside className="job-drawer" aria-label="Job details" tabIndex={-1} ref={drawer}>

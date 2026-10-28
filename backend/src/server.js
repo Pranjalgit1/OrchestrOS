@@ -7,6 +7,9 @@ import { autoscalerService } from "./modules/autoscaler/autoscaler.service.js";
 import { ensureStudyWorkers } from "./modules/workers/worker.defaults.js";
 import { benchmarkService } from "./modules/benchmarks/benchmark.service.js";
 import { prismaBenchmarkRepository } from "./modules/benchmarks/benchmark.repository.js";
+import { scalingComparisonService } from "./modules/scaling-comparisons/scaling-comparison.service.js";
+import { jobService } from "./modules/jobs/job.service.js";
+import { prismaScalingComparisonRepository } from "./modules/scaling-comparisons/scaling-comparison.repository.js";
 // Reconcile containers before accepting new start requests after a restart.
 try {
   const recovery = await executionService.recover();
@@ -25,6 +28,16 @@ try {
   if (abandoned) console.log(`Marked ${abandoned} interrupted benchmark(s) as aborted`);
 } catch (error) {
   console.error("Benchmark recovery failed:", error.message);
+}
+try {
+  // Runs after execution recovery, so containers the old process left are already settled.
+  const abandoned = await prismaScalingComparisonRepository.abandonInterrupted((id) => jobService.cancel(id));
+  if (abandoned.comparisons) {
+    console.log(`Marked ${abandoned.comparisons} interrupted autoscaling comparison(s) as aborted ` +
+      `and cancelled ${abandoned.cancelledJobs} of their unfinished job(s)`);
+  }
+} catch (error) {
+  console.error("Autoscaling comparison recovery failed:", error.message);
 }
 const server = app.listen(env.PORT, env.HOST, () => {
   console.log(`OrchestrOS backend listening on http://${env.HOST}:${env.PORT}`);
@@ -81,8 +94,16 @@ async function shutdown(signal) {
       // It finished in the meantime.
     }
   }
+  if (scalingComparisonService.isRunning) {
+    try {
+      scalingComparisonService.abort(scalingComparisonService.active.comparisonId);
+    } catch {
+      // It finished in the meantime.
+    }
+  }
   server.close(async (error) => {
     await benchmarkService.awaitCompletion();
+    await scalingComparisonService.awaitCompletion();
     // Let running containers finish being recorded, otherwise their executions
     // would stay RUNNING and keep holding reservations.
     await executionService.awaitPendingSettlements();

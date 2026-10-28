@@ -16,6 +16,7 @@ OrchestrOS schedules computing jobs, places them on logical workers, reserves CP
 - **Job control.** Cancel a job at any stage, including a running container. Failed jobs can be requeued, and infrastructure faults are retried automatically.
 - **Reactive and ML autoscaling.** Extra logical workers are added when jobs wait on a busy cluster and retired when it is idle. A reactive strategy scales on the load measured now; an ML strategy scales on the load a linear regression predicts ahead. One runs at a time so they can be compared, and every decision is recorded with its reason.
 - **Policy comparison.** Run the same workload under several policies through the real pipeline and compare waiting, turnaround, response, makespan, and throughput in colour-coded charts.
+- **Reactive vs ML comparison.** Run the same workload with each autoscaling strategy and get a plain-language verdict, four "which was better?" answers, side-by-side timelines of waiting jobs and workers, and a check of how accurate the ML forecast was.
 - **Live monitoring.** Reserved capacity, queue state, throughput, a reservation history chart, and lifecycle timings with p95.
 - **Restart recovery.** After a crash, the backend reconciles containers and executions it was tracking.
 
@@ -71,7 +72,7 @@ Open **http://localhost:5173**. To run everything in containers instead, use `np
 | --- | --- |
 | **Run** | Generate a workload, choose a policy and placement strategy, and press **Run orchestrator**. Watch jobs move through the pipeline, onto workers, and through the job queue. Click a job for its details |
 | **Autoscaling** | Pick the Reactive or ML predictive strategy, switch autoscaling on, and watch workers being added and retired as load changes |
-| **Policy comparison** | Compare scheduling policies on identical work |
+| **Comparison** | Choose **Scheduling policies** to compare FCFS, SJF, Priority, and Round Robin, or **Autoscaling: Reactive vs ML** to run the same workload with each autoscaling strategy |
 | **Monitoring** | Read cluster capacity, throughput, history, and timings |
 
 ## Testing

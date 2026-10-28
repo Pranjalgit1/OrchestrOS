@@ -10,11 +10,15 @@ import { orchestratorService } from "../orchestrator/orchestrator.service.js";
 import { workloadService } from "../workloads/workload.service.js";
 import { comparePolicies, measureBatch } from "./benchmark.metrics.js";
 import { prismaBenchmarkRepository } from "./benchmark.repository.js";
+import { registerExperiment, runningExperiment, sentenceStart } from "./experiment.registry.js";
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+/** How this experiment is named in messages from the other one. */
+export const POLICY_BENCHMARK = "a policy benchmark";
+
 /** Codes from the orchestrator that mean "wait and ask again", not failure. */
-const WAIT_CODES = new Set([
+export const WAIT_CODES = new Set([
   "NOTHING_ELIGIBLE",
   "INSUFFICIENT_RESOURCES",
   // Both leave the job SCHEDULED; the next tick places it again.
@@ -88,6 +92,13 @@ export class BenchmarkService {
   async start(input) {
     if (this.active) {
       throw new ConflictError("A benchmark is already running", "BENCHMARK_RUNNING");
+    }
+    const other = runningExperiment(POLICY_BENCHMARK);
+    if (other) {
+      throw new ConflictError(
+        `${sentenceStart(other)} is running. Wait for it to finish first.`,
+        "BENCHMARK_RUNNING",
+      );
     }
     // Reserve the slot before any await, so two requests cannot both pass.
     this.active = { suiteId: null, abortRequested: false, progress: null, done: null };
@@ -310,3 +321,4 @@ export class BenchmarkService {
 }
 
 export const benchmarkService = new BenchmarkService();
+registerExperiment(POLICY_BENCHMARK, () => benchmarkService.isRunning);

@@ -22,12 +22,13 @@ const currentCapabilities = [
   "Automatic and manual retry of failed jobs",
   "Reactive and ML-predictive worker autoscaling with recorded decisions",
   "Multi-policy benchmark with comparison charts",
+  "Reactive vs ML autoscaling comparison with timelines and a plain-language verdict",
 ];
 /** One view per tab, so each feature fits on roughly one screen. */
 export const TABS = [
   ["run", "Run"],
   ["autoscaling", "Autoscaling"],
-  ["comparison", "Policy comparison"],
+  ["comparison", "Comparison"],
   ["monitoring", "Monitoring"],
 ];
 const TAB_IDS = TABS.map(([id]) => id);
