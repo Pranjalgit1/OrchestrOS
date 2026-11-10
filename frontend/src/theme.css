@@ -1,116 +1,107 @@
-/* Monochrome surfaces. Colour is kept for meaning only: green/red actions,
-   blue CPU and green memory, and one colour per policy in comparisons.
-   Labels and icons still carry meaning beyond colour. */
+/* Warm, Claude Code-style palette: cream or charcoal surfaces, a terracotta
+   accent for primary actions and live state, coral CPU and lavender memory.
+   Colour carries meaning; labels and icons still say the same thing. */
 :root {
   color-scheme: light;
-  --page: #f7f7f7;
+  --page: #faf9f5;
   --surface: #ffffff;
-  --surface-subtle: #fafafa;
-  --surface-hover: #ededed;
-  --text: #171717;
-  --muted: #626262;
-  --quiet: #6b6b6b;
-  --border: #dedede;
-  --control-border: #898989;
-  --accent: #171717;
-  --action: #171717;
-  --accent-text: #171717;
-  --accent-hover: #383838;
-  --accent-soft: #efefef;
+  --surface-subtle: #f5f4ee;
+  --surface-hover: #f0eee6;
+  --text: #141413;
+  --muted: #6b6a65;
+  --quiet: #87867f;
+  --border: #e8e6dc;
+  --control-border: #d4d1c6;
+  /* Primary actions keep at least 4.5:1 contrast with their white label. */
+  --accent: #b85a39;
+  --accent-hover: #a24c2e;
+  --accent-text: #a24c2e;
+  --accent-soft: #f6e9e1;
+  --action: #141413;
   --on-accent: #ffffff;
-  --success: #303030;
-  --success-soft: #ededed;
-  --warning: #565656;
-  --warning-soft: #f0f0f0;
-  --danger: #242424;
-  --danger-soft: #ededed;
-  --chart-secondary: #777777;
-  /* The one place colour is used: telling scheduling policies apart in charts.
-     Each keeps at least 3:1 contrast against the surface. */
-  --policy-fcfs: #2563eb;
-  --policy-sjf: #059669;
-  --policy-priority: #d97706;
-  --policy-rr: #9333ea;
-  /* Action colours: green starts or enables, red stops or disables. Both keep
-     at least 4.5:1 contrast with white button text. */
-  --go: #15803d;
-  --go-hover: #166534;
-  --stop: #dc2626;
-  --stop-hover: #b91c1c;
   --on-color: #ffffff;
-  /* Resource colours, the same in every ring, bar, and line. */
-  --cpu: #2563eb;
-  --memory: #16a34a;
-  --shadow: 0 2px 4px rgb(0 0 0 / 2%);
+  --brand: var(--accent);
+  --brand-hover: var(--accent-hover);
+  --success: #3f6b3d;
+  --success-soft: #e9efe4;
+  --warning: #8a5a12;
+  --warning-soft: #f6eedc;
+  --danger: #a53a28;
+  --danger-soft: #f7e6e1;
+  --good: #4d7c4a;
+  --chart-secondary: #87867f;
+  /* Job and worker states. */
+  --state-ok: #4d7c4a;
+  --state-fail: #a53a28;
+  --state-warn: #b7791f;
+  --state-live: #c96442;
+  --state-idle: #a8a69d;
+  /* Scheduling policies in the policy comparison. */
+  --policy-fcfs: #d97757;
+  --policy-sjf: #8b7fd6;
+  --policy-priority: #3d3d3a;
+  --policy-rr: #a8a69d;
+  /* Autoscaling strategies: coral Reactive, lavender ML-assisted. Used for
+     lines, dots, and chips; text stays in the normal text colour. */
+  --reactive: #d97757;
+  --ml: #8b7fd6;
+  --reactive-tint: #f9ece6;
+  --ml-tint: #efedfa;
+  /* Actions. Kill/stop is outlined; red is reserved for the hover warning. */
+  --go: var(--accent);
+  --go-hover: var(--accent-hover);
+  --stop: #a53a28;
+  --stop-hover: #8c2f20;
+  /* Resources, the same in every bar, ring, and line. */
+  --cpu: #d97757;
+  --memory: #8b7fd6;
+  --shadow: 0 1px 2px rgb(20 20 19 / 4%);
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --motion-fast: 180ms;
-  --motion-slow: 600ms;
+  --motion-fast: 160ms;
+  --motion-slow: 500ms;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --page: #101010;
-  --surface: #171717;
-  --surface-subtle: #1b1b1b;
-  --surface-hover: #2b2b2b;
-  --text: #f5f5f5;
-  --muted: #b0b0b0;
-  --quiet: #a3a3a3;
-  --border: #363636;
-  --control-border: #797979;
-  --accent: #f5f5f5;
-  --action: #f5f5f5;
-  --accent-text: #f5f5f5;
-  --accent-hover: #d4d4d4;
-  --accent-soft: #292929;
-  --on-accent: #171717;
-  --success: #e5e5e5;
-  --success-soft: #292929;
-  --warning: #c4c4c4;
-  --warning-soft: #252525;
-  --danger: #f5f5f5;
-  --danger-soft: #303030;
-  --chart-secondary: #a3a3a3;
-  --policy-fcfs: #60a5fa;
-  --policy-sjf: #34d399;
-  --policy-priority: #fbbf24;
-  --policy-rr: #c084fc;
-  --cpu: #60a5fa;
-  --memory: #4ade80;
+  --page: #1f1e1d;
+  --surface: #262624;
+  --surface-subtle: #2b2a27;
+  --surface-hover: #33322f;
+  --text: #f5f4ee;
+  --muted: #b7b5a9;
+  --quiet: #9c9a92;
+  --border: #3a3936;
+  --control-border: #4d4b46;
+  --accent: #b85a39;
+  --accent-hover: #c96442;
+  --accent-text: #e3906f;
+  --accent-soft: #3a2a23;
+  --action: #f5f4ee;
+  --on-accent: #ffffff;
+  --success: #a7c79f;
+  --success-soft: #2b3328;
+  --warning: #e3b35c;
+  --warning-soft: #3a3020;
+  --danger: #ee9a87;
+  --danger-soft: #3c2622;
+  --good: #8fbf86;
+  --chart-secondary: #9c9a92;
+  --state-ok: #8fbf86;
+  --state-fail: #ee8a74;
+  --state-warn: #e3b35c;
+  --state-live: #e08a6a;
+  --state-idle: #77756e;
+  --policy-fcfs: #e08a6a;
+  --policy-sjf: #a99cf0;
+  --policy-priority: #e4e2da;
+  --policy-rr: #8a887f;
+  --reactive: #e08a6a;
+  --ml: #a99cf0;
+  --reactive-tint: #3a2a23;
+  --ml-tint: #2c2a3a;
+  --stop: #ee8a74;
+  --stop-hover: #f2a291;
+  --cpu: #e08a6a;
+  --memory: #a99cf0;
   --shadow: none;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] {
-    color-scheme: dark;
-    --page: #101010;
-    --surface: #171717;
-    --surface-subtle: #1b1b1b;
-    --surface-hover: #2b2b2b;
-    --text: #f5f5f5;
-    --muted: #b0b0b0;
-    --quiet: #a3a3a3;
-    --border: #363636;
-    --control-border: #797979;
-    --accent: #f5f5f5;
-    --action: #f5f5f5;
-    --accent-text: #f5f5f5;
-    --accent-hover: #d4d4d4;
-    --accent-soft: #292929;
-    --on-accent: #171717;
-    --success: #e5e5e5;
-    --success-soft: #292929;
-    --warning: #c4c4c4;
-    --warning-soft: #252525;
-    --danger: #f5f5f5;
-    --danger-soft: #303030;
-    --chart-secondary: #a3a3a3;
-    --policy-fcfs: #60a5fa;
-    --policy-sjf: #34d399;
-    --policy-priority: #fbbf24;
-    --policy-rr: #c084fc;
-    --cpu: #60a5fa;
-    --memory: #4ade80;
-    --shadow: none;
-  }
 }

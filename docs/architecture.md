@@ -20,7 +20,7 @@ Backend: Express application
 
 | Part | Main job | Where to look |
 | --- | --- | --- |
-| Dashboard | Show controls, jobs, workers, results, and graphs in four tabs | `frontend/src/` |
+| Dashboard | Show controls, jobs, workers, results, and graphs in four views, chosen from a sidebar (keys 1–4) that also reports API, MySQL, and Docker status and switches the light and dark theme | `frontend/src/` |
 | API setup | Connect routes, validate request bodies, and report errors | `backend/src/app.js` |
 | Server | Listen for requests, start monitoring and the autoscaler, recover after restarts, and handle shutdown | `backend/src/server.js` |
 | Orchestrator | Call scheduling, placement, reservation, and execution in order | `backend/src/modules/orchestrator/` |
@@ -55,9 +55,9 @@ The React app shows one tab at a time. `App.jsx` owns the tabs and keeps the cur
 
 | Tab | Main components |
 | --- | --- |
-| Run | `RunBar` and `WorkloadPanel` (`ControlPanel.jsx`), `PipelineView`, `WorkerGrid`, `JobQueue`, `ActivityLog`, and `JobDetail` in a side drawer |
+| Run | `PageHeader` with `RunActions`, `RunSettings` and `WorkloadPanel` (`ControlPanel.jsx`), `PipelineView`, `WorkerGrid` (a worker table) beside `ActivityLog`, `JobQueue`, and `JobDetail` in a side drawer. Shared styles are in `ui.css` |
 | Autoscaling | `AutoscalerPanel` and `WorkerGrid` |
-| Comparison | `ComparisonTab` switches between `BenchmarkPanel` (scheduling policies, chart geometry in `benchmark.chart.js`) and `ScalingComparisonPanel` (Reactive vs ML, wording and chart geometry in `scaling.chart.js`) |
+| Comparison | `ComparisonTab` switches between `ScalingComparisonPanel` (Reactive vs ML, the default) and `BenchmarkPanel` (scheduling policies, chart geometry in `benchmark.chart.js`). The autoscaling view is built from `ScalingSetup`, `StrategyCard`, `ScalingChart` (interactive SVG drawn at its real width), and `ScalingInsights`; wording, summary rows, and chart geometry are in `scaling.chart.js`, styles in `scaling.css` |
 | Monitoring | `MonitoringPanel`, with chart geometry in `reservation.chart.js` |
 
 Each worker card shows its reserved CPU and memory (outer blue ring and inner green ring), its running containers, and its finished attempts, so there is one place to read a worker. Charts are plain SVG drawn from small pure functions; there is no chart library. Panels with a pure `...View` component (`AutoscalerView`, `BenchmarkView`, `MonitoringView`) can be rendered in tests without a backend.

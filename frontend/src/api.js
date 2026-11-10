@@ -15,6 +15,10 @@ async function getJson(path, signal) {
   }
   return await response.json();
 }
+/** Docker engine and workload image as the backend sees them; fails when Docker is unreachable. */
+export function fetchRuntime(signal) {
+  return getJson("/api/executions/runtime", signal);
+}
 export function fetchOverview(signal) {
   return getJson("/api/monitoring/overview", signal);
 }

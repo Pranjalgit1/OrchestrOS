@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   MIXED_COMPUTE_TYPES,
   STATE_CHANGED_EVENT,
@@ -6,8 +6,19 @@ import {
   fetchBenchmarks,
   startBenchmark,
 } from "../api";
-import { POLICY_LABELS, formatMetric, metricBars, policyClass, suiteProgress } from "../benchmark.chart.js";
+import {
+  POLICY_LABELS,
+  allEqual,
+  barWidths,
+  formatMetric,
+  percentChange,
+  policyClass,
+  resultSummary,
+  suiteProgress,
+  unfinishedPolicies,
+} from "../benchmark.chart.js";
 import { Icon } from "./Icon.jsx";
+import { PageHeader } from "./PageHeader.jsx";
 
 const ACTIVE_POLL_MS = 2_000;
 const IDLE_POLL_MS = 5_000;
@@ -15,18 +26,18 @@ const IDLE_POLL_MS = 5_000;
 const POLICIES = ["FCFS", "SJF", "PRIORITY", "ROUND_ROBIN"];
 const COUNTS = [10, 25, 50];
 const PATTERNS = [
-  ["IMMEDIATE", "Immediate · all ready at once"],
-  ["HEAVY", "Heavy · 2–6s apart"],
-  ["MEDIUM", "Medium · 8–16s apart"],
-  ["BURST", "Burst · 5 jobs every 30s"],
-  ["INCREASING", "Increasing · ramp up"],
-  ["DECREASING", "Decreasing · ramp down"],
-  ["PERIODIC", "Periodic · repeating"],
-  ["CONSTANT", "Constant · every 10s"],
-  ["LIGHT", "Light · 20–40s apart"],
+  ["IMMEDIATE", "Immediate (all at once)"],
+  ["HEAVY", "Heavy (2–6s apart)"],
+  ["MEDIUM", "Medium (8–16s apart)"],
+  ["BURST", "Burst (5 jobs every 30s)"],
+  ["INCREASING", "Increasing (ramp up)"],
+  ["DECREASING", "Decreasing (ramp down)"],
+  ["PERIODIC", "Periodic (repeating)"],
+  ["CONSTANT", "Constant (every 10s)"],
+  ["LIGHT", "Light (20–40s apart)"],
 ];
 const PROFILES = [
-  ["SLEEP", "Sleep · short pauses"],
+  ["SLEEP", "Sleep, short pauses"],
   ["MIXED_COMPUTE", "Mixed compute"],
   ["CPU_INTENSIVE", "CPU calculations"],
   ["SORTING", "Sorting"],
@@ -34,24 +45,11 @@ const PROFILES = [
   ["MATRIX_MULTIPLICATION", "Matrix products"],
 ];
 const STRATEGIES = [
-  ["LEAST_LOADED", "Least Loaded"],
-  ["FIRST_FIT", "First Fit"],
-  ["RESOURCE_AWARE", "Resource-Aware"],
+  ["LEAST_LOADED", "Least loaded"],
+  ["FIRST_FIT", "First fit"],
+  ["RESOURCE_AWARE", "Resource-aware"],
 ];
-const STATUS_TEXT = {
-  PENDING: "Waiting",
-  RUNNING: "Running",
-  COMPLETED: "Completed",
-  FAILED: "Failed",
-  ABORTED: "Stopped",
-};
-const STATUS_BADGE = {
-  PENDING: "badge-idle",
-  RUNNING: "badge-busy",
-  COMPLETED: "badge-active",
-  FAILED: "badge-failed",
-  ABORTED: "badge-failed",
-};
+const STATUS_TEXT = { PENDING: "Waiting", RUNNING: "Running", COMPLETED: "Completed", FAILED: "Failed", ABORTED: "Stopped" };
 
 export const DEFAULT_BENCHMARK_FORM = {
   policies: POLICIES,
@@ -78,170 +76,254 @@ export function toBenchmarkRequest(form) {
   };
 }
 
-const time = (value) => (value ? new Date(value).toLocaleString(undefined, {
-  month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
-}) : "—");
-
-/** One metric as horizontal bars, best policy drawn solid. Values are also in the table. */
-function MetricChart({ metric }) {
-  const labelWidth = 96;
-  const valueWidth = 84;
-  const chart = metricBars(metric.values);
-  const width = labelWidth + chart.width + valueWidth;
-  const best = new Set(metric.best);
-  const summary = metric.values
-    .map((entry) => `${POLICY_LABELS[entry.policy]} ${formatMetric(entry.value, metric.unit)}`)
-    .join(", ");
-  return (
-    <article className="tile bench-chart">
-      <div className="chart-heading">
-        <h3>{metric.label}</h3>
-        <span>{metric.better === "lower" ? "Lower is better" : "Higher is better"}</span>
-      </div>
-      <svg viewBox={`0 0 ${width} ${Math.max(chart.height, 1)}`} role="img"
-        aria-label={`${metric.label}: ${summary}.${metric.best.length
-          ? ` Best: ${metric.best.map((policy) => POLICY_LABELS[policy]).join(" and ")}.` : " No single winner."}`}>
-        {chart.bars.map((bar) => (
-          <g key={bar.policy} transform={`translate(0 ${bar.y})`}>
-            <text className="bench-label" x={labelWidth - 8} y={chart.barHeight / 2} dominantBaseline="middle"
-              textAnchor="end">{POLICY_LABELS[bar.policy]}</text>
-            <rect className="bench-track" x={labelWidth} width={chart.width} height={chart.barHeight} rx="3" />
-            {bar.measured ? (
-              <rect className={`bench-bar ${policyClass(bar.policy)}${best.has(bar.policy) ? " is-best" : ""}`}
-                x={labelWidth}
-                width={Math.max(bar.width, bar.value > 0 ? 2 : 0)} height={chart.barHeight} rx="3" />
-            ) : null}
-            <text className="bench-value" x={labelWidth + chart.width + 8} y={chart.barHeight / 2}
-              dominantBaseline="middle">
-              {formatMetric(bar.value, metric.unit)}{best.has(bar.policy) ? " ★" : ""}
-            </text>
-          </g>
-        ))}
-      </svg>
-    </article>
-  );
+/** The exact request behind a stored suite, so "run again" repeats every policy it planned. */
+export function rerunBenchmarkRequest(suite) {
+  return {
+    policies: POLICIES.filter((policy) => suite.runs.some((run) => run.policy === policy)),
+    count: suite.jobCount,
+    pattern: suite.pattern,
+    workloadTypes: suite.workloadTypes,
+    strategy: suite.placementStrategy,
+    seed: suite.seed,
+    timeQuantumSeconds: suite.timeQuantumSeconds,
+    jobsPerTick: suite.jobsPerTick,
+  };
 }
 
-/** Colour key; the swatch is decorative, the name carries the meaning. */
+const time = (value) => (value ? new Date(value).toLocaleString(undefined, {
+  month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+}) : "—");
+
+/** "25 jobs · immediate · seed 77 · least loaded · quantum 5s · started Oct 22, 08:46 PM" */
+export function suiteSetupText(suite) {
+  const placement = STRATEGIES.find(([value]) => value === suite.placementStrategy)?.[1] ?? suite.placementStrategy;
+  return [`${suite.jobCount} jobs`, String(suite.pattern).toLowerCase(), `seed ${suite.seed}`, placement.toLowerCase(),
+    `quantum ${suite.timeQuantumSeconds}s`, `started ${time(suite.startedAt)}`].join(" · ");
+}
+
+/** Colour dot plus name; the dot is decorative, the name carries the meaning. */
 function PolicyName({ policy }) {
   return (
     <span className="policy-name">
       <span className={`policy-swatch ${policyClass(policy)}`} aria-hidden="true" />
-      {POLICY_LABELS[policy]}
+      {POLICY_LABELS[policy] ?? policy}
     </span>
   );
 }
 
-function SuiteResults({ suite }) {
-  const { comparison } = suite;
-  const finishedPolicies = suite.runs.filter((run) => run.status === "COMPLETED").map((run) => run.policy);
-  const charted = comparison.metrics.map((metric) => ({
-    ...metric,
-    values: metric.values.filter((entry) => finishedPolicies.includes(entry.policy)),
-  }));
+function RunStatus({ status }) {
   return (
-    <div className="bench-results">
-      <div className="bench-summary">
-        <span className={`badge ${STATUS_BADGE[suite.status]}`}>{STATUS_TEXT[suite.status]}</span>
-        <span>
-          {suite.jobCount} jobs · {suite.pattern.toLowerCase()} · seed {suite.seed} ·{" "}
-          {suite.placementStrategy.replace("_", " ").toLowerCase()} · quantum {suite.timeQuantumSeconds}s ·
-          started {time(suite.startedAt)}
-        </span>
-      </div>
-      {suite.failureReason ? <p className="warn">{suite.failureReason}</p> : null}
+    <span className={`bench-status bench-status-${status.toLowerCase()}`}>
+      <span aria-hidden="true">{status === "COMPLETED" ? "✓" : status === "PENDING" ? "○" : "●"}</span>
+      {STATUS_TEXT[status] ?? status}
+    </span>
+  );
+}
+
+const plural = (count, one, many) => (count === 1 ? one : many);
+const listText = (items) => (items.length <= 1 ? items.join("")
+  : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`);
+
+/** The suite on screen: status, setup, why it stopped early, and each run's outcome. */
+function SuiteCard({ suite, latest, busy, running, onRerun }) {
+  const { comparison } = suite;
+  const missing = unfinishedPolicies(suite);
+  const stoppedEarly = (suite.status === "ABORTED" || suite.status === "FAILED") && missing.length > 0;
+  const names = missing.map((policy) => POLICY_LABELS[policy] ?? policy);
+  return (
+    <section className="card bench-run" aria-label={latest ? "Latest run" : "Earlier run"}>
+      <header className="card-head">
+        <div className="bench-run-title">
+          <h2>{latest ? "Latest run" : "Earlier run"}</h2>
+          <RunStatus status={suite.status} />
+        </div>
+        <p className="mono bench-run-setup">{suiteSetupText(suite)}</p>
+      </header>
+
+      {stoppedEarly ? (
+        <div className="bench-alert" role="status">
+          <Icon name="info" />
+          <div>
+            <strong>{suite.failureReason ?? "This benchmark stopped before every policy ran."}</strong>
+            <p>
+              {listText(names)} didn't finish and {plural(missing.length, "is", "are")} left out of the results below.
+              Run {plural(missing.length, "it", "them")} again to compare all {suite.runs.length}.
+            </p>
+          </div>
+          {onRerun ? (
+            <button type="button" className="link" disabled={busy || running} onClick={() => onRerun(suite)}>
+              Run all {suite.runs.length} again
+            </button>
+          ) : null}
+        </div>
+      ) : suite.failureReason ? <p className="bench-alert-inline">{suite.failureReason}</p> : null}
+
+      {suite.progress ? (
+        <div className="bench-progress" role="status">
+          <span>
+            Running {POLICY_LABELS[suite.progress.policy]} ({suite.progress.position + 1} of {suite.progress.totalRuns})
+            · {suite.progress.finishedJobs}/{suite.progress.totalJobs} jobs finished
+          </span>
+          <progress max={100} value={Math.round(suiteProgress(suite) * 100)}
+            aria-label="Benchmark progress">{Math.round(suiteProgress(suite) * 100)}%</progress>
+        </div>
+      ) : null}
 
       <div className="table-scroll">
-        <table className="grid bench-runs">
+        <table className="data-table bench-runs">
           <caption className="sr-only">Runs in this benchmark, in the order they ran</caption>
           <thead>
             <tr>
               <th scope="col">Policy</th>
               <th scope="col">Status</th>
-              <th scope="col">Completed</th>
-              <th scope="col">Failed</th>
+              <th scope="col" className="num">Completed</th>
+              <th scope="col" className="num">Failed</th>
               <th scope="col">Capacity</th>
-              <th scope="col">Note</th>
             </tr>
           </thead>
           <tbody>
             {suite.runs.map((run) => (
               <tr key={run.id}>
                 <th scope="row"><PolicyName policy={run.policy} /></th>
-                <td><span className={`badge ${STATUS_BADGE[run.status]}`}>{STATUS_TEXT[run.status]}</span></td>
-                <td>{run.status === "PENDING" ? "—" : `${run.completedJobs}/${run.jobCount}`}</td>
-                <td>{run.status === "PENDING" ? "—" : run.failedJobs}</td>
-                <td>{run.workerCount === null
-                  ? "—" : `${run.workerCount} workers · ${run.cpuCapacityMillicores}m · ${run.memoryCapacityMiB} MiB`}</td>
-                <td>{run.failureReason ?? ""}</td>
+                <td>
+                  <RunStatus status={run.status} />
+                  {run.failureReason && run.failureReason !== suite.failureReason
+                    ? <small className="bench-run-note">{run.failureReason}</small> : null}
+                </td>
+                <td className="num mono">{run.status === "PENDING" ? "—" : `${run.completedJobs}/${run.jobCount}`}</td>
+                <td className="num mono">{run.status === "PENDING" ? "—" : run.failedJobs}</td>
+                <td className="mono bench-capacity">{run.workerCount === null || run.workerCount === undefined
+                  ? "Not started" : `${run.workerCount} workers · ${run.cpuCapacityMillicores}m · ${run.memoryCapacityMiB} MiB`}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-
-      {comparison.finishedRuns === 0 ? (
-        <p className="muted">No run has finished yet, so there is nothing to compare.</p>
-      ) : (
-        <>
-          <p className={comparison.comparable ? "hint" : "hint bench-caution"}>
+      <footer className="card-foot">
+        {comparison.finishedRuns === 0 ? (
+          <span>No run has finished yet, so there is nothing to compare.</span>
+        ) : (
+          <span className={comparison.comparable ? undefined : "bench-caution"}>
             {comparison.comparable
-              ? "Every run did byte-identical work (matching result checksums) on the same cluster capacity, so the numbers compare directly."
+              ? "Completed runs did identical work (matching result checksums) on the same capacity, so their numbers compare directly."
               : comparison.notes.join(" ")}
             {comparison.comparable && comparison.notes.length ? ` ${comparison.notes.join(" ")}` : ""}
-          </p>
-          <div className="table-scroll">
-            <table className="grid bench-table">
-              <caption className="sr-only">Measured metrics per policy; the best value per row is marked</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Metric</th>
-                  {finishedPolicies.map((policy) => (
-                    <th scope="col" key={policy}><PolicyName policy={policy} /></th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {charted.map((metric) => (
-                  <tr key={metric.key}>
-                    <th scope="row">{metric.label}</th>
-                    {metric.values.map((entry) => (
-                      <td key={entry.policy} className={metric.best.includes(entry.policy) ? "is-best" : undefined}>
-                        {formatMetric(entry.value, metric.unit)}
-                        {metric.best.includes(entry.policy) ? <span className="bench-best"> best</span> : null}
-                      </td>
-                    ))}
+          </span>
+        )}
+      </footer>
+    </section>
+  );
+}
+
+/** The measured comparison: one row per metric, a bar per policy, the change, and who was better. */
+function ResultsCard({ suite }) {
+  const { comparison } = suite;
+  const finished = suite.runs.filter((run) => run.status === "COMPLETED").map((run) => run.policy);
+  const baseline = finished[0];
+  const metrics = comparison.metrics.map((metric) => ({
+    ...metric,
+    values: metric.values.filter((entry) => finished.includes(entry.policy)),
+  }));
+  return (
+    <section className="card bench-results-card" aria-labelledby="bench-results-title">
+      <header className="card-head">
+        <div>
+          <h2 id="bench-results-title">Results: {finished.map((policy) => POLICY_LABELS[policy]).join(" vs ")}</h2>
+          <p className="bench-summary-text">{resultSummary({ ...comparison, metrics })}</p>
+        </div>
+        <ul className="bench-legend" aria-label="Policy colours">
+          {finished.map((policy) => <li key={policy}><PolicyName policy={policy} /></li>)}
+        </ul>
+      </header>
+      <div className="table-scroll">
+        <table className="data-table bench-results">
+          <caption className="sr-only">
+            Measured metrics per policy. Difference is relative to {POLICY_LABELS[baseline]}; the better value is bold.
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Metric</th>
+              <th scope="col" colSpan={2}>Comparison</th>
+              <th scope="col" className="num">Difference</th>
+              <th scope="col">Better</th>
+            </tr>
+          </thead>
+          {metrics.map((metric) => {
+            const best = new Set(metric.best);
+            const widths = barWidths(metric.values);
+            const base = metric.values.find((entry) => entry.policy === baseline)?.value ?? null;
+            const heading = (rows) => (
+              <th scope="rowgroup" rowSpan={rows}>
+                {metric.label}
+                <small>{metric.better === "lower" ? "Lower is better" : "Higher is better"}</small>
+              </th>
+            );
+            const better = (rows) => (
+              <td rowSpan={rows} className="bench-better">
+                {metric.best.length ? metric.best.map((policy) => <PolicyName key={policy} policy={policy} />) : "Tie"}
+              </td>
+            );
+            if (allEqual(metric.values)) {
+              return (
+                <tbody key={metric.key}>
+                  <tr>
+                    {heading(1)}
+                    <td colSpan={2} className="bench-equal">
+                      {metric.values.length === 2 ? "Both" : "All"} {formatMetric(metric.values[0].value, metric.unit)}
+                      {metric.key === "preemptions" && metric.values[0].value === 0 ? ", no policy preempted a job" : ""}
+                    </td>
+                    <td className="num mono">—</td>
+                    {better(1)}
+                  </tr>
+                </tbody>
+              );
+            }
+            return (
+              <tbody key={metric.key}>
+                {metric.values.map((entry, index) => (
+                  <tr key={entry.policy} className={`${policyClass(entry.policy)}${best.has(entry.policy) ? " is-best" : ""}`}>
+                    {index === 0 ? heading(metric.values.length) : null}
+                    <td className="bench-bar-cell">
+                      <span className="bench-track" aria-hidden="true">
+                        {entry.value !== null && entry.value !== undefined
+                          ? <span style={{ width: `${Math.max(widths[index], entry.value > 0 ? 1 : 0)}%` }} /> : null}
+                      </span>
+                      <span className="sr-only">{POLICY_LABELS[entry.policy]}</span>
+                    </td>
+                    <td className="num mono bench-value">{formatMetric(entry.value, metric.unit)}</td>
+                    <td className="num mono bench-diff">
+                      {entry.policy === baseline ? "" : percentChange(entry.value, base) ?? "—"}
+                    </td>
+                    {index === 0 ? better(metric.values.length) : null}
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
-          {finishedPolicies.length > 1 ? (
-            <ul className="bench-legend" aria-label="Chart colours">
-              {finishedPolicies.map((policy) => <li key={policy}><PolicyName policy={policy} /></li>)}
-              <li className="bench-legend-best">Outlined bar with ★ = best</li>
-            </ul>
-          ) : null}
-          {finishedPolicies.length > 1 ? (
-            <div className="bench-charts">
-              {charted.map((metric) => <MetricChart key={metric.key} metric={metric} />)}
-            </div>
-          ) : null}
-          <p className="hint">
-            Waiting, turnaround, and response cover completed jobs only. Waiting excludes time spent running,
-            so a Round Robin job paused by preemption counts its queue time again. Makespan runs from the first
-            arrival to the last completion. ★ and an outline mark the best value; values within a millisecond
-            count as a tie.
+            );
+          })}
+        </table>
+      </div>
+      <footer className="card-foot bench-results-foot">
+        <span>
+          Difference is relative to {POLICY_LABELS[baseline]}. The better value in each row is bold; values within a
+          millisecond count as a tie.
+        </span>
+        <details>
+          <summary>How these are measured</summary>
+          <p>
+            Waiting, turnaround, and response cover completed jobs only. Waiting excludes time spent running, so a
+            Round Robin job paused by preemption counts its queue time again. Makespan runs from the first arrival to
+            the last completion; throughput is completed jobs per minute of makespan.
           </p>
-        </>
-      )}
-    </div>
+        </details>
+      </footer>
+    </section>
   );
 }
 
 /** Pure view, so every state can be rendered and tested without a backend. */
 export function BenchmarkView({
-  data, selectedId, onSelect, form, onFormChange, onStart, onAbort, busy = false, error = null,
+  data, selectedId, onSelect, form, onFormChange, onStart, onAbort, onRerun, busy = false, error = null,
+  modeSwitch = null, unfinishedJobs = null,
 }) {
   const suites = data?.suites ?? [];
   const activeId = data?.activeSuiteId ?? null;
@@ -255,108 +337,116 @@ export function BenchmarkView({
       ? form.policies.filter((entry) => entry !== policy)
       : [...form.policies, policy],
   });
+  const count = form.policies.length;
+  const status = running ? { tone: "live", label: "Benchmark running" }
+    : unfinishedJobs ? { tone: "idle", label: `${unfinishedJobs} ${plural(unfinishedJobs, "job", "jobs")} unfinished` }
+      : unfinishedJobs === 0 ? { tone: "idle", label: "Cluster idle" } : null;
   return (
-    <section className="panel bench-panel" aria-label="Policy benchmark" aria-busy={running}>
-      <header className="panel-head">
-        <div>
-          <p className="eyebrow">Benchmark</p>
-          <h2>Policy comparison</h2>
-        </div>
-        <span className={`badge ${running ? "badge-busy" : "badge-idle"}`}>{running ? "RUNNING" : "IDLE"}</span>
-      </header>
+    <div className="bench-page" aria-busy={running}>
+      {modeSwitch}
+      <PageHeader title="Scheduling policy comparison" status={status}
+        subtitle="Run one seeded workload under each policy, one after another, and compare what was measured." />
 
-      <p className="hint">
-        Runs the same seeded workload once per policy through the real scheduler, placement, reservation, and
-        Docker pipeline, one policy after another. It needs an idle cluster. While it runs, the controls that
-        would change its work are locked and autoscaling is held so capacity stays fixed.
-      </p>
-
-      <form className="bench-form" onSubmit={(event) => { event.preventDefault(); onStart(); }}>
-        <fieldset className="bench-policies" disabled={locked}>
-          <legend>Policies</legend>
-          {POLICIES.map((policy) => (
-            <label key={policy}>
-              <input type="checkbox" checked={form.policies.includes(policy)}
-                onChange={() => togglePolicy(policy)} />
-              {POLICY_LABELS[policy]}
+      <form className="card bench-new" aria-label="New benchmark" onSubmit={(event) => { event.preventDefault(); onStart(); }}>
+        <header className="card-head">
+          <div>
+            <h2>New benchmark</h2>
+            <p>
+              Uses the real scheduler, placement, and Docker pipeline. Needs an idle cluster; autoscaling is paused
+              while it runs so capacity stays fixed.
+            </p>
+          </div>
+        </header>
+        <div className="bench-new-body">
+          <fieldset className="bench-policies" disabled={locked}>
+            <legend>Policies</legend>
+            {POLICIES.map((policy) => (
+              <label key={policy} className={form.policies.includes(policy) ? "is-on" : undefined}>
+                <input type="checkbox" checked={form.policies.includes(policy)} onChange={() => togglePolicy(policy)} />
+                <span className={`policy-swatch ${policyClass(policy)}`} aria-hidden="true" />
+                {POLICY_LABELS[policy]}
+              </label>
+            ))}
+          </fieldset>
+          <div className="bench-fields">
+            <label htmlFor="bench-count">Jobs
+              <select id="bench-count" value={form.count} disabled={locked}
+                onChange={(event) => set({ count: Number(event.target.value) })}>
+                {COUNTS.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
             </label>
-          ))}
-        </fieldset>
-        <label htmlFor="bench-count">Jobs
-          <select id="bench-count" value={form.count} disabled={locked}
-            onChange={(event) => set({ count: Number(event.target.value) })}>
-            {COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}
-          </select>
-        </label>
-        <label htmlFor="bench-pattern">Arrival pattern
-          <select id="bench-pattern" value={form.pattern} disabled={locked}
-            onChange={(event) => set({ pattern: event.target.value })}>
-            {PATTERNS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-        </label>
-        <label htmlFor="bench-profile">Workload type
-          <select id="bench-profile" value={form.profile} disabled={locked}
-            onChange={(event) => set({ profile: event.target.value })}>
-            {PROFILES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-        </label>
-        <label htmlFor="bench-strategy">Placement
-          <select id="bench-strategy" value={form.strategy} disabled={locked}
-            onChange={(event) => set({ strategy: event.target.value })}>
-            {STRATEGIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-        </label>
-        <label htmlFor="bench-seed">Seed
-          <input id="bench-seed" type="number" min={0} max={2147483647} step={1} required value={form.seed}
-            disabled={locked} onChange={(event) => set({ seed: event.target.value })} />
-        </label>
-        <label htmlFor="bench-quantum">Round Robin quantum (s)
-          <input id="bench-quantum" type="number" min={1} max={3600} step={1} required
-            value={form.timeQuantumSeconds} disabled={locked || !form.policies.includes("ROUND_ROBIN")}
-            onChange={(event) => set({ timeQuantumSeconds: event.target.value })} />
-        </label>
-        <label htmlFor="bench-tick">Jobs started per tick
-          <input id="bench-tick" type="number" min={1} max={25} step={1} required value={form.jobsPerTick}
-            disabled={locked} onChange={(event) => set({ jobsPerTick: event.target.value })} />
-        </label>
-        <div className="stage-buttons bench-actions">
-          {running ? (
-            <button type="button" className="btn btn-stop" disabled={busy || active?.abortRequested}
-              onClick={() => onAbort(activeId)}>
-              <Icon name="stop" />{active?.abortRequested ? "Stopping…" : "Stop benchmark"}
-            </button>
-          ) : (
-            <button type="submit" className="btn btn-primary" disabled={busy || form.policies.length === 0}>
-              <Icon name="play" />{busy ? "Starting…" : `Run ${form.policies.length} ${form.policies.length === 1 ? "policy" : "policies"}`}
-            </button>
-          )}
+            <label htmlFor="bench-pattern">Arrival pattern
+              <select id="bench-pattern" value={form.pattern} disabled={locked}
+                onChange={(event) => set({ pattern: event.target.value })}>
+                {PATTERNS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <label htmlFor="bench-profile">Workload type
+              <select id="bench-profile" value={form.profile} disabled={locked}
+                onChange={(event) => set({ profile: event.target.value })}>
+                {PROFILES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <label htmlFor="bench-strategy">Placement
+              <select id="bench-strategy" value={form.strategy} disabled={locked}
+                onChange={(event) => set({ strategy: event.target.value })}>
+                {STRATEGIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <label htmlFor="bench-seed">Seed
+              <input id="bench-seed" type="number" min={0} max={2147483647} step={1} required value={form.seed}
+                disabled={locked} onChange={(event) => set({ seed: event.target.value })} />
+            </label>
+            <label htmlFor="bench-quantum">Round Robin quantum
+              <span className="input-suffix">
+                <input id="bench-quantum" type="number" min={1} max={3600} step={1} required
+                  value={form.timeQuantumSeconds} disabled={locked || !form.policies.includes("ROUND_ROBIN")}
+                  onChange={(event) => set({ timeQuantumSeconds: event.target.value })} />
+                <span aria-hidden="true">sec</span>
+              </span>
+            </label>
+            <label htmlFor="bench-tick">Jobs started per tick
+              <input id="bench-tick" type="number" min={1} max={25} step={1} required value={form.jobsPerTick}
+                disabled={locked} onChange={(event) => set({ jobsPerTick: event.target.value })} />
+            </label>
+          </div>
+          <div className="bench-actions">
+            {running ? (
+              <button type="button" className="btn btn-stop" disabled={busy || active?.abortRequested}
+                onClick={() => onAbort(activeId)}>
+                <Icon name="stop" />{active?.abortRequested ? "Stopping…" : "Stop benchmark"}
+              </button>
+            ) : (
+              <button type="submit" className="btn btn-primary" disabled={busy || count === 0}>
+                <Icon name="play" />{busy ? "Starting…" : `Run ${count} ${plural(count, "policy", "policies")}`}
+              </button>
+            )}
+            <small>
+              {running ? "Pipeline controls are locked until it finishes or you stop it."
+                : count === 0 ? "Choose at least one policy."
+                  : `Runs them one after another on the same ${form.count} jobs${unfinishedJobs
+                    ? `. ${unfinishedJobs} unfinished ${plural(unfinishedJobs, "job", "jobs")} must finish or be stopped first` : ""}.`}
+            </small>
+          </div>
         </div>
       </form>
 
-      {error ? <p className="warn" role="alert">{error}</p> : null}
+      {error ? <p className="error-banner" role="alert">{error}</p> : null}
 
-      {active?.progress ? (
-        <div className="bench-progress" role="status">
-          <span>
-            Running {POLICY_LABELS[active.progress.policy]} ({active.progress.position + 1} of{" "}
-            {active.progress.totalRuns}) · {active.progress.finishedJobs}/{active.progress.totalJobs} jobs finished
-          </span>
-          <progress max={100} value={Math.round(suiteProgress(active) * 100)}
-            aria-label="Benchmark progress">{Math.round(suiteProgress(active) * 100)}%</progress>
-        </div>
-      ) : running ? (
-        <p className="muted" role="status">Preparing the first run…</p>
-      ) : null}
-
-      {selected ? <SuiteResults suite={selected} /> : (
-        <p className="muted">{data ? "No benchmarks yet. Choose policies and run one." : "Loading benchmarks…"}</p>
+      {selected ? (
+        <>
+          <SuiteCard suite={selected} latest={selected.id === suites[0]?.id} busy={busy} running={running} onRerun={onRerun} />
+          {selected.comparison.finishedRuns >= 2 ? <ResultsCard suite={selected} /> : null}
+        </>
+      ) : (
+        <p className="muted bench-empty">{data ? "No benchmarks yet. Choose policies and run one." : "Loading benchmarks…"}</p>
       )}
 
       {suites.length > 1 ? (
-        <details className="stage-controls">
-          <summary>Earlier benchmarks ({suites.length})</summary>
+        <details className="card bench-earlier">
+          <summary>Earlier benchmarks <span className="count mono">{suites.length}</span></summary>
           <div className="table-scroll">
-            <table className="grid">
+            <table className="data-table">
               <caption className="sr-only">Recent benchmarks, newest first</caption>
               <thead>
                 <tr>
@@ -370,12 +460,16 @@ export function BenchmarkView({
               <tbody>
                 {suites.map((suite) => (
                   <tr key={suite.id}>
-                    <td><time dateTime={suite.startedAt}>{time(suite.startedAt)}</time></td>
-                    <td><span className={`badge ${STATUS_BADGE[suite.status]}`}>{STATUS_TEXT[suite.status]}</span></td>
-                    <td>{suite.jobCount} jobs · {suite.pattern.toLowerCase()} · seed {suite.seed}</td>
-                    <td>{suite.runs.map((run) => POLICY_LABELS[run.policy]).join(", ")}</td>
+                    <td className="mono"><time dateTime={suite.startedAt}>{time(suite.startedAt)}</time></td>
+                    <td><RunStatus status={suite.status} /></td>
+                    <td>{suite.jobCount} jobs · {String(suite.pattern).toLowerCase()} · seed {suite.seed}</td>
                     <td>
-                      <button type="button" className="btn btn-ghost" aria-pressed={suite.id === selected?.id}
+                      <span className="bench-policy-list">
+                        {suite.runs.map((run) => <Fragment key={run.id}><PolicyName policy={run.policy} /></Fragment>)}
+                      </span>
+                    </td>
+                    <td>
+                      <button type="button" className="btn btn-ghost btn-small" aria-pressed={suite.id === selected?.id}
                         onClick={() => onSelect(suite.id)}>
                         {suite.id === selected?.id ? "Showing" : "Show"}
                       </button>
@@ -387,12 +481,12 @@ export function BenchmarkView({
           </div>
         </details>
       ) : null}
-    </section>
+    </div>
   );
 }
 
 /** Polls the backend and owns the form; all measurement happens server-side. */
-export function BenchmarkPanel() {
+export function BenchmarkPanel({ modeSwitch = null, unfinishedJobs = null }) {
   const [data, setData] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [form, setForm] = useState(DEFAULT_BENCHMARK_FORM);
@@ -435,6 +529,10 @@ export function BenchmarkPanel() {
       await refresh();
     }
   };
+  const start = (request) => act(async () => {
+    const suite = await startBenchmark(request);
+    setSelectedId(suite.id);
+  });
   return (
     <BenchmarkView
       data={data}
@@ -444,10 +542,10 @@ export function BenchmarkPanel() {
       onFormChange={setForm}
       busy={busy}
       error={error}
-      onStart={() => act(async () => {
-        const suite = await startBenchmark(toBenchmarkRequest(form));
-        setSelectedId(suite.id);
-      })}
+      modeSwitch={modeSwitch}
+      unfinishedJobs={unfinishedJobs}
+      onStart={() => start(toBenchmarkRequest(form))}
+      onRerun={(suite) => start(rerunBenchmarkRequest(suite))}
       onAbort={(id) => act(() => abortBenchmark(id))}
     />
   );

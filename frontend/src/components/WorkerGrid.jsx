@@ -1,61 +1,84 @@
-import { CapacityGauge } from "./CapacityGauge.jsx";
+/** Share of capacity as a 0–100 bar width; capacity zero has no bar. */
+export function barWidth(used, capacity) {
+  if (!capacity) return 0;
+  return Math.max(0, Math.min(100, (used / capacity) * 100));
+}
+
+function ReservedBar({ used, capacity, unit, kind }) {
+  return (
+    <div className={`res-bar res-${kind}`}>
+      <span className="res-track" aria-hidden="true"><span style={{ width: `${barWidth(used, capacity)}%` }} /></span>
+      <span className="res-value mono">{used} / {capacity}{unit}</span>
+    </div>
+  );
+}
 
 /**
- * Worker counters reflect capacity committed by transactional reservations.
- * Each card also carries the worker's finished attempts, so there is one place
- * to read a worker rather than a card here and a table elsewhere.
+ * Workers as a table. Counters are capacity committed by transactional
+ * reservations, not live RAM use. Each row carries the worker's running
+ * containers and its finished attempts, so there is one place to read a worker.
  */
-export function WorkerGrid({ workers, onSelectJob, title = "Workers" }) {
+export function WorkerGrid({ workers, onSelectJob, title = "Workers", settingsHref = null }) {
+  const totalCpu = workers.reduce((sum, worker) => sum + worker.cpuCapacityMillicores, 0);
+  const totalMemory = workers.reduce((sum, worker) => sum + worker.memoryCapacityMiB, 0);
   return (
-    <section className="panel worker-panel" aria-label="Workers">
-      <header className="panel-head">
+    <section className="card workers-card" aria-label={title}>
+      <header className="card-head">
         <div>
           <h2>{title}</h2>
+          <p>Bars show reserved limits, not live RAM usage</p>
         </div>
+        <ul className="res-legend" aria-label="Bar colours">
+          <li className="res-cpu"><span aria-hidden="true" />CPU</li>
+          <li className="res-memory"><span aria-hidden="true" />Memory</li>
+        </ul>
       </header>
-      <p className="hint worker-explanation">
-        Rings show reserved limits, not the actual RAM usage
-      </p>
-      <div className="worker-grid">
-        {workers.map((worker) => (
-          <article key={worker.id} className="worker-card">
-            <header>
-              <strong className="mono">{worker.name}</strong>
-              {worker.autoscaled ? (
-                <span className="badge badge-auto" title="Added by the autoscaler">auto</span>
-              ) : null}
-              <span className={`badge badge-${worker.status.toLowerCase()}`}>
-                {worker.status}
-              </span>
-            </header>
-            <CapacityGauge cpu={worker.cpuUtilization} memory={worker.memoryUtilization}
-              label={`${worker.name} capacity`} caption={worker.status === "IDLE" ? "idle" : "reserved"} />
-            <dl className="capacity-legend">
-              <div>
-                <dt title="Millicores: 1000m = 1 CPU core"><span className="metric-dot cpu-dot" />CPU reserved</dt>
-                <dd>{worker.cpuAllocatedMillicores} / {worker.cpuCapacityMillicores} m</dd>
-              </div>
-              <div>
-                <dt><span className="metric-dot memory-dot" />Memory reserved</dt>
-                <dd>{worker.memoryAllocatedMiB} / {worker.memoryCapacityMiB} MiB</dd>
-              </div>
-            </dl>
-            <p className="worker-outcomes" title="Finished container attempts on this worker">
-              {worker.jobsCompleted ?? 0} completed · {worker.jobsFailed ?? 0} failed
-            </p>
-            <div className="worker-running">
-              {worker.runningJobs.length === 0 ? (
-                <small className="muted">No container running</small>
-              ) : worker.runningJobs.map((job) => (
-                <button key={job.jobId} type="button" className="chip chip-live"
-                  onClick={() => onSelectJob(job.jobId)}>
-                  {job.jobName}{job.containerShortId ? ` · ${job.containerShortId}` : ""}
-                </button>
-              ))}
-            </div>
-          </article>
-        ))}
+      <div className="table-scroll">
+        <table className="data-table worker-table">
+          <thead>
+            <tr>
+              <th scope="col">Worker</th>
+              <th scope="col" title="Millicores: 1000m = 1 CPU core">CPU reserved</th>
+              <th scope="col">Memory reserved</th>
+              <th scope="col" className="num">Jobs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {workers.length === 0 ? (
+              <tr><td colSpan={4} className="table-empty">No workers in service.</td></tr>
+            ) : workers.map((worker) => (
+              <tr key={worker.id}>
+                <th scope="row">
+                  <span className="worker-name mono">{worker.name}</span>
+                  {worker.autoscaled ? <span className="tag" title="Added by the autoscaler">auto</span> : null}
+                  <span className="worker-state">
+                    <span className={`state-dot state-${worker.status.toLowerCase()}`} aria-hidden="true" />
+                    {worker.status.toLowerCase()} ·{" "}
+                    {worker.runningJobs.length === 0 ? "no container" : worker.runningJobs.map((job, index) => (
+                      <span key={job.jobId}>
+                        {index ? ", " : ""}
+                        <button type="button" className="link mono" onClick={() => onSelectJob(job.jobId)}
+                          title={job.containerShortId ? `Container ${job.containerShortId}` : undefined}>
+                          {job.jobName}
+                        </button>
+                      </span>
+                    ))}
+                  </span>
+                </th>
+                <td><ReservedBar used={worker.cpuAllocatedMillicores} capacity={worker.cpuCapacityMillicores} unit="m" kind="cpu" /></td>
+                <td><ReservedBar used={worker.memoryAllocatedMiB} capacity={worker.memoryCapacityMiB} unit=" MiB" kind="memory" /></td>
+                <td className="num mono" title="Finished container attempts on this worker">
+                  <strong>{worker.jobsCompleted ?? 0}</strong> ok · {worker.jobsFailed ?? 0} fail
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
+      <footer className="card-foot">
+        <span>Total capacity <span className="mono">{totalCpu}m · {totalMemory} MiB</span></span>
+        {settingsHref ? <a href={settingsHref}>Autoscaling settings</a> : null}
+      </footer>
     </section>
   );
 }

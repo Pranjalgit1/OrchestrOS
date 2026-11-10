@@ -8,6 +8,8 @@ import "@fontsource/inter/latin-700.css";
 import "@fontsource/roboto-mono/latin-400.css";
 import "./theme.css";
 import "./styles.css";
+import "./ui.css";
+import "./scaling.css";
 const rootElement = document.getElementById("root");
 if (!rootElement) {
   throw new Error("Root element was not found");

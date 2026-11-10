@@ -1,7 +1,16 @@
 export const JOB_STATUSES = ["QUEUED", "SCHEDULED", "RUNNING", "COMPLETED", "FAILED", "INTERRUPTED", "CANCELLED"];
+/** Statuses of jobs that stopped without completing; the "ENDED" filter selects all of them. */
+export const ENDED_STATUSES = ["FAILED", "INTERRUPTED", "CANCELLED"];
 
 export function jobStatusLabel(status) {
+  if (status === "ENDED") return "Ended early";
   return status[0] + status.slice(1).toLowerCase();
+}
+
+function matchesFilter(job, filter) {
+  if (filter === "ALL") return true;
+  if (filter === "ENDED") return ENDED_STATUSES.includes(job.status);
+  return job.status === filter;
 }
 
 function sortValue(job, key) {
@@ -16,7 +25,7 @@ export function selectQueueJobs(jobs, { filter = "ALL", query = "", worker = "AL
   const search = query.trim().toLowerCase();
   return jobs.filter((job) => {
     const haystack = [job.name, job.id, job.workloadType.replace(/_/g, " "), job.assignedWorkerName, job.execution?.containerShortId].join(" ").toLowerCase();
-    return (filter === "ALL" || job.status === filter)
+    return matchesFilter(job, filter)
       && (worker === "ALL" || (worker === "UNASSIGNED" ? !job.assignedWorkerId : job.assignedWorkerId === worker))
       && (!search || haystack.includes(search));
   }).sort((a, b) => {

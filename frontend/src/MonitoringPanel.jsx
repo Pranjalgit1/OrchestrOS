@@ -168,7 +168,6 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
     <section className="monitor" aria-label="Live monitoring">
       <header className="monitor-head">
         <div>
-          <p className="eyebrow">Live monitoring</p>
           <h2>Cluster state</h2>
         </div>
         <details className="monitor-tools">

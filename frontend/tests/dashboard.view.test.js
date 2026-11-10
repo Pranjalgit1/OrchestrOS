@@ -7,12 +7,12 @@ import { createServer } from "vite";
 
 let server;
 let MonitoringView;
-let ServiceHealth;
+let app;
 before(async () => {
   server = await createServer({ root: fileURLToPath(new URL("../", import.meta.url)),
     server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
   ({ MonitoringView } = await server.ssrLoadModule("/src/MonitoringPanel.jsx"));
-  ({ ServiceHealth } = await server.ssrLoadModule("/src/App.jsx"));
+  app = await server.ssrLoadModule("/src/App.jsx");
 });
 after(async () => { await server?.close(); });
 
@@ -84,14 +84,17 @@ test("capacity, queue, throughput, and running containers share one 2 × 2 block
 
 test("a failed health check overrides an old healthy response and recovery clears it", () => {
   const health = { status: "ok", dependencies: { database: "up" } };
-  const failed = render(ServiceHealth, { health, error: "Request timed out", status: { lastCheckedAt: 1000 } });
-  assert.match(failed, /API unavailable/);
-  assert.match(failed, /database unknown/);
-  assert.doesNotMatch(failed, /database connected/);
-  const recovered = render(ServiceHealth, { health, error: null });
-  assert.match(recovered, /API online/);
-  assert.match(recovered, /database connected/);
-  const degraded = render(ServiceHealth, { health: { status: "degraded", dependencies: { database: "down" } } });
-  assert.match(degraded, /API degraded/);
-  assert.match(degraded, /database down/);
+  const rows = (input, extra) => Object.fromEntries(app.serviceRows(app.systemStatus(input), extra)
+    .map((row) => [row.key, row]));
+  const failed = rows({ health, healthError: "Request timed out", runtime: {} }, { latencyMs: 12 });
+  assert.equal(failed.api.value, "down", "an old healthy response does not keep the API up");
+  assert.equal(failed.database.value, "unknown");
+  const recovered = rows({ health, runtime: {} }, { latencyMs: 12, runningContainers: 0, workerCount: 3 });
+  assert.equal(recovered.api.value, "12ms", "the measured round trip");
+  assert.equal(recovered.database.value, "up");
+  assert.equal(recovered.docker.value, "0 / 3", "running containers / workers in service");
+  const degraded = rows({ health: { status: "degraded", dependencies: { database: "down" } }, runtimeError: "Docker: 503" });
+  assert.equal(degraded.database.state, "down");
+  assert.equal(degraded.docker.value, "down");
+  assert.equal(rows({}).api.value, "…", "nothing is claimed before the first check");
 });

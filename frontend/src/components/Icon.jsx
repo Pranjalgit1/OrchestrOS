@@ -17,6 +17,12 @@ const PATHS = {
   camera: "M8 6l2-3h4l2 3h5v14H3V6Zm8 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
   chevron: "m9 5 7 7-7 7",
   workflow: "M4 3h6v6H4ZM14 15h6v6h-6ZM7 9v8h7M10 6h7v9",
+  download: "M12 4v11M7 10l5 5 5-5M5 20h14",
+  scaling: "M4 17l5-5 4 4 7-7M14 9h6v6",
+  compare: "M12 4v16M8 20h8M5 8h14M5 8l-2.5 6a2.5 2.5 0 0 0 5 0ZM19 8l-2.5 6a2.5 2.5 0 0 0 5 0Z",
+  activity: "M3 12h4l3-7 4 14 3-7h4",
+  sun: "M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0",
+  moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z",
 };
 
 /** Small local line icons; decorative icons never replace button labels. */

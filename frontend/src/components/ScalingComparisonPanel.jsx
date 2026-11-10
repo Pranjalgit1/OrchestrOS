@@ -7,54 +7,33 @@ import {
   fetchScalingComparisons,
   startScalingComparison,
 } from "../api";
-import { POLICY_LABELS } from "../benchmark.chart.js";
 import {
+  CHART_METRICS,
   GROUP_TITLES,
-  QUESTIONS,
   STRATEGY_LABELS,
+  STRATEGY_NAMES,
   STRATEGY_ORDER,
-  buildForecastChart,
-  buildTimelines,
   comparisonProgress,
+  exportFileName,
+  forecastPoints,
   formatSeconds,
   formatValue,
   headline,
   metricMeaning,
   reactionText,
+  runPoints,
   strategyClass,
   winnerText,
 } from "../scaling.chart.js";
 import { Icon } from "./Icon.jsx";
+import { PageHeader } from "./PageHeader.jsx";
+import { ScalingChart } from "./ScalingChart.jsx";
+import { ResultsTable, TakeawayCard } from "./ScalingInsights.jsx";
+import { SetupForm, SetupSummary, profileOf, setupItems } from "./ScalingSetup.jsx";
 
 const ACTIVE_POLL_MS = 2_000;
 const IDLE_POLL_MS = 5_000;
-
-const COUNTS = [10, 25, 50];
-const PATTERNS = [
-  ["INCREASING", "Increasing · ramp up (recommended)"],
-  ["BURST", "Burst · 5 jobs every 30s"],
-  ["PERIODIC", "Periodic · repeating"],
-  ["CONSTANT", "Constant · every 10s (control)"],
-  ["DECREASING", "Decreasing · ramp down"],
-  ["HEAVY", "Heavy · 2–6s apart"],
-  ["MEDIUM", "Medium · 8–16s apart"],
-  ["IMMEDIATE", "Immediate · all ready at once"],
-  ["LIGHT", "Light · 20–40s apart"],
-];
-const PROFILES = [
-  ["SLEEP", "Sleep · short pauses"],
-  ["MIXED_COMPUTE", "Mixed compute"],
-  ["CPU_INTENSIVE", "CPU calculations"],
-  ["SORTING", "Sorting"],
-  ["DATA_PROCESSING", "Data processing"],
-  ["MATRIX_MULTIPLICATION", "Matrix products"],
-];
-const POLICIES = ["FCFS", "SJF", "PRIORITY", "ROUND_ROBIN"];
-const PLACEMENTS = [["LEAST_LOADED", "Least Loaded"], ["FIRST_FIT", "First Fit"], ["RESOURCE_AWARE", "Resource-Aware"]];
 const STATUS_TEXT = { PENDING: "Waiting", RUNNING: "Running", COMPLETED: "Completed", FAILED: "Failed", ABORTED: "Stopped" };
-const STATUS_BADGE = {
-  PENDING: "badge-idle", RUNNING: "badge-busy", COMPLETED: "badge-active", FAILED: "badge-failed", ABORTED: "badge-failed",
-};
 
 export const DEFAULT_SCALING_FORM = {
   count: 25,
@@ -66,7 +45,7 @@ export const DEFAULT_SCALING_FORM = {
   timeQuantumSeconds: 5,
 };
 
-/** The request body the backend validates. The order Reactive, then ML, is fixed. */
+/** The request body the backend validates. The order Reactive, then ML-Assisted, is fixed. */
 export function toScalingRequest(form) {
   return {
     count: Number(form.count),
@@ -79,17 +58,103 @@ export function toScalingRequest(form) {
   };
 }
 
+/** The exact request that produced a stored comparison, so re-running repeats it. */
+export function rerunRequest(comparison) {
+  return {
+    count: comparison.jobCount,
+    pattern: comparison.pattern,
+    workloadTypes: comparison.workloadTypes,
+    policy: comparison.schedulingPolicy,
+    strategy: comparison.placementStrategy,
+    seed: comparison.seed,
+    timeQuantumSeconds: comparison.timeQuantumSeconds,
+    jobsPerTick: comparison.jobsPerTick,
+  };
+}
+
+/** A stored comparison's settings as form values, the starting point for a new experiment. */
+export function formFromComparison(comparison) {
+  return {
+    count: comparison.jobCount,
+    pattern: comparison.pattern,
+    profile: profileOf(comparison.workloadTypes),
+    policy: comparison.schedulingPolicy,
+    strategy: comparison.placementStrategy,
+    seed: comparison.seed,
+    timeQuantumSeconds: comparison.timeQuantumSeconds,
+  };
+}
+
 const time = (value) => (value ? new Date(value).toLocaleString(undefined, {
   month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit",
 }) : "—");
 
-/** Colour key; the swatch is decorative, the name carries the meaning. */
-function StrategyName({ strategy }) {
+function seriesFor(runs, metricKey) {
+  return STRATEGY_ORDER.map((strategy) => runs.find((run) => run.strategy === strategy))
+    .filter(Boolean)
+    .map((run) => ({
+      key: run.strategy,
+      label: STRATEGY_LABELS[run.strategy],
+      className: strategyClass(run.strategy),
+      points: runPoints(run, metricKey),
+    }))
+    .filter((entry) => entry.points.length > 0);
+}
+
+function describeSeries(series, metric) {
+  if (series.length === 0) return `${metric.label} over time: no samples yet.`;
+  return `${metric.label} over time. ` + series.map((entry) => {
+    const peak = Math.max(...entry.points.map((point) => point.v));
+    return `${entry.label}: ${entry.points.length} samples over ${formatSeconds(entry.points.at(-1).t)}, ` +
+      `peak ${metric.format(peak)}.`;
+  }).join(" ");
+}
+
+const CHART_OPTIONS = ["utilization", "queue", "workers"];
+
+/** The main chart: one metric at a time for both runs on the same time axis. */
+function TimelineSection({ runs, settings }) {
+  const [metricKey, setMetricKey] = useState("utilization");
+  const metric = CHART_METRICS[metricKey];
+  const series = seriesFor(runs, metricKey);
+  const threshold = metricKey === "queue" ? settings.scaleUpQueueThreshold ?? null
+    : metricKey === "utilization" && typeof settings.scaleUpUtilization === "number"
+      ? settings.scaleUpUtilization * 100 : null;
+  const thresholdText = metricKey === "queue"
+    ? `Scale-up threshold (${threshold} ${threshold === 1 ? "job" : "jobs"})`
+    : `Scale-up threshold (${Math.round(threshold ?? 0)}%)`;
   return (
-    <span className="policy-name">
-      <span className={`policy-swatch ${strategyClass(strategy)}`} aria-hidden="true" />
-      {STRATEGY_LABELS[strategy]}
-    </span>
+    <section className="card sc-chart-card" aria-labelledby="sc-chart-title">
+      <header className="card-head">
+        <div>
+          <h2 id="sc-chart-title">{metric.title}</h2>
+          <p>{metric.description}</p>
+        </div>
+        <div className="sc-toggle" role="group" aria-label="Chart metric">
+          {CHART_OPTIONS.map((key) => (
+            <button key={key} type="button" aria-pressed={key === metricKey} onClick={() => setMetricKey(key)}>
+              {CHART_METRICS[key].toggle}
+            </button>
+          ))}
+        </div>
+      </header>
+      {series.length === 0 ? (
+        <p className="sc-chart-empty">The timeline appears as soon as the first run starts sampling.</p>
+      ) : (
+        <ScalingChart series={series} metric={metric} threshold={threshold}
+          ariaLabel={describeSeries(series, metric)} />
+      )}
+      <ul className="sc-legend" aria-label="Chart key">
+        {STRATEGY_ORDER.map((strategy) => (
+          <li key={strategy} className={strategyClass(strategy)}>
+            <span className="sc-key-line" aria-hidden="true" />{STRATEGY_LABELS[strategy]}
+          </li>
+        ))}
+        {threshold !== null ? (
+          <li className="sc-legend-threshold"><span className="sc-key-line" aria-hidden="true" />{thresholdText}</li>
+        ) : null}
+      </ul>
+    </section>
   );
 }
 
@@ -101,480 +166,284 @@ function displayValue(metric, strategy) {
   return formatValue(value, metric.unit);
 }
 
-/** Two bars on one scale, winner drawn solid; the number beside each carries the meaning. */
-function PairBars({ metric }) {
-  const bars = metric.unit !== "signed-s";
-  const values = [metric.reactive, metric.ml].filter((value) => value !== null);
-  const max = Math.max(0, ...values.map(Math.abs));
-  return (
-    <div className="sc-pair">
-      {STRATEGY_ORDER.map((strategy) => {
-        const value = strategy === "ML" ? metric.ml : metric.reactive;
-        const width = bars && value !== null && max > 0 ? (Math.abs(value) / max) * 100 : 0;
-        const winner = metric.winner === strategy;
-        return (
-          <div key={strategy} className={`sc-pair-row ${strategyClass(strategy)}${winner ? " is-winner" : ""}`}>
-            <span className="sc-pair-name">{STRATEGY_LABELS[strategy]}</span>
-            {bars ? (
-              <span className="sc-pair-track" aria-hidden="true">
-                <span className="sc-pair-bar" style={{ width: `${Math.max(width, value > 0 ? 2 : 0)}%` }} />
-              </span>
-            ) : null}
-            <span className="sc-pair-value">
-              {displayValue(metric, strategy)}
-              {winner ? <span className="sr-only"> (better)</span> : null}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 function winnerClass(metric) {
-  if (metric.winner === "ML") return "sc-chip strategy-ml";
-  if (metric.winner === "REACTIVE") return "sc-chip strategy-reactive";
+  if (metric.winner === "ML" || metric.winner === "REACTIVE") return `sc-chip ${strategyClass(metric.winner)}`;
   return "sc-chip sc-chip-neutral";
 }
 
-/** One question answered by one metric: who won, by how much, and both values. */
-function QuestionCard({ question, metric, settings }) {
-  return (
-    <article className="sc-question">
-      <h4>{question}</h4>
-      <p className={winnerClass(metric)}>{winnerText(metric)}</p>
-      <PairBars metric={metric} />
-      <p className="sc-meaning">{metricMeaning(metric.key, settings)}</p>
-    </article>
-  );
-}
-
-/** Waiting jobs above, workers below, on the same time axis for both runs. */
-function TimelineLane({ lane, chart, threshold }) {
-  const left = 52;
-  const gap = 22;
-  const axis = 24;
-  const height = 6 + chart.queueHeight + gap + chart.workersHeight + axis;
-  const ups = lane.markers.filter((marker) => marker.action === "SCALE_UP").length;
-  const downs = lane.markers.length - ups;
-  const summary = `${STRATEGY_LABELS[lane.strategy]}: up to ${lane.peakQueue} jobs waiting, up to ` +
-    `${lane.peakWorkers} workers, ${ups} worker(s) added and ${downs} retired, finished in ${formatSeconds(lane.durationSeconds)}.`;
-  return (
-    <figure className={`sc-lane ${strategyClass(lane.strategy)}`}>
-      <figcaption>
-        <StrategyName strategy={lane.strategy} />
-        <span>
-          peak {lane.peakQueue} waiting · up to {lane.peakWorkers} workers · {ups} added, {downs} retired ·
-          done in {formatSeconds(lane.durationSeconds)}
-        </span>
-      </figcaption>
-      <svg viewBox={`0 0 ${left + chart.width + 12} ${height}`} role="img" aria-label={summary}>
-        <g transform={`translate(${left} 6)`}>
-          <text className="sc-axis-title" x={-left} y={-0} dominantBaseline="hanging">Jobs</text>
-          <text className="sc-axis-title" x={-left} y={12} dominantBaseline="hanging">waiting</text>
-          {chart.queueTicks.map((tick) => (
-            <g key={`q${tick.value}`}>
-              <line className="sc-grid" x1={0} x2={chart.width} y1={tick.y} y2={tick.y} />
-              <text className="sc-tick" x={-6} y={tick.y} textAnchor="end" dominantBaseline="middle">{tick.value}</text>
-            </g>
-          ))}
-          <path className="sc-queue" d={lane.queueArea} />
-          <line className="sc-threshold" x1={0} x2={chart.width} y1={chart.thresholdY} y2={chart.thresholdY} />
-          <text className="sc-threshold-label" x={chart.width} y={chart.thresholdY - 4} textAnchor="end">
-            scale-up line ({threshold} jobs)
-          </text>
-          <g transform={`translate(0 ${chart.queueHeight + gap})`}>
-            <text className="sc-axis-title" x={-left} y={0} dominantBaseline="hanging">Workers</text>
-            {chart.workerTicks.map((tick) => (
-              <g key={`w${tick.value}`}>
-                <line className="sc-grid" x1={0} x2={chart.width} y1={tick.y} y2={tick.y} />
-                <text className="sc-tick" x={-6} y={tick.y} textAnchor="end" dominantBaseline="middle">{tick.value}</text>
-              </g>
-            ))}
-            <path className="sc-workers" d={lane.workers} />
-            {lane.markers.map((marker, index) => (
-              <path key={index} className={marker.action === "SCALE_UP" ? "sc-marker-up" : "sc-marker-down"}
-                d={marker.action === "SCALE_UP"
-                  ? `M${marker.x - 5},${marker.y - 4} L${marker.x + 5},${marker.y - 4} L${marker.x},${marker.y - 12} Z`
-                  : `M${marker.x - 5},${marker.y - 12} L${marker.x + 5},${marker.y - 12} L${marker.x},${marker.y - 4} Z`} />
-            ))}
-            {chart.xTicks.map((tick) => (
-              <text key={`x${tick.value}`} className="sc-tick" x={tick.x} y={chart.workersHeight + 16} textAnchor="middle">
-                {formatSeconds(tick.value)}
-              </text>
-            ))}
-          </g>
-        </g>
-      </svg>
-    </figure>
-  );
-}
-
-function Timelines({ runs, settings }) {
-  const threshold = settings?.scaleUpQueueThreshold ?? 2;
-  const chart = buildTimelines(runs, { threshold });
-  const lanes = chart.lanes.filter((lane) => !lane.empty);
-  if (lanes.length === 0) return null;
-  return (
-    <section className="sc-section" aria-labelledby="sc-timeline-title">
-      <h3 id="sc-timeline-title">What happened over time</h3>
-      <p className="hint">
-        <strong>How to read it:</strong> the shaded area is jobs waiting. When it rises past the dashed scale-up
-        line, a good autoscaler adds workers (the line below steps up, ▲) so the area drains quickly. Both runs
-        share the same time axis and scales, so a strategy that reacts earlier shows its ▲ further left and a
-        smaller shaded area.
-      </p>
-      {lanes.map((lane) => (
-        <TimelineLane key={lane.strategy} lane={lane} chart={chart} threshold={threshold} />
-      ))}
-      <ul className="bench-legend" aria-label="Timeline key">
-        <li><span className="sc-key sc-key-queue" aria-hidden="true" />Jobs waiting</li>
-        <li><span className="sc-key sc-key-workers" aria-hidden="true" />Workers in service</li>
-        <li>▲ worker added · ▼ worker retired</li>
-        <li><span className="sc-key sc-key-threshold" aria-hidden="true" />Scale-up line</li>
-      </ul>
-    </section>
-  );
-}
-
-function ForecastCheck({ run, settings, forecast }) {
-  const lookAhead = settings?.mlLookAheadSeconds ?? 60;
-  const chart = buildForecastChart(run, lookAhead);
-  if (!chart) return null;
-  const left = 40;
-  return (
-    <section className="sc-section" aria-labelledby="sc-forecast-title">
-      <h3 id="sc-forecast-title">Was the ML forecast right?</h3>
-      <p className="hint">
-        Every few seconds the ML strategy predicts how many jobs will be waiting {lookAhead}s later. Each dashed
-        point is a prediction, drawn at the moment it was predicting; the solid line is what was actually
-        measured then. The closer the lines, the better the forecast.
-        {forecast?.meanAbsError !== null && forecast?.meanAbsError !== undefined
-          ? ` On average the forecast was off by ${forecast.meanAbsError.toFixed(1)} job(s), over ${forecast.pairs} checks.`
-          : ""}
-      </p>
-      <figure className="sc-lane strategy-ml">
-        <svg viewBox={`0 0 ${left + chart.width + 12} ${chart.height + 30}`} role="img"
-          aria-label={`Predicted versus measured waiting jobs for the ML run.${forecast?.meanAbsError != null
-            ? ` Average error ${forecast.meanAbsError.toFixed(1)} jobs.` : ""}`}>
-          <g transform={`translate(${left} 6)`}>
-            {chart.yTicks.map((tick) => (
-              <g key={tick.value}>
-                <line className="sc-grid" x1={0} x2={chart.width} y1={tick.y} y2={tick.y} />
-                <text className="sc-tick" x={-6} y={tick.y} textAnchor="end" dominantBaseline="middle">{tick.value}</text>
-              </g>
-            ))}
-            <path className="sc-actual" d={chart.actual} />
-            <path className="sc-predicted" d={chart.predicted} />
-            {chart.xTicks.map((tick) => (
-              <text key={tick.value} className="sc-tick" x={tick.x} y={chart.height + 16} textAnchor="middle">
-                {formatSeconds(tick.value)}
-              </text>
-            ))}
-          </g>
-        </svg>
-      </figure>
-      <ul className="bench-legend" aria-label="Forecast key">
-        <li><span className="sc-key sc-key-actual" aria-hidden="true" />Measured waiting jobs</li>
-        <li><span className="sc-key sc-key-predicted" aria-hidden="true" />What ML predicted for that moment</li>
-      </ul>
-    </section>
-  );
-}
-
-function ComparisonResults({ comparison }) {
+/** Everything else measured: fairness, all metrics, the forecast check, and the raw run records. */
+function DetailedAnalysis({ comparison }) {
   const result = comparison.comparison;
   const settings = comparison.autoscalerSettings ?? {};
-  const verdict = headline(result);
-  const byKey = Object.fromEntries(result.metrics.map((metric) => [metric.key, metric]));
   const ml = comparison.runs.find((run) => run.strategy === "ML");
-  const groups = Object.keys(GROUP_TITLES);
+  const lookAhead = settings.mlLookAheadSeconds ?? 60;
+  const predicted = ml?.status === "COMPLETED" ? forecastPoints(ml, lookAhead) : [];
+  const forecastSeries = predicted.length > 1 ? [
+    { key: "measured", label: "Measured", className: "series-measured", points: runPoints(ml, "queue") },
+    { key: "predicted", label: "ML predicted", className: "strategy-ml", points: predicted, dashed: true, fill: false },
+  ] : [];
   return (
-    <div className="sc-results">
-      <div className="bench-summary">
-        <span className={`badge ${STATUS_BADGE[comparison.status]}`}>{STATUS_TEXT[comparison.status]}</span>
-        <span>
-          {comparison.jobCount} jobs · {comparison.pattern.toLowerCase()} · seed {comparison.seed} ·{" "}
-          {POLICY_LABELS[comparison.schedulingPolicy]} · {comparison.placementStrategy.replace("_", " ").toLowerCase()} ·
-          started {time(comparison.startedAt)}
-        </span>
-      </div>
-      {comparison.failureReason ? <p className="warn">{comparison.failureReason}</p> : null}
-
-      <div className={`sc-verdict sc-verdict-${verdict.tone}`} role="status">
-        <p className="eyebrow">Verdict</p>
-        <h3>{verdict.title}</h3>
-        <p>{verdict.detail}</p>
-      </div>
+    <details className="card sc-details">
+      <summary>Detailed analysis <small>Every measurement, forecast accuracy, and run records</small></summary>
+      <div className="sc-details-body">
+      <FairnessNote result={result} />
 
       {result.waitVerdict ? (
-        <section className="sc-section" aria-labelledby="sc-glance-title">
-          <h3 id="sc-glance-title">At a glance</h3>
-          <div className="sc-questions">
-            {QUESTIONS.map(({ key, question }) => (
-              <QuestionCard key={key} question={question} metric={byKey[key]} settings={settings} />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      <Timelines runs={comparison.runs} settings={settings} />
-      {ml?.status === "COMPLETED" ? <ForecastCheck run={ml} settings={settings} forecast={result.forecast} /> : null}
-
-      {result.waitVerdict ? (
-        <section className="sc-section" aria-labelledby="sc-detail-title">
-          <h3 id="sc-detail-title">Every measurement</h3>
-          <div className="table-scroll">
-            <table className="grid sc-table">
-              <caption className="sr-only">All measured metrics for both strategies, grouped by what they show</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Measurement</th>
-                  <th scope="col"><StrategyName strategy="REACTIVE" /></th>
-                  <th scope="col"><StrategyName strategy="ML" /></th>
-                  <th scope="col">Result</th>
-                </tr>
-              </thead>
-              {groups.map((group) => (
-                <tbody key={group}>
-                  <tr className="sc-group-row"><th scope="rowgroup" colSpan={4}>{GROUP_TITLES[group]}</th></tr>
-                  {result.metrics.filter((metric) => metric.group === group).map((metric) => (
-                    <tr key={metric.key}>
-                      <th scope="row">
-                        {metric.label}
-                        <span className="sc-meaning">{metricMeaning(metric.key, settings)}</span>
-                      </th>
-                      {STRATEGY_ORDER.map((strategy) => (
-                        <td key={strategy} className={metric.winner === strategy ? "is-best" : undefined}>
-                          {displayValue(metric, strategy)}
-                        </td>
-                      ))}
-                      <td><span className={winnerClass(metric)}>{winnerText(metric)}</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              ))}
-              {result.forecast?.meanAbsError !== null && result.forecast?.meanAbsError !== undefined ? (
-                <tbody>
-                  <tr className="sc-group-row"><th scope="rowgroup" colSpan={4}>Forecast accuracy</th></tr>
-                  <tr>
-                    <th scope="row">
-                      Average forecast error
-                      <span className="sc-meaning">
-                        How far the ML prediction of waiting jobs was from what really happened {settings.mlLookAheadSeconds ?? 60}s later.
-                      </span>
-                    </th>
-                    <td>Does not forecast</td>
-                    <td>{result.forecast.meanAbsError.toFixed(2)} jobs</td>
-                    <td>{result.forecast.pairs} checks</td>
-                  </tr>
-                </tbody>
-              ) : null}
-            </table>
-          </div>
-        </section>
-      ) : null}
-
-      <p className={result.comparable ? "hint" : "hint bench-caution"}>
-        {result.comparable
-          ? "Fair test: both runs did byte-identical work (matching result checksums), started from the same base cluster, and used the same thresholds. Only the autoscaling strategy changed."
-          : result.notes.join(" ")}
-        {" "}Differences under 5% count as “about the same”, because Docker timing varies a little between identical runs.
-        For a paper, repeat the comparison a few times and report the range.
-      </p>
-
-      <details className="stage-controls">
-        <summary>Runs and settings</summary>
-        <div className="table-scroll">
-          <table className="grid">
-            <caption className="sr-only">The two runs, in the order they ran</caption>
+        <div className="table-scroll sc-table-wrap">
+          <table className="data-table sc-table">
+            <caption className="sr-only">All measured metrics for both strategies, grouped by what they show</caption>
             <thead>
               <tr>
-                <th scope="col">Strategy</th>
-                <th scope="col">Status</th>
-                <th scope="col">Completed</th>
-                <th scope="col">Base cluster</th>
-                <th scope="col">Note</th>
+                <th scope="col">Measurement</th>
+                <th scope="col" className="strategy-reactive">Reactive</th>
+                <th scope="col" className="strategy-ml">ML-assisted</th>
+                <th scope="col">Result</th>
               </tr>
             </thead>
-            <tbody>
-              {comparison.runs.map((run) => (
-                <tr key={run.id}>
-                  <th scope="row"><StrategyName strategy={run.strategy} /></th>
-                  <td><span className={`badge ${STATUS_BADGE[run.status]}`}>{STATUS_TEXT[run.status]}</span></td>
-                  <td>{run.status === "PENDING" ? "—" : `${run.completedJobs}/${run.jobCount}`}</td>
-                  <td>{run.workerCount === null || run.workerCount === undefined
-                    ? "—" : `${run.workerCount} workers · ${run.cpuCapacityMillicores}m · ${run.memoryCapacityMiB} MiB`}</td>
-                  <td>{run.failureReason ?? ""}</td>
-                </tr>
-              ))}
-            </tbody>
+            {Object.keys(GROUP_TITLES).map((group) => (
+              <tbody key={group}>
+                <tr className="sc-group-row"><th scope="rowgroup" colSpan={4}>{GROUP_TITLES[group]}</th></tr>
+                {result.metrics.filter((metric) => metric.group === group).map((metric) => (
+                  <tr key={metric.key}>
+                    <th scope="row">
+                      {metric.label}
+                      <span className="sc-meaning">{metricMeaning(metric.key, settings)}</span>
+                    </th>
+                    {STRATEGY_ORDER.map((strategy) => (
+                      <td key={strategy} className={metric.winner === strategy ? "is-best" : undefined}>
+                        {displayValue(metric, strategy)}
+                      </td>
+                    ))}
+                    <td><span className={winnerClass(metric)}>{winnerText(metric)}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            ))}
           </table>
         </div>
-        <p className="hint">
-          Shared autoscaler settings: scale up at {settings.scaleUpQueueThreshold} waiting jobs and{" "}
-          {Math.round((settings.scaleUpUtilization ?? 0) * 100)}% reserved, scale down below{" "}
-          {Math.round((settings.scaleDownUtilization ?? 0) * 100)}%, up to {settings.maxWorkers} extra workers,{" "}
-          {settings.cooldownSeconds}s cooldown, {settings.idleSeconds}s idle before retiring. ML fits the last{" "}
-          {settings.mlWindowPoints} checks and predicts {settings.mlLookAheadSeconds}s ahead.
-        </p>
-      </details>
-    </div>
+      ) : <p className="muted">The full table appears once both runs have completed.</p>}
+
+      {forecastSeries.length ? (
+        <section className="sc-forecast" aria-labelledby="sc-forecast-title">
+          <h3 id="sc-forecast-title">ML forecast accuracy</h3>
+          <p className="hint">
+            Each dashed point is a prediction, drawn at the moment it was predicting ({lookAhead}s ahead); the solid
+            line is the queue measured then.
+            {result.forecast?.meanAbsError !== null && result.forecast?.meanAbsError !== undefined
+              ? ` Average error: ${result.forecast.meanAbsError.toFixed(2)} jobs over ${result.forecast.pairs} checks.` : ""}
+          </p>
+          <ScalingChart series={forecastSeries} metric={CHART_METRICS.queue} height={240}
+            showPoints
+            ariaLabel={`Predicted versus measured waiting jobs for the ML-assisted run.${result.forecast?.meanAbsError != null
+              ? ` Average error ${result.forecast.meanAbsError.toFixed(2)} jobs.` : ""}`} />
+          <ul className="sc-legend" aria-label="Forecast key">
+            <li className="series-measured"><span className="sc-key-line" aria-hidden="true" />Measured waiting jobs</li>
+            <li className="strategy-ml is-dashed"><span className="sc-key-line" aria-hidden="true" />ML-assisted prediction</li>
+          </ul>
+        </section>
+      ) : null}
+
+      <div className="table-scroll sc-table-wrap">
+        <table className="data-table">
+          <caption className="sr-only">The two runs, in the order they ran</caption>
+          <thead>
+            <tr>
+              <th scope="col">Strategy</th>
+              <th scope="col">Status</th>
+              <th scope="col">Completed</th>
+              <th scope="col">Base cluster</th>
+              <th scope="col">Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {comparison.runs.map((run) => (
+              <tr key={run.id}>
+                <th scope="row" className={strategyClass(run.strategy)}>{STRATEGY_NAMES[run.strategy]}</th>
+                <td>{STATUS_TEXT[run.status] ?? run.status}</td>
+                <td>{run.status === "PENDING" ? "—" : `${run.completedJobs}/${run.jobCount}`}</td>
+                <td>{run.workerCount === null || run.workerCount === undefined
+                  ? "N/A" : `${run.workerCount} workers · ${run.cpuCapacityMillicores}m · ${run.memoryCapacityMiB} MiB`}</td>
+                <td>{run.failureReason ?? ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="hint">
+        Shared autoscaler settings: scale up at {settings.scaleUpQueueThreshold} waiting jobs and{" "}
+        {Math.round((settings.scaleUpUtilization ?? 0) * 100)}% reserved, scale down below{" "}
+        {Math.round((settings.scaleDownUtilization ?? 0) * 100)}%, up to {settings.maxWorkers} extra workers,{" "}
+        {settings.cooldownSeconds}s cooldown, {settings.idleSeconds}s idle before retiring. ML-Assisted fits the last{" "}
+        {settings.mlWindowPoints} checks and predicts {settings.mlLookAheadSeconds}s ahead.
+      </p>
+      </div>
+    </details>
+  );
+}
+
+/** Whether both runs really did the same work; a caution also shows above the results. */
+function FairnessNote({ result, cautionOnly = false }) {
+  if (!result?.waitVerdict || (cautionOnly && result.comparable)) return null;
+  return (
+    <p className={`sc-fairness${result.comparable ? "" : " is-caution"}`}>
+      {result.comparable
+        ? "Fair test: both runs did identical work (matching checksums) on the same base cluster and thresholds."
+        : result.notes.join(" ")}
+    </p>
+  );
+}
+
+function ComparisonHistory({ comparisons, shownId, onSelect }) {
+  return (
+    <details className="card sc-earlier">
+      <summary>Earlier comparisons <span className="count mono">{comparisons.length}</span></summary>
+      <div className="table-scroll">
+        <table className="data-table">
+          <caption className="sr-only">Recent comparisons, newest first</caption>
+          <thead>
+            <tr>
+              <th scope="col">Started</th>
+              <th scope="col">Status</th>
+              <th scope="col">Setup</th>
+              <th scope="col">Result</th>
+              <th scope="col"><span className="sr-only">Action</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {comparisons.map((entry) => (
+              <tr key={entry.id}>
+                <td><time dateTime={entry.startedAt}>{time(entry.startedAt)}</time></td>
+                <td>{STATUS_TEXT[entry.status] ?? entry.status}</td>
+                <td>{setupItems(entry).slice(0, 3).map((item) => item.value).join(" · ")} · seed {entry.seed}</td>
+                <td>{headline(entry.comparison).title}</td>
+                <td>
+                  <button type="button" className="btn btn-ghost btn-small" aria-pressed={entry.id === shownId}
+                    onClick={() => onSelect(entry.id)}>
+                    {entry.id === shownId ? "Showing" : "Show"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
   );
 }
 
 /** Pure view, so every state can be rendered and tested without a backend. */
 export function ScalingComparisonView({
-  data, detail, selectedId, onSelect, form, onFormChange, onStart, onAbort, busy = false, error = null,
+  data, detail, selectedId, onSelect, form, onFormChange, onStart, onAbort, onRerun, onExport,
+  formOpen = false, onOpenForm, onCloseForm, busy = false, error = null, modeSwitch = null,
 }) {
   const comparisons = data?.comparisons ?? [];
   const activeId = data?.activeComparisonId ?? null;
   const running = activeId !== null;
   const shownId = selectedId ?? activeId ?? comparisons[0]?.id ?? null;
   const listed = comparisons.find((entry) => entry.id === shownId) ?? null;
-  // The detail carries timelines; until it arrives the list entry still shows the verdict.
+  // The detail carries timelines; until it arrives the list entry still shows the results.
   const shown = detail?.id === shownId ? detail : listed;
   const active = comparisons.find((entry) => entry.id === activeId) ?? null;
-  const locked = running || busy;
-  const set = (patch) => onFormChange({ ...form, ...patch });
+  const showForm = !running && (formOpen || (data !== null && comparisons.length === 0));
+  const settings = shown?.autoscalerSettings ?? {};
+  const progress = shown?.id === activeId ? active?.progress ?? shown?.progress ?? null : null;
+
   return (
-    <section className="panel bench-panel sc-panel" aria-label="Autoscaling comparison" aria-busy={running}>
-      <header className="panel-head">
-        <div>
-          <p className="eyebrow">Autoscaling</p>
-          <h2>Reactive vs ML predictive</h2>
-        </div>
-        <span className={`badge ${running ? "badge-busy" : "badge-idle"}`}>{running ? "RUNNING" : "IDLE"}</span>
-      </header>
-
-      <p className="hint">
-        Runs the same seeded workload twice through the real pipeline: first with <strong>Reactive</strong>{" "}
-        autoscaling, then with <strong>ML predictive</strong>. Everything else stays the same. Before each run the
-        extra workers are retired and the ML history is cleared, so both start equal. It needs an idle cluster
-        and uses the thresholds on the Autoscaling tab.
-      </p>
-
-      <form className="bench-form" onSubmit={(event) => { event.preventDefault(); onStart(); }}>
-        <label htmlFor="sc-count">Jobs
-          <select id="sc-count" value={form.count} disabled={locked}
-            onChange={(event) => set({ count: Number(event.target.value) })}>
-            {COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}
-          </select>
-        </label>
-        <label htmlFor="sc-pattern">Arrival pattern
-          <select id="sc-pattern" value={form.pattern} disabled={locked}
-            onChange={(event) => set({ pattern: event.target.value })}>
-            {PATTERNS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-        </label>
-        <label htmlFor="sc-profile">Workload type
-          <select id="sc-profile" value={form.profile} disabled={locked}
-            onChange={(event) => set({ profile: event.target.value })}>
-            {PROFILES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-        </label>
-        <label htmlFor="sc-policy">Scheduling policy
-          <select id="sc-policy" value={form.policy} disabled={locked}
-            onChange={(event) => set({ policy: event.target.value })}>
-            {POLICIES.map((policy) => <option key={policy} value={policy}>{POLICY_LABELS[policy]}</option>)}
-          </select>
-        </label>
-        <label htmlFor="sc-placement">Placement
-          <select id="sc-placement" value={form.strategy} disabled={locked}
-            onChange={(event) => set({ strategy: event.target.value })}>
-            {PLACEMENTS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-        </label>
-        <label htmlFor="sc-seed">Seed
-          <input id="sc-seed" type="number" min={0} max={2147483647} step={1} required value={form.seed}
-            disabled={locked} onChange={(event) => set({ seed: event.target.value })} />
-        </label>
-        {form.policy === "ROUND_ROBIN" ? (
-          <label htmlFor="sc-quantum">Round Robin quantum (s)
-            <input id="sc-quantum" type="number" min={1} max={3600} step={1} required value={form.timeQuantumSeconds}
-              disabled={locked} onChange={(event) => set({ timeQuantumSeconds: event.target.value })} />
-          </label>
-        ) : null}
-        <div className="stage-buttons bench-actions">
+    <div className="sc-page" aria-busy={running}>
+      {modeSwitch}
+      <PageHeader
+        title="Autoscaling comparison"
+        status={running ? { tone: "live", label: "Running" } : null}
+        subtitle="Reactive and ML-assisted autoscaling, run on the same workload and configuration."
+        actions={(
+        <>
           {running ? (
             <button type="button" className="btn btn-stop" disabled={busy || active?.abortRequested}
               onClick={() => onAbort(activeId)}>
               <Icon name="stop" />{active?.abortRequested ? "Stopping…" : "Stop comparison"}
             </button>
           ) : (
-            <button type="submit" className="btn btn-primary" disabled={busy}>
-              <Icon name="play" />{busy ? "Starting…" : "Compare Reactive vs ML"}
+            <button type="button" className="btn btn-ghost" disabled={busy || !shown}
+              title="Runs again with the same workload settings and the current autoscaler thresholds"
+              onClick={() => onRerun(shown)}>
+              <Icon name="refresh" />Re-run
             </button>
           )}
-        </div>
-      </form>
+          <button type="button" className="btn btn-ghost" disabled={!shown} onClick={() => onExport(shown)}
+            title="Download this comparison, timelines included, as JSON">
+            <Icon name="download" />Export
+          </button>
+          <button type="button" className="btn btn-primary" disabled={busy || running || showForm}
+            onClick={onOpenForm}>
+            <Icon name="plus" />New experiment
+          </button>
+        </>
+        )}
+      />
 
-      {error ? <p className="warn" role="alert">{error}</p> : null}
+      {showForm ? (
+        <SetupForm form={form} onFormChange={onFormChange} onStart={onStart} onCancel={onCloseForm}
+          busy={busy} canCancel={comparisons.length > 0} />
+      ) : shown ? <SetupSummary comparison={shown} onEdit={onOpenForm} canEdit={!busy && !running} /> : null}
 
-      {active?.progress ? (
-        <div className="bench-progress" role="status">
+      {error ? <p className="error-banner" role="alert">{error}</p> : null}
+
+      {running ? (
+        <div className="sc-progress" role="status">
           <span>
-            Running {STRATEGY_LABELS[active.progress.strategy]} ({active.progress.position + 1} of{" "}
-            {active.progress.totalRuns}) · {active.progress.finishedJobs}/{active.progress.totalJobs} jobs finished
+            {active?.progress
+              ? `Running ${STRATEGY_NAMES[active.progress.strategy]} (${active.progress.position + 1} of ` +
+                `${active.progress.totalRuns}) · ${active.progress.finishedJobs}/${active.progress.totalJobs} jobs finished`
+              : "Resetting the cluster for the next run…"}
           </span>
           <progress max={100} value={Math.round(comparisonProgress(active) * 100)}
             aria-label="Comparison progress">{Math.round(comparisonProgress(active) * 100)}%</progress>
         </div>
-      ) : running ? (
-        <p className="muted" role="status">Resetting the cluster for the next run…</p>
       ) : null}
 
-      {shown ? <ComparisonResults comparison={shown} /> : (
-        <p className="muted">
-          {data ? "No comparisons yet. Pick a workload and press Compare Reactive vs ML." : "Loading comparisons…"}
-        </p>
-      )}
+      {!data ? <p className="muted sc-loading" role="status">Loading comparisons…</p> : null}
 
-      {comparisons.length > 1 ? (
-        <details className="stage-controls">
-          <summary>Earlier comparisons ({comparisons.length})</summary>
-          <div className="table-scroll">
-            <table className="grid">
-              <caption className="sr-only">Recent comparisons, newest first</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Started</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Setup</th>
-                  <th scope="col">Verdict</th>
-                  <th scope="col"><span className="sr-only">Action</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {comparisons.map((entry) => (
-                  <tr key={entry.id}>
-                    <td><time dateTime={entry.startedAt}>{time(entry.startedAt)}</time></td>
-                    <td><span className={`badge ${STATUS_BADGE[entry.status]}`}>{STATUS_TEXT[entry.status]}</span></td>
-                    <td>{entry.jobCount} jobs · {entry.pattern.toLowerCase()} · seed {entry.seed}</td>
-                    <td>{headline(entry.comparison).title}</td>
-                    <td>
-                      <button type="button" className="btn btn-ghost" aria-pressed={entry.id === shownId}
-                        onClick={() => onSelect(entry.id)}>
-                        {entry.id === shownId ? "Showing" : "Show"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {shown ? (
+        <>
+          {shown.failureReason ? <p className="warn">{shown.failureReason}</p> : null}
+          <div className="sc-main">
+            <TimelineSection runs={shown.runs} settings={settings} />
+            <TakeawayCard comparison={shown.comparison} runs={shown.runs} settings={settings} progress={progress} />
           </div>
-        </details>
+          <FairnessNote result={shown.comparison} cautionOnly />
+          <ResultsTable comparison={shown.comparison} runs={shown.runs} />
+          {comparisons.length > 0 ? (
+            <ComparisonHistory comparisons={comparisons} shownId={shownId} onSelect={onSelect} />
+          ) : null}
+          <DetailedAnalysis comparison={shown} />
+        </>
+      ) : data && comparisons.length === 0 ? (
+        <p className="muted">No comparisons yet. Choose a workload above and start one.</p>
       ) : null}
-    </section>
+    </div>
   );
 }
 
+/** Saves the shown comparison, timelines included, exactly as the backend returned it. */
+function downloadJson(comparison) {
+  const blob = new Blob([JSON.stringify(comparison, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = exportFileName(comparison);
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 /** Polls the list, fetches timelines for the comparison on screen, and owns the form. */
-export function ScalingComparisonPanel() {
+export function ScalingComparisonPanel({ modeSwitch = null }) {
   const [data, setData] = useState(null);
   const [detail, setDetail] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [form, setForm] = useState(DEFAULT_SCALING_FORM);
+  const [formOpen, setFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const mounted = useRef(true);
@@ -642,6 +511,11 @@ export function ScalingComparisonPanel() {
       await refresh();
     }
   };
+  const start = (request) => act(async () => {
+    const comparison = await startScalingComparison(request);
+    setSelectedId(comparison.id);
+    setFormOpen(false);
+  });
   return (
     <ScalingComparisonView
       data={data}
@@ -650,13 +524,25 @@ export function ScalingComparisonPanel() {
       onSelect={setSelectedId}
       form={form}
       onFormChange={setForm}
+      formOpen={formOpen}
+      onOpenForm={() => {
+        const current = data?.comparisons?.find((entry) => entry.id === shownId);
+        if (current) setForm(formFromComparison(current));
+        setError(null);
+        setFormOpen(true);
+      }}
+      onCloseForm={() => setFormOpen(false)}
       busy={busy}
       error={error}
-      onStart={() => act(async () => {
-        const comparison = await startScalingComparison(toScalingRequest(form));
-        setSelectedId(comparison.id);
+      onStart={() => start(toScalingRequest(form))}
+      onRerun={(comparison) => start(rerunRequest(comparison))}
+      onExport={(comparison) => act(async () => {
+        // Export the full record with timelines, even if only the list entry is on screen.
+        downloadJson(comparison.runs?.every((run) => Array.isArray(run.samples))
+          ? comparison : await fetchScalingComparison(comparison.id));
       })}
       onAbort={(id) => act(() => abortScalingComparison(id))}
+      modeSwitch={modeSwitch}
     />
   );
 }

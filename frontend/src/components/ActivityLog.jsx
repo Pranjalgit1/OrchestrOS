@@ -1,5 +1,3 @@
-import { Icon } from "./Icon.jsx";
-
 /**
  * A running narration of what the backend reported for each action.
  *
@@ -8,26 +6,27 @@ import { Icon } from "./Icon.jsx";
  */
 export function ActivityLog({ entries, onClear }) {
   return (
-    <section className="panel activity-panel" aria-label="Activity log">
-      <header className="panel-head">
+    <section className="card activity-card" aria-label="Activity">
+      <header className="card-head">
         <div>
           <h2>Activity</h2>
         </div>
-        <button type="button" className="btn btn-ghost" onClick={onClear}>
+        <button type="button" className="btn btn-ghost btn-small" onClick={onClear} disabled={entries.length === 0}>
           Clear
         </button>
       </header>
-
-      <div className="activity-viewport">
+      <div className="activity-list">
         {entries.length === 0 ? (
-          <p className="activity-empty muted"><Icon name="chevron" />No actions yet.</p>
+          <p className="activity-empty">No actions yet. Run the orchestrator or add a workload.</p>
         ) : (
-          <ul className="log">
+          <ul>
             {entries.map((entry) => (
-              <li key={entry.id} className={`log-${entry.kind}`}>
-                <span className="log-time mono">{entry.at}</span>
-                <span className="log-label">{entry.label}</span>
-                <span className="log-detail">{entry.detail}</span>
+              <li key={entry.id} className={`activity-${entry.kind}`}>
+                <time className="mono">{entry.at}</time>
+                <span>
+                  <strong>{entry.label}</strong>
+                  {entry.detail ? <> — {entry.detail}</> : null}
+                </span>
               </li>
             ))}
           </ul>

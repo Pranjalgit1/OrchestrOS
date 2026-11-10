@@ -5,219 +5,336 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 import {
-  buildForecastChart,
-  buildTimelines,
+  CHART_METRICS,
+  buildChart,
   comparisonProgress,
+  exportFileName,
+  forecastPoints,
   formatSeconds,
   formatValue,
   headline,
+  hoverTimes,
+  keyTakeaway,
+  nearestTimeIndex,
+  pointAt,
   reactionText,
-  ticks,
+  runPoints,
+  summaryRows,
+  timeTicks,
+  tooltipLeft,
+  valueTicks,
   winnerText,
 } from "../src/scaling.chart.js";
 
 let server;
-let ScalingComparisonView;
-let DEFAULT_SCALING_FORM;
-let toScalingRequest;
+let panel;
 let ComparisonModeSwitch;
+let ScalingChart;
+let app;
 before(async () => {
   server = await createServer({ root: fileURLToPath(new URL("../", import.meta.url)),
     server: { middlewareMode: true, hmr: false, watch: null }, appType: "custom" });
-  ({ ScalingComparisonView, DEFAULT_SCALING_FORM, toScalingRequest } =
-    await server.ssrLoadModule("/src/components/ScalingComparisonPanel.jsx"));
+  panel = await server.ssrLoadModule("/src/components/ScalingComparisonPanel.jsx");
   ({ ComparisonModeSwitch } = await server.ssrLoadModule("/src/components/ComparisonTab.jsx"));
+  ({ ScalingChart } = await server.ssrLoadModule("/src/components/ScalingChart.jsx"));
+  app = await server.ssrLoadModule("/src/App.jsx");
 });
 after(async () => { await server?.close(); });
 
 const render = (component, props) => renderToStaticMarkup(createElement(component, props));
 const start = "2026-11-01T10:00:00.000Z";
-const iso = (seconds) => new Date(Date.parse(start) + seconds * 1_000).toISOString();
 
 // ---------------------------------------------------------------- wording and numbers
 
-test("values read in plain units and never show an unmeasured value as zero", () => {
-  assert.equal(formatSeconds(null), "—");
+test("values read in plain units and an unmeasured value is N/A, never zero", () => {
+  assert.equal(formatSeconds(null), "N/A");
   assert.equal(formatSeconds(12.34), "12.3s");
   assert.equal(formatSeconds(245), "4m 05s");
-  assert.equal(formatValue(118.6, "worker-s"), "119 worker-seconds");
-  assert.equal(formatValue(3, "count"), "3");
-  assert.equal(formatValue(null, "s"), "—");
-});
-
-test("reaction time is described in words, including the cases with no number", () => {
-  assert.equal(reactionText("MEASURED", 6), "6.0s after the backlog began");
-  assert.equal(reactionText("MEASURED", -4), "4.0s before the backlog");
+  assert.equal(formatValue(118.6, "worker-s"), "119 worker-s");
+  assert.equal(formatValue(0, "count"), "0");
+  assert.equal(formatValue(undefined, "s"), "N/A");
   assert.equal(reactionText("BEFORE_ANY_BACKLOG", null), "Before any backlog formed");
-  assert.equal(reactionText("NEVER_SCALED_UP", null), "Never added a worker");
-  assert.equal(reactionText("NOT_NEEDED", null), "Not needed: no backlog");
+  assert.equal(reactionText("MEASURED", -4), "4.0s before the backlog");
 });
 
-test("winner text says who won and by how much", () => {
-  assert.equal(winnerText({ key: "avgWaitSeconds", winner: "ML", reactive: 15.1, ml: 12.3, better: "lower" }),
-    "ML predictive · 19% less");
+test("winner text measures the winner against the strategy that lost", () => {
   assert.equal(winnerText({ key: "extraWorkerSeconds", winner: "REACTIVE", reactive: 200, ml: 300, better: "lower" }),
-    "Reactive · 33% less", "measured against the strategy that lost");
-  assert.equal(winnerText({ key: "flaps", winner: "ML", reactive: 2, ml: 0, better: "lower" }), "ML predictive · 100% less");
-  assert.equal(winnerText({ key: "flaps", winner: "REACTIVE", reactive: 0, ml: 0, better: "lower" }), "Reactive · better");
-  assert.equal(winnerText({ key: "avgWaitSeconds", winner: "TIE", change: 0.01 }), "About the same");
-  assert.equal(winnerText({ key: "reactionSeconds", winner: "ML", reactive: 6, ml: -2 }), "ML predictive · 8.0s sooner");
+    "Reactive · 33% less");
+  assert.equal(winnerText({ key: "avgWaitSeconds", winner: "TIE" }), "About the same");
   assert.equal(winnerText({ key: "avgWaitSeconds", winner: null }), "—");
 });
 
-test("the headline turns the two key verdicts into one sentence", () => {
-  assert.equal(headline({ waitVerdict: "ML", costVerdict: "TIE" }).tone, "ml");
-  assert.match(headline({ waitVerdict: "ML", costVerdict: "REACTIVE" }).title, /trade-off: ML predictive was faster/);
-  assert.equal(headline({ waitVerdict: "REACTIVE", costVerdict: "REACTIVE" }).tone, "reactive");
-  assert.match(headline({ waitVerdict: "TIE", costVerdict: "ML" }).title, /ML predictive did the same job with less capacity/);
+const metric = (key, reactive, ml, winner, change = null, extra = {}) =>
+  ({ key, group: "wait", label: key, unit: "s", better: "lower", reactive, ml, winner, change, ...extra });
+
+test("the key takeaway adapts to the measured result and quotes the numbers", () => {
+  const reactiveFaster = keyTakeaway({ waitVerdict: "REACTIVE", costVerdict: "ML", metrics: [
+    metric("avgWaitSeconds", 6.3, 8.6, "REACTIVE"),
+    { ...metric("extraWorkerSeconds", 18, 0, "ML"), unit: "worker-s" },
+  ] });
+  assert.equal(reactiveFaster.title, "Reactive was faster. ML-assisted used less capacity.");
+  assert.equal(reactiveFaster.tone, "tradeoff");
+  assert.deepEqual(reactiveFaster.points, [
+    "Reactive kept average wait 27% shorter (6.3s vs 8.6s).",
+    "ML-assisted needed 18 fewer extra worker-seconds.",
+  ]);
+  const mlBetter = keyTakeaway({ waitVerdict: "ML", costVerdict: "TIE", metrics: [
+    metric("avgWaitSeconds", 2.5, 1.9, "ML"), metric("extraWorkerSeconds", 30, 31, "TIE"),
+  ] });
+  assert.equal(mlBetter.title, "ML-assisted did better on this workload.");
+  assert.match(mlBetter.points[1], /about the same extra capacity \(30 and 31 worker-seconds\)/);
+  assert.deepEqual(keyTakeaway({ waitVerdict: null }).points, []);
   assert.equal(headline({ waitVerdict: "TIE", costVerdict: "TIE" }).tone, "tie");
-  assert.equal(headline({ waitVerdict: null, costVerdict: null }).tone, "pending");
+});
+
+const run = (strategy, overrides = {}) => ({
+  id: `r-${strategy}`, strategy, status: "COMPLETED", jobCount: 25, completedJobs: 25, startedAt: start,
+  workerCount: 3, cpuCapacityMillicores: 3000, memoryCapacityMiB: 3072, failureReason: null,
+  avgWaitSeconds: 6.3, p95WaitSeconds: 14.4, avgTurnaroundSeconds: 12.6, makespanSeconds: 22.7,
+  extraWorkerSeconds: 18, peakWorkers: 4, scaleUps: 1, scaleDowns: 0, samples: [], ...overrides,
+});
+
+test("result rows compare seconds as a percentage and counts as an absolute difference", () => {
+  const comparison = { metrics: [
+    metric("avgWaitSeconds", 6.3, 8.6, "REACTIVE", 0.365),
+    { ...metric("extraWorkerSeconds", 18, 0, "ML"), unit: "worker-s" },
+    { ...metric("scaleActions", 1, 0, "ML"), unit: "count" },
+  ] };
+  const rows = Object.fromEntries(summaryRows(comparison, [run("REACTIVE"), run("ML", { peakWorkers: 3 })])
+    .map((row) => [row.key, row]));
+  assert.equal(rows.avgWaitSeconds.difference, "+37%");
+  assert.equal(rows.avgWaitSeconds.direction, "up");
+  assert.equal(rows.avgWaitSeconds.winner, "REACTIVE");
+  assert.equal(rows.extraWorkerSeconds.difference, "\u221218", "a percentage of zero would mean nothing");
+  assert.equal(rows.extraWorkerSeconds.reactiveText, "18");
+  assert.equal(rows.extraWorkerSeconds.label, "Extra capacity");
+  assert.equal(rows.extraWorkerSeconds.unitNote, "worker-s");
+  assert.equal(rows.peakWorkers.difference, "\u22121");
+  assert.equal(rows.peakWorkers.winner, "ML", "fewer peak workers is better, judged by the backend's 5% rule");
+  assert.equal(rows.p95WaitSeconds.reactiveText, "14.4s", "falls back to the stored run record");
+  const samePeak = summaryRows(comparison, [run("REACTIVE"), run("ML")]).find((row) => row.key === "peakWorkers");
+  assert.equal(samePeak.winner, "TIE");
+  const unfinished = Object.fromEntries(summaryRows({ metrics: [] }, [run("REACTIVE"), run("ML", { status: "RUNNING" })])
+    .map((row) => [row.key, row]));
+  assert.equal(unfinished.p95WaitSeconds.mlText, "N/A", "a run still in progress has no value yet");
+  assert.equal(unfinished.p95WaitSeconds.difference, "N/A");
+  assert.equal(unfinished.peakWorkers.winner, null, "no verdict before both runs finish");
 });
 
 // ---------------------------------------------------------------- chart geometry
 
-const samples = (points) => points.map(([offsetSeconds, queuedJobs, workersInService, forecastQueuedJobs = null]) => ({
-  offsetSeconds, queuedJobs, workersInService, extraWorkers: workersInService - 3, idleExtraWorkers: 0,
-  peakUtilization: 0.5, forecastQueuedJobs,
-}));
+const samples = (points) => points.map(([offsetSeconds, queuedJobs, workersInService, peakUtilization, forecastQueuedJobs = null]) =>
+  ({ offsetSeconds, queuedJobs, workersInService, peakUtilization, forecastQueuedJobs }));
 
-test("axis ticks run from zero to a round maximum", () => {
-  assert.deepEqual(ticks(37), [0, 12.5, 25, 37.5, 50]);
-  assert.deepEqual(ticks(0), [0, 0.25, 0.5, 0.75, 1]);
+test("ticks are round and start at zero; utilization always spans 0–100%", () => {
+  assert.deepEqual(timeTicks(47), [0, 10, 20, 30, 40, 50]);
+  assert.deepEqual(timeTicks(140), [0, 30, 60, 90, 120, 150]);
+  assert.deepEqual(valueTicks(0.7, { fixedMax: 100 }), [0, 20, 40, 60, 80, 100]);
+  assert.deepEqual(valueTicks(7, { integer: true }), [0, 2, 4, 6, 8]);
+  assert.deepEqual(valueTicks(0, { integer: true }), [0, 1], "an empty queue still has an axis");
 });
 
-test("both timelines share one time axis and one scale per band", () => {
-  const runs = [
-    { strategy: "REACTIVE", startedAt: start, samples: samples([[0, 0, 3], [10, 6, 3], [20, 2, 4]]),
-      scalingActions: [{ at: iso(15), action: "SCALE_UP" }] },
-    { strategy: "ML", startedAt: start, samples: samples([[0, 0, 3], [10, 3, 4], [40, 0, 4]]), scalingActions: [] },
+test("chart geometry keeps the plot inside its margins on a shared time axis", () => {
+  const series = [
+    { key: "REACTIVE", points: runPoints({ samples: samples([[0, 0, 3, 0.2], [20, 5, 4, 0.9], [40, 1, 4, 0.4]]) }, "utilization") },
+    { key: "ML", points: runPoints({ samples: samples([[0, 0, 3, 0.1], [30, 2, 4, 0.6]]) }, "utilization") },
   ];
-  const chart = buildTimelines(runs, { width: 500, queueHeight: 100, workersHeight: 50, threshold: 2 });
-  assert.equal(chart.xTicks.at(-1).value, 50, "the longer run sets the shared axis");
-  assert.equal(chart.xTicks.at(-1).x, 500);
-  assert.equal(chart.lanes[0].peakQueue, 6);
-  assert.equal(chart.lanes[1].peakWorkers, 4);
-  assert.equal(chart.lanes[0].markers.length, 1);
-  assert.equal(chart.lanes[0].markers[0].x, 150, "15 s of 50 s across 500 px");
-  assert.match(chart.lanes[0].workers, /^M0,\d/);
-  assert.match(chart.lanes[0].queueArea, /Z$/, "the waiting area is closed to the baseline");
-  assert.ok(chart.thresholdY > 0 && chart.thresholdY < 100);
-  assert.equal(buildTimelines([{ strategy: "ML", samples: [] }]).lanes[0].empty, true);
+  const chart = buildChart(series, { width: 600, height: 300, fixedMax: 100 });
+  assert.deepEqual(chart.plot, { left: 44, top: 12, width: 540, height: 244, right: 584, bottom: 256 });
+  assert.equal(chart.xTicks.at(-1).value, 40, "the longer run sets the shared axis");
+  assert.equal(chart.xTicks.at(-1).x, chart.plot.right);
+  assert.equal(chart.yTicks.at(-1).value, 100);
+  assert.equal(chart.lines[0].points[1].y, Math.round((256 - 0.9 * 244) * 10) / 10);
+  assert.ok(chart.lines.every((line) => line.points.every((point) =>
+    point.x >= chart.plot.left && point.x <= chart.plot.right && point.y >= chart.plot.top && point.y <= chart.plot.bottom)));
+  const stepped = buildChart([series[0]], { width: 600, height: 300, step: true });
+  assert.match(stepped.lines[0].path, / H\d/);
+  assert.equal(chart.timeAt(chart.plot.left - 50), 0, "the cursor time is clamped to the axis");
 });
 
-test("the forecast chart draws each prediction at the moment it predicted", () => {
-  const run = { samples: samples([[0, 0, 3, 2], [5, 1, 3, 3], [10, 2, 3, 4], [15, 4, 4, null]]) };
-  const chart = buildForecastChart(run, 5, { width: 400, height: 100 });
-  assert.ok(chart);
-  assert.equal(chart.predicted.split("L").length, 3, "predictions at 5, 10 and 15 s; 20 s is past the end");
-  assert.equal(buildForecastChart({ samples: samples([[0, 1, 3]]) }, 5), null, "too little to draw");
+test("hovering shows only measured samples: no interpolation, and N/A after a run ends", () => {
+  const reactive = [{ t: 0, v: 1 }, { t: 2, v: 2 }, { t: 4, v: 3 }];
+  const ml = [{ t: 0.9, v: 5 }, { t: 2.9, v: 6 }, { t: 4.9, v: 7 }, { t: 6.9, v: 8 }, { t: 8.9, v: 9 }];
+  const times = hoverTimes([{ points: reactive }, { points: ml }]);
+  assert.deepEqual(times.slice(0, 3), [0, 0.9, 2]);
+  assert.equal(nearestTimeIndex(times, 2.2), 2);
+  assert.deepEqual(pointAt(reactive, 2.4), { t: 2, v: 2 });
+  assert.equal(pointAt(reactive, 8.9), null, "the reactive run had finished by then");
+  assert.deepEqual(pointAt(ml, 2.4), { t: 2.9, v: 6 });
 });
 
-test("progress counts finished runs plus the live share of the current one", () => {
+test("the tooltip flips at the right edge and never leaves the chart", () => {
+  assert.equal(tooltipLeft(100, 200, 600), 114);
+  assert.equal(tooltipLeft(500, 200, 600), 286);
+  assert.equal(tooltipLeft(150, 200, 320), 4, "on a narrow chart it is clamped inside");
+});
+
+test("forecast points sit at the moment they predicted and stop at the end of the run", () => {
+  const points = forecastPoints({ samples: samples([[0, 0, 3, 0.1, 2], [5, 1, 3, 0.2, 3], [10, 2, 3, 0.3, 4], [15, 4, 4, 0.5]]) }, 5);
+  assert.deepEqual(points, [{ t: 5, v: 2 }, { t: 10, v: 3 }, { t: 15, v: 4 }]);
+});
+
+test("the chart renders real SVG with labelled axes and no tooltip until hovered", () => {
+  const props = {
+    series: [{ key: "REACTIVE", label: "Reactive", className: "strategy-reactive", points: [{ t: 0, v: 20 }, { t: 10, v: 60 }] }],
+    metric: CHART_METRICS.utilization, ariaLabel: "Utilization", threshold: 75,
+  };
+  const html = render(ScalingChart, props);
+  assert.match(html, /<svg width="720" height="280"/);
+  assert.match(html, />Time since start</);
+  assert.match(html, />10s</);
+  assert.match(html, />100%</);
+  assert.match(html, /class="sc-threshold"/);
+  assert.equal((html.match(/class="sc-series-point"/g) ?? []).length, 0, "lines only by default");
+  assert.doesNotMatch(html, /sc-series-area/);
+  assert.equal((render(ScalingChart, { ...props, showPoints: true }).match(/class="sc-series-point"/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /sc-tooltip/);
+});
+
+test("progress and export names come from the stored comparison", () => {
   assert.equal(comparisonProgress({ runs: [{ status: "COMPLETED" }, { status: "RUNNING" }],
     progress: { finishedJobs: 5, totalJobs: 10 } }), 0.75);
-  assert.equal(comparisonProgress({ runs: [] }), 0);
+  assert.equal(exportFileName({ pattern: "INCREASING", seed: 42, startedAt: start }),
+    "orchestros-comparison-increasing-seed42-2026-11-01.json");
 });
 
-// ---------------------------------------------------------------- the view
+// ---------------------------------------------------------------- the page
 
-const settings = {
-  scaleUpQueueThreshold: 2, scaleUpUtilization: 0.75, scaleDownUtilization: 0.4, maxWorkers: 3,
-  cooldownSeconds: 15, idleSeconds: 30, mlWindowPoints: 20, mlLookAheadSeconds: 5,
-};
-const metric = (key, group, label, unit, reactive, ml, winner, change, extra = {}) =>
-  ({ key, group, label, unit, better: "lower", reactive, ml, winner, change, reactiveOutcome: null, mlOutcome: null, ...extra });
+const settings = { scaleUpQueueThreshold: 2, scaleUpUtilization: 0.75, scaleDownUtilization: 0.4, maxWorkers: 3,
+  cooldownSeconds: 15, idleSeconds: 30, mlWindowPoints: 20, mlLookAheadSeconds: 60 };
 const finished = {
-  id: "c1", status: "COMPLETED", jobCount: 25, pattern: "INCREASING", seed: 42, schedulingPolicy: "FCFS",
-  placementStrategy: "LEAST_LOADED", startedAt: start, autoscalerSettings: settings, failureReason: null,
+  id: "c1", status: "COMPLETED", jobCount: 25, pattern: "INCREASING", seed: 42, workloadTypes: ["SLEEP"],
+  schedulingPolicy: "FCFS", placementStrategy: "LEAST_LOADED", timeQuantumSeconds: 5, jobsPerTick: 25,
+  startedAt: start, autoscalerSettings: settings, failureReason: null,
   runs: [
-    { id: "r0", strategy: "REACTIVE", status: "COMPLETED", completedJobs: 25, jobCount: 25, workerCount: 3,
-      cpuCapacityMillicores: 3000, memoryCapacityMiB: 3072, startedAt: start, failureReason: null,
-      samples: samples([[0, 0, 3], [10, 5, 3], [20, 1, 4]]), scalingActions: [{ at: iso(12), action: "SCALE_UP" }] },
-    { id: "r1", strategy: "ML", status: "COMPLETED", completedJobs: 25, jobCount: 25, workerCount: 3,
-      cpuCapacityMillicores: 3000, memoryCapacityMiB: 3072, startedAt: start, failureReason: null,
-      samples: samples([[0, 0, 3, 1], [5, 2, 4, 3], [10, 3, 4, 2], [15, 1, 4, 1], [20, 0, 4, null]]),
-      scalingActions: [{ at: iso(4), action: "SCALE_UP" }] },
+    run("REACTIVE", { samples: samples([[0, 0, 3, 0.2], [10, 5, 3, 0.9], [20, 1, 4, 0.5]]) }),
+    run("ML", { avgWaitSeconds: 8.6, avgTurnaroundSeconds: 14.9, peakWorkers: 3, scaleUps: 0, extraWorkerSeconds: 0,
+      samples: samples([[0, 0, 3, 0.1, 1], [10, 3, 3, 0.7, 2], [20, 0, 3, 0.3, null]]) }),
   ],
   comparison: {
-    comparable: true, waitVerdict: "ML", costVerdict: "REACTIVE", notes: [],
-    forecast: { meanAbsError: 0.75, pairs: 4 },
+    comparable: true, waitVerdict: "REACTIVE", costVerdict: "ML", notes: [], forecast: { meanAbsError: 0.75, pairs: 4 },
     metrics: [
-      metric("avgWaitSeconds", "wait", "Average waiting time", "s", 20, 15, "ML", -0.25),
-      metric("p95WaitSeconds", "wait", "Slowest 5% waiting time", "s", 40, 30, "ML", -0.25),
-      metric("avgTurnaroundSeconds", "wait", "Average turnaround", "s", 30, 25, "ML", -0.167),
-      metric("makespanSeconds", "wait", "Time to finish all jobs", "s", 300, 299, "TIE", -0.003),
-      metric("reactionSeconds", "react", "First extra worker", "signed-s", 6, -2, "ML", null,
-        { reactiveOutcome: "MEASURED", mlOutcome: "MEASURED" }),
-      metric("backedUpSeconds", "react", "Time with a backlog", "s", 60, 30, "ML", -0.5),
-      metric("extraWorkerSeconds", "cost", "Extra worker time", "worker-s", 200, 300, "REACTIVE", 0.5),
-      metric("idleExtraWorkerSeconds", "cost", "Idle extra worker time", "worker-s", 40, 90, "REACTIVE", 1.25),
-      metric("scaleActions", "stability", "Scaling changes", "count", 4, 4, "TIE", 0),
-      metric("flaps", "stability", "Quick re-adds (flaps)", "count", 0, 0, "TIE", null),
+      metric("avgWaitSeconds", 6.3, 8.6, "REACTIVE", 0.365),
+      metric("p95WaitSeconds", 14.4, 18.6, "REACTIVE", 0.29),
+      metric("avgTurnaroundSeconds", 12.6, 14.9, "REACTIVE", 0.18),
+      metric("makespanSeconds", 22.7, 26.8, "REACTIVE", 0.18),
+      { ...metric("reactionSeconds", 6, null, null), group: "react", unit: "signed-s",
+        reactiveOutcome: "MEASURED", mlOutcome: "NEVER_SCALED_UP" },
+      { ...metric("extraWorkerSeconds", 18, 0, "ML"), group: "cost", unit: "worker-s" },
+      { ...metric("scaleActions", 1, 0, "ML"), group: "stability", unit: "count" },
     ],
   },
 };
-const view = (props = {}) => render(ScalingComparisonView, {
-  data: { activeComparisonId: null, comparisons: [{ ...finished, runs: finished.runs.map(({ samples: _s, ...run }) => run) }] },
-  detail: finished, selectedId: null, onSelect: () => {}, form: DEFAULT_SCALING_FORM, onFormChange: () => {},
-  onStart: () => {}, onAbort: () => {}, ...props,
+const view = (props = {}) => render(panel.ScalingComparisonView, {
+  data: { activeComparisonId: null, comparisons: [{ ...finished, runs: finished.runs.map(({ samples: _s, ...entry }) => entry) }] },
+  detail: finished, selectedId: null, onSelect: () => {}, form: panel.DEFAULT_SCALING_FORM, onFormChange: () => {},
+  onStart: () => {}, onAbort: () => {}, onRerun: () => {}, onExport: () => {}, onOpenForm: () => {}, onCloseForm: () => {},
+  ...props,
 });
 
-test("the form defaults to 25 jobs on a ramp and sends Reactive-then-ML settings only", () => {
-  assert.deepEqual(toScalingRequest(DEFAULT_SCALING_FORM), {
+test("a finished comparison reads top to bottom like the reference design", () => {
+  const html = view();
+  assert.match(html, /<h1>Autoscaling comparison<\/h1>/);
+  assert.match(html, /Reactive and ML-assisted autoscaling, run on the same workload and configuration\./);
+  for (const label of ["Re-run</button>", "Export</button>", "New experiment</button>"]) assert.ok(html.includes(label), label);
+  assert.doesNotMatch(html, /page-status/, "no status pill while idle");
+
+  for (const phrase of ["25 jobs", "Increasing arrival", "Sleep, short pauses", "FCFS scheduling",
+    "Least-loaded placement", "Seed 42"]) {
+    assert.match(html, new RegExp(`>${phrase}</li>`), phrase);
+  }
+  assert.match(html, /title="Increasing \(ramp-up\)">Increasing arrival/, "the full setting is the tooltip");
+  assert.match(html, /class="link sc-setup-edit"[^>]*>Edit<\/button>/);
+
+  assert.match(html, /<h2 id="sc-chart-title">Resource utilization over time<\/h2>/);
+  assert.match(html, /aria-pressed="true"[^>]*>Utilization<\/button>/);
+  assert.match(html, />Jobs waiting<\/button>/);
+  assert.match(html, />Workers<\/button>/);
+  assert.match(html, /Scale-up threshold \(75%\)/);
+
+  assert.match(html, /<p class="sc-eyebrow">Takeaway<\/p>/);
+  assert.match(html, /<h2 id="sc-takeaway-title">Reactive was faster\. ML-assisted used less capacity\.<\/h2>/);
+  assert.match(html, /Reactive kept average wait 27% shorter \(6\.3s vs 8\.6s\)\. ML-assisted needed 18 fewer extra worker-seconds\./);
+  assert.match(html, /Rule-based\. Scales on what it sees right now: waiting jobs and reserved capacity\./);
+  assert.match(html, /Forecasts waiting jobs and utilization 60s ahead with linear regression, then scales/);
+  assert.equal((html.match(/>Completed<\/span>/g) ?? []).length, 2);
+
+  assert.match(html, /<h2 id="sc-results-title">Results<\/h2>/);
+  assert.match(html, /Lower is better for every metric\. Differences under 5% aren&#x27;t called\./);
+  assert.match(html, /<th scope="row">Avg\. wait time<\/th><td class="num mono is-best">6\.3s<\/td><td class="num mono is-worse">8\.6s<\/td><td class="num mono">\+37%<\/td>/);
+  assert.match(html, /Extra capacity<small> \(worker-s\)<\/small>/);
+  assert.match(html, />Peak workers<\/th><td class="num mono is-worse">4<\/td><td class="num mono is-best">3<\/td>/);
+  assert.doesNotMatch(html, /sc-card/, "the strategy cards are gone");
+
+  assert.match(html, /Earlier comparisons <span class="count mono">1<\/span>/);
+  assert.match(html, /Detailed analysis/);
+  assert.match(html, /Fair test: both runs did identical work/);
+  assert.doesNotMatch(html, /is-caution/);
+});
+
+test("a comparison that was not a fair test says so above the results", () => {
+  const unfair = { ...finished, comparison: { ...finished.comparison, comparable: false, notes: ["Checksums differ."] } };
+  const html = view({ detail: unfair });
+  const caution = html.indexOf('class="sc-fairness is-caution">Checksums differ.');
+  assert.ok(caution > 0 && caution < html.indexOf('id="sc-results-title"'));
+});
+
+test("a running comparison shows live progress, a stop button, and no partial numbers", () => {
+  const running = { ...finished, status: "RUNNING", progress: { strategy: "ML", position: 1, totalRuns: 2,
+    finishedJobs: 10, totalJobs: 25 }, runs: [finished.runs[0], { ...finished.runs[1], status: "RUNNING" }],
+  comparison: { ...finished.comparison, waitVerdict: null, costVerdict: null, metrics: [] } };
+  const html = view({ data: { activeComparisonId: "c1", comparisons: [running] }, detail: running });
+  assert.match(html, /Running ML-assisted autoscaling \(2 of 2\) · 10\/25 jobs finished/);
+  assert.match(html, />Stop comparison</);
+  assert.match(html, /class="page-status is-live"/);
+  assert.match(html, /Running · 10\/25 jobs/);
+  assert.match(html, /Waiting for both runs to finish/);
+  assert.doesNotMatch(html, /Re-run<\/button>/);
+  assert.match(html, /class="link sc-setup-edit" disabled=""/, "settings cannot be edited mid-run");
+  assert.match(html, /<td class="num mono">N\/A<\/td>/, "the unfinished run has no numbers yet");
+});
+
+test("an empty history opens the new-experiment form; loading says so", () => {
+  const empty = view({ data: { activeComparisonId: null, comparisons: [] }, detail: null });
+  assert.match(empty, /<h2>New experiment<\/h2>/);
+  assert.match(empty, />Compare Reactive vs ML</);
+  assert.doesNotMatch(empty, /Cancel/, "nothing to go back to");
+  assert.doesNotMatch(empty, /id="sc-quantum"/, "the quantum only appears for Round Robin");
+  assert.match(view({ data: null, detail: null }), /Loading comparisons…/);
+});
+
+test("re-running repeats the stored settings, and a new experiment starts from them", () => {
+  assert.deepEqual(panel.rerunRequest(finished), {
+    count: 25, pattern: "INCREASING", workloadTypes: ["SLEEP"], policy: "FCFS", strategy: "LEAST_LOADED",
+    seed: 42, timeQuantumSeconds: 5, jobsPerTick: 25,
+  });
+  assert.deepEqual(panel.formFromComparison({ ...finished,
+    workloadTypes: ["SORTING", "CPU_INTENSIVE", "DATA_PROCESSING", "MATRIX_MULTIPLICATION"] }).profile, "MIXED_COMPUTE");
+  assert.deepEqual(panel.toScalingRequest(panel.DEFAULT_SCALING_FORM), {
     count: 25, pattern: "INCREASING", workloadTypes: ["SLEEP"], policy: "FCFS", strategy: "LEAST_LOADED",
     seed: 42, timeQuantumSeconds: 5,
   });
-  const html = view({ data: { activeComparisonId: null, comparisons: [] }, detail: null });
-  assert.match(html, />Compare Reactive vs ML</);
-  assert.match(html, /No comparisons yet/);
-  assert.doesNotMatch(html, /id="sc-quantum"/, "the quantum only appears for Round Robin");
 });
 
-test("a finished comparison leads with a verdict, then answers four questions", () => {
-  const html = view();
-  assert.match(html, /<h3>A trade-off: ML predictive was faster but used more capacity<\/h3>/);
-  assert.match(html, /sc-verdict sc-verdict-tradeoff/);
-  for (const question of ["Which kept jobs waiting less?", "Which added workers sooner?",
-    "Which used less extra capacity?", "Which made fewer scaling changes?"]) {
-    assert.ok(html.includes(question), question);
-  }
-  assert.match(html, /ML predictive · 25% less/);
-  assert.match(html, /Reactive · 33% less/, "the cost card names Reactive as the cheaper one");
-  assert.match(html, /2\.0s before the backlog/);
-  assert.match(html, /6\.0s after the backlog began/);
-});
-
-test("timelines, the forecast check, and every measurement are explained in place", () => {
-  const html = view();
-  assert.match(html, /What happened over time/);
-  assert.match(html, /How to read it:/);
-  assert.equal((html.match(/class="sc-lane strategy-/g) ?? []).length, 3, "two timelines and one forecast chart");
-  assert.match(html, /scale-up line \(2 jobs\)/);
-  assert.match(html, /Was the ML forecast right\?/);
-  assert.match(html, /off by 0\.8 job\(s\), over 4 checks/);
-  assert.match(html, /Every measurement/);
-  assert.match(html, /How long a job waited, on average/);
-  assert.match(html, /Fair test: both runs did byte-identical work/);
-  assert.match(html, /Differences under 5% count as “about the same”/);
-});
-
-test("a running comparison shows progress and a stop button, and locks the form", () => {
-  const running = { ...finished, status: "RUNNING", progress: { strategy: "ML", position: 1, totalRuns: 2,
-    finishedJobs: 10, totalJobs: 25 }, runs: [finished.runs[0], { ...finished.runs[1], status: "RUNNING" }],
-  comparison: { ...finished.comparison, waitVerdict: null, costVerdict: null } };
-  const html = view({ data: { activeComparisonId: "c1", comparisons: [running] }, detail: running });
-  assert.match(html, /Running ML predictive \(2 of 2\) · 10\/25 jobs finished/);
-  assert.match(html, />Stop comparison</);
-  assert.match(html, /<select id="sc-count" disabled=""/);
-  assert.match(html, /Waiting for both runs to finish/);
-  assert.doesNotMatch(html, /At a glance/, "no winners before both runs complete");
-});
-
-test("the comparison tab offers both experiments as one choice", () => {
+test("the comparison tab defaults to autoscaling and still offers scheduling policies", () => {
   const html = render(ComparisonModeSwitch, { mode: "autoscaling", onModeChange: () => {} });
-  assert.match(html, /<legend class="sr-only">What to compare<\/legend>/);
   assert.match(html, /checked="" value="autoscaling"/);
   assert.match(html, /Scheduling policies/);
-  assert.match(html, /Autoscaling: Reactive vs ML/);
+});
+
+test("the top bar reports API, MySQL, and Docker, and only says online when all are up", () => {
+  const up = app.systemStatus({ health: { dependencies: { database: "up" } }, runtime: { imageAvailable: true } });
+  assert.equal(up.label, "System Online");
+  const noDocker = app.systemStatus({ health: { dependencies: { database: "up" } }, runtimeError: "Docker: 503" });
+  assert.equal(noDocker.overall, "degraded");
+  assert.equal(noDocker.docker, "down");
+  assert.equal(app.systemStatus({}).overall, "checking");
+  assert.equal(app.servicesSummary(up), "API, MySQL, Docker connected");
+  assert.equal(app.servicesSummary(noDocker), "Docker not connected");
+  assert.equal(app.servicesSummary(app.systemStatus({ healthError: "timeout" })), "API, MySQL not connected");
+  assert.equal(app.servicesSummary(app.systemStatus({})), "Checking services…");
+  assert.equal(app.backendSummary(up), "API online, database connected");
+  assert.equal(app.backendSummary(app.systemStatus({ healthError: "timeout" })), "API offline");
+  assert.equal(app.backendSummary(app.systemStatus({ health: { dependencies: { database: "down" } } })),
+    "API online, database unreachable");
 });

@@ -70,9 +70,9 @@ Open **http://localhost:5173**. To run everything in containers instead, use `np
 
 | Tab | What you do there |
 | --- | --- |
-| **Run** | Generate a workload, choose a policy and placement strategy, and press **Run orchestrator**. Watch jobs move through the pipeline, onto workers, and through the job queue. Click a job for its details |
+| **Run Workload** | Generate a workload, choose a policy and placement strategy, and press **Run orchestrator**. Watch jobs move through the pipeline, onto workers, and through the job queue. Click a job for its details |
 | **Autoscaling** | Pick the Reactive or ML predictive strategy, switch autoscaling on, and watch workers being added and retired as load changes |
-| **Comparison** | Choose **Scheduling policies** to compare FCFS, SJF, Priority, and Round Robin, or **Autoscaling: Reactive vs ML** to run the same workload with each autoscaling strategy |
+| **Comparison** | Opens on **Autoscaling: Reactive vs ML**: run the same workload with each autoscaling strategy, then read the strategy cards, the utilization / jobs-waiting / workers chart, the key takeaway, and the performance summary. Re-run, export the full result as JSON, or start a new experiment. **Scheduling policies** compares FCFS, SJF, Priority, and Round Robin |
 | **Monitoring** | Read cluster capacity, throughput, history, and timings |
 
 ## Testing

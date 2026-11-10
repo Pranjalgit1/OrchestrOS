@@ -16,11 +16,32 @@ import {
 import { ActivityLog } from "./components/ActivityLog.jsx";
 import { AutoscalerPanel } from "./components/AutoscalerPanel.jsx";
 import { ComparisonTab } from "./components/ComparisonTab.jsx";
-import { RunBar, WorkloadPanel } from "./components/ControlPanel.jsx";
+import { RunActions, RunSettings, WorkloadPanel } from "./components/ControlPanel.jsx";
 import { JobDetail } from "./components/JobDetail.jsx";
 import { JobQueue } from "./components/JobQueue.jsx";
+import { PageHeader } from "./components/PageHeader.jsx";
 import { PipelineView } from "./components/PipelineView.jsx";
 import { WorkerGrid } from "./components/WorkerGrid.jsx";
+
+/** 24-hour clock, matching the activity log and the reference design. */
+export const clockTime = (value) => new Date(value).toLocaleTimeString([], { hour12: false });
+
+/** Jobs with work still ahead of them, or null before the first read. A benchmark needs this at zero. */
+export function unfinishedJobs(state) {
+  if (!state) return null;
+  return ["CREATED", "QUEUED", "WAITING", "SCHEDULED", "RUNNING"]
+    .reduce((total, status) => total + (state.statusCounts?.[status] ?? 0), 0);
+}
+
+/** The Run page subtitle, built only from the state the backend returned. */
+export function runSubtitle(state, lastTickAt) {
+  if (!state) return "Reading jobs, workers, and reserved capacity…";
+  const parts = [`${state.totals.jobs} job${state.totals.jobs === 1 ? "" : "s"} in history`];
+  if (state.totals.runningContainers > 0) parts.push(`${state.totals.runningContainers} running`);
+  if (state.totals.waitingForArrival > 0) parts.push(`${state.totals.waitingForArrival} waiting for arrival time`);
+  parts.push(lastTickAt ? `last tick ${clockTime(lastTickAt)}` : `last read ${clockTime(state.capturedAt)}`);
+  return parts.join(" · ");
+}
 const POLL_MS = 3_000;
 const AUTO_TICK_MS = 2_000;
 /** Codes that mean "nothing to do right now" rather than a real problem. */
@@ -47,6 +68,8 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
   const [entries, setEntries] = useState([]);
   // null until the first state read decides whether it starts open.
   const [workloadOpen, setWorkloadOpen] = useState(null);
+  // When the orchestrator last answered a run request, for the page subtitle.
+  const [lastTickAt, setLastTickAt] = useState(null);
   const mounted = useRef(true);
   const logId = useRef(0);
   // Kept in a ref so the auto-run timer always sees the current selections.
@@ -56,7 +79,7 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
     logId.current += 1;
     const entry = {
       id: logId.current,
-      at: new Date().toLocaleTimeString(),
+      at: clockTime(Date.now()),
       kind,
       label,
       detail,
@@ -176,6 +199,7 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
           : {}),
       });
       logRun(result);
+      if (mounted.current) setLastTickAt(Date.now());
       return result;
     },
     [logRun],
@@ -253,7 +277,16 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
   useEffect(() => {
     if (state && workloadOpen === null) setWorkloadOpen(state.totals.jobs === 0);
   }, [state, workloadOpen]);
-  useEffect(() => { onStatusChange?.({ autoRunning }); }, [autoRunning, onStatusChange]);
+  // The sidebar shows running containers against workers in service.
+  const runningContainers = state?.totals.runningContainers ?? null;
+  const workerCount = state ? state.workers.length : null;
+  useEffect(() => {
+    onStatusChange?.({ autoRunning, runningContainers, workerCount });
+  }, [autoRunning, runningContainers, workerCount, onStatusChange]);
+  const showEnded = () => {
+    setFilter("ENDED");
+    document.getElementById("job-queue")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   // The drawer closes on Escape and takes focus when it opens.
   const drawer = useRef(null);
@@ -276,15 +309,31 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
       </div>
     </div>
   );
-  const workerGrid = state ? (
-    <WorkerGrid workers={state.workers} onSelectJob={setSelectedJobId} />
-  ) : null;
+  const workerGrid = (settingsHref) => (state ? (
+    <WorkerGrid workers={state.workers} onSelectJob={setSelectedJobId} settingsHref={settingsHref} />
+  ) : null);
 
   return (
     <>
       {view === "run" ? (
         <>
-          <RunBar
+          <PageHeader
+            crumbs={["workloads", "run"]}
+            title="Run workload"
+            status={autoRunning ? { tone: "live", label: "Running" } : { tone: "idle", label: "Idle" }}
+            subtitle={runSubtitle(state, lastTickAt)}
+            actions={(
+              <RunActions
+                autoRunning={autoRunning}
+                busy={busy}
+                workloadOpen={Boolean(workloadOpen)}
+                onToggleWorkload={() => setWorkloadOpen((open) => !open)}
+                onKillAll={onKillAll}
+                onToggleAuto={() => setAutoRunning((value) => !value)}
+              />
+            )}
+          />
+          <RunSettings
             policy={policy}
             onPolicyChange={setPolicy}
             strategy={strategy}
@@ -293,12 +342,7 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
             onTimeQuantumChange={setTimeQuantumSeconds}
             jobsPerTick={jobsPerTick}
             onJobsPerTickChange={setJobsPerTick}
-            autoRunning={autoRunning}
             busy={busy}
-            onKillAll={onKillAll}
-            onToggleAuto={() => setAutoRunning((value) => !value)}
-            workloadOpen={Boolean(workloadOpen)}
-            onToggleWorkload={() => setWorkloadOpen((open) => !open)}
           />
           {workloadOpen ? (
             <WorkloadPanel
@@ -320,8 +364,12 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
       {view === "run" ? (
         state ? (
           <>
-            <PipelineView stageCounts={state.stageCounts} selected={selected} />
-            {workerGrid}
+            <PipelineView stageCounts={state.stageCounts} statusCounts={state.statusCounts}
+              selected={selected} onShowEnded={showEnded} />
+            <div className="run-grid">
+              {workerGrid("#autoscaling")}
+              <ActivityLog entries={entries} onClear={() => setEntries([])} />
+            </div>
             <JobQueue
               jobs={state.jobs}
               workers={state.workers}
@@ -332,16 +380,9 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
               onFilterChange={setFilter}
               onSelectJob={setSelectedJobId}
             />
-            <ActivityLog entries={entries} onClear={() => setEntries([])} />
-            <p className="muted footnote">
-              Reading backend state every {POLL_MS / 1000}s · last read{" "}
-              {new Date(state.capturedAt).toLocaleTimeString()} ·{" "}
-              {state.totals.jobs} job(s), {state.totals.activeReservations} active
-              reservation(s), {state.totals.runningContainers} running
-              container(s)
-              {state.totals.waitingForArrival > 0
-                ? ` · ${state.totals.waitingForArrival} waiting for arrival time`
-                : ""}
+            <p className="page-note">
+              Reads backend state every {POLL_MS / 1000}s · {state.totals.activeReservations} active
+              reservation{state.totals.activeReservations === 1 ? "" : "s"}
             </p>
           </>
         ) : loading
@@ -349,12 +390,17 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
 
       {view === "autoscaling" ? (
         <>
+          <PageHeader
+            crumbs={["cluster", "autoscaling"]}
+            title="Autoscaling"
+            subtitle="Adds and retires logical workers as load changes. One strategy is active at a time."
+          />
           <AutoscalerPanel onChanged={() => void refresh()} />
-          {workerGrid ?? loading}
+          {workerGrid(null) ?? loading}
         </>
       ) : null}
 
-      {view === "comparison" ? <ComparisonTab /> : null}
+      {view === "comparison" ? <ComparisonTab unfinishedJobs={unfinishedJobs(state)} /> : null}
 
       {drawerOpen ? (
         <aside className="job-drawer" aria-label="Job details" tabIndex={-1} ref={drawer}>
