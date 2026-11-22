@@ -29,7 +29,8 @@ npm-debug.log*
 *.db-journal
 mysql-data/
 
-
+# Course reports with personal details stay local
+report/
 
 # LaTeX build artifacts
 *.aux
