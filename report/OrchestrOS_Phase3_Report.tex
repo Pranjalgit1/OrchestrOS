@@ -1,0 +1,556 @@
+\documentclass[12pt,a4paper]{article}
+
+% ============================================================
+% PACKAGES
+% ============================================================
+\usepackage[
+    a4paper,
+    top=1.55cm,
+    bottom=1.35cm,
+    left=1.75cm,
+    right=1.75cm
+]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{newtxtext}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usepackage{eso-pic}
+\usepackage{ragged2e}
+\usepackage{enumitem}
+
+% ============================================================
+% COURSE
+% ============================================================
+\newcommand{\CourseHeader}{OSDBMS (TCS-502 / TCS-503)}
+
+% ============================================================
+% COLORS
+% ============================================================
+\definecolor{GEUBlue}{RGB}{43,91,145}
+\definecolor{GEUBannerBlue}{RGB}{0,102,148}
+\definecolor{GEUYellow}{RGB}{255,201,38}
+\definecolor{InstructionGrey}{RGB}{125,125,125}
+
+% ============================================================
+% GENERAL SETTINGS
+% ============================================================
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0pt}
+\renewcommand{\arraystretch}{1}
+\setlist{leftmargin=1.3em,itemsep=1.5pt,topsep=3pt,parsep=0pt,partopsep=0pt}
+
+% ============================================================
+% HEADER / FOOTER
+% ============================================================
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{%
+    \fontsize{10.5}{12}\selectfont
+    \CourseHeader
+}
+\fancyhead[R]{%
+    \fontsize{10.5}{12}\selectfont
+    PHASE-III PROJECT PROGRESS
+}
+\fancyfoot[R]{%
+    \fontsize{10}{12}\selectfont
+    Page \thepage
+}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+\setlength{\headheight}{20pt}
+\setlength{\headsep}{0.65cm}
+\setlength{\footskip}{0.65cm}
+
+% ============================================================
+% BOTTOM YELLOW LINE
+% ============================================================
+\AddToShipoutPictureBG{%
+\begin{tikzpicture}[remember picture,overlay]
+    \fill[GEUYellow]
+    (current page.south west)
+    rectangle
+    ([yshift=0.14cm]current page.south east);
+\end{tikzpicture}
+}
+
+% ============================================================
+% CUSTOM COMMANDS
+% ============================================================
+\newcommand{\sectiontitle}[1]{%
+    {\color{GEUBlue}
+    \fontsize{18}{22}\selectfont #1}
+}
+\newcommand{\instruction}[1]{%
+    {\color{InstructionGrey}
+    \fontsize{10.5}{13}\selectfont #1}
+}
+% The box grows with its text, so nothing spills outside the border.
+% The first argument (the template's fixed height) is kept for compatibility.
+\newcommand{\answerbox}[2]{%
+    \noindent
+    \begin{tabularx}{\textwidth}{
+        |>{\raggedright\arraybackslash}X|}
+        \hline
+        \parbox[t]{\dimexpr\linewidth-12pt\relax}{
+            \vspace{5pt}
+            \fontsize{10.5}{13}\selectfont #2
+            \par\vspace{6pt}
+        }\\
+        \hline
+    \end{tabularx}
+}
+% A table cell with a little padding above and below.
+\newcommand{\cell}[1]{\parbox[t]{\linewidth}{\vspace{3pt}\fontsize{10}{12.5}\selectfont #1\par\vspace{4pt}}}
+
+% ============================================================
+% DOCUMENT
+% ============================================================
+\begin{document}
+
+% ============================================================
+% PAGE 1
+% ============================================================
+\vspace*{0.10cm}
+\includegraphics[width=3.2cm]{geulogo.png}
+
+\vspace{0.40cm}
+\noindent
+\colorbox{GEUBannerBlue}{%
+\parbox{\dimexpr\textwidth-2\fboxsep\relax}{
+    \vspace{0.17cm}
+    {\color{GEUYellow}
+    \fontsize{16.5}{20}\selectfont
+    \bfseries
+    PROJECT AND TEAM INFORMATION}
+    \vspace{0.17cm}
+}}
+
+\vspace{0.25cm}
+
+% PROJECT TITLE
+\sectiontitle{Project Title}
+
+\vspace{0.30cm}
+\answerbox{1.00cm}{OrchestrOS: Intelligent Container Orchestration with Resource-Aware Scheduling and
+Autoscaling}
+
+\vspace{0.45cm}
+
+% ============================================================
+% TEAM TABLE
+% Each row: who the member is (left), and their details and photo (right).
+% Responsibilities list the Phase-II work, then what was added in Phase III.
+% ============================================================
+\newcommand{\memberleft}[3]{%
+\begin{minipage}[t]{\linewidth}
+\vspace{1.5mm}
+\fontsize{11}{13.2}\selectfont
+#1\\
+(Last Name, name: student ID: email, picture):\\[3pt]
+Role: #2\\
+Responsibilities: #3
+\vspace{2mm}
+\end{minipage}}
+\newcommand{\memberright}[4]{%
+\begin{minipage}[t]{\linewidth}
+\vspace{1.5mm}
+\fontsize{11}{13.2}\selectfont
+#1 -- #2\\
+#3\\[3pt]
+\includegraphics[width=2.2cm,height=1.6cm,keepaspectratio]{#4}
+\vspace{2mm}
+\end{minipage}}
+
+\noindent
+\begin{tabularx}{\textwidth}{|>{\RaggedRight\arraybackslash}p{0.53\textwidth}|>{\RaggedRight\arraybackslash}X|}
+\hline
+\begin{minipage}[t]{\linewidth}
+\vspace{1.5mm}
+\fontsize{11}{13.2}\selectfont
+Team Name:\\
+Team \#
+\vspace{1.5mm}
+\end{minipage}
+&
+\begin{minipage}[t]{\linewidth}
+\vspace{1.5mm}
+\fontsize{11}{13.2}\selectfont
+OSDBMS-V-T244
+\vspace{1.5mm}
+\end{minipage}
+\\
+\hline
+\memberleft{Team member 1 (Team Lead)}{Database \& Testing (DB/Testing)}{MySQL 8 Schema, ACID Row-Lock
+Reservations, Monitoring Queries \& Automated Tests; Phase III: Reactive Autoscaler, Reactive vs ML
+Comparison Module \& Integration Test Suite}
+&
+\memberright{Chamoli, Pranjal}{24021077 (Roll: 2025368)}{24021077@geu.ac.in}{image1.png}
+\\
+\hline
+\memberleft{Team member 2}{Developer}{OS Scheduling Policies (FCFS, SJF, Priority, Round Robin) \& Worker
+Placement Engine; Phase III: Round Robin Preemption \& Requeue and Scheduling-Policy Benchmark}
+&
+\memberright{Rawat, Maitri}{240221432 (Roll: 2026063)}{240221432@geu.ac.in}{image2.png}
+\\
+\hline
+\memberleft{Team member 3}{Developer}{Core Orchestrator Pipeline, Express REST API, Docker Engine Socket
+Execution \& Crash Recovery; Phase III: ML-Assisted Autoscaling (Linear-Regression Forecaster) \&
+Job Cancellation/Retries}
+&
+\memberright{Joshi, Nikhil}{240211642 (Roll: 2025339)}{240211642@geu.ac.in}{image3.png}
+\\
+\hline
+\memberleft{Team member 4}{Developer, React Dashboard UI \& Workload Generator}{React 19 Operator UI,
+Seeded Workload Generator v2 \& Project Documentation; Phase III: Autoscaling \& Comparison Dashboard
+Pages and Workload Generator Refinements}
+&
+\memberright{Kunwar, Vansh}{24021068 (Roll: 2025560)}{24021068@geu.ac.in}{image4.png}
+\\
+\hline
+\end{tabularx}
+
+\newpage
+
+% ============================================================
+% PHASE III: ABSTRACT AND ARCHITECTURE
+% ============================================================
+\vspace*{0.15cm}
+\noindent
+\colorbox{GEUBannerBlue}{%
+\parbox{\dimexpr\textwidth-2\fboxsep\relax}{
+    \vspace{0.18cm}
+    {\color{GEUYellow}
+    \fontsize{17}{21}\selectfont
+    \bfseries
+    PHASE-III PROJECT PROGRESS DESCRIPTION (35 pts)}
+    \vspace{0.18cm}
+}}
+
+\vspace{0.70cm}
+
+% ABSTRACT
+\sectiontitle{Project Abstract (2 pts)}
+
+\vspace{0.05cm}
+\instruction{(Brief restatement of your project's main goal. Max 300 words).}
+
+\vspace{0.12cm}
+\answerbox{3.60cm}{%
+OrchestrOS is a local, Kubernetes-inspired workload orchestrator that applies core Operating Systems
+and DBMS concepts in one working system. Users generate seeded, reproducible batches of jobs; each
+job carries a CPU and memory request, a priority and an arrival time.
+
+Every job moves through an explicit pipeline. A CPU scheduler picks the next job (FCFS, SJF, Priority,
+or Round Robin with preemption), a placement strategy chooses a logical worker node, and a MySQL
+transaction reserves that worker's capacity using row-level locks, so concurrent jobs can never
+over-allocate it. The job then runs as an isolated Docker container limited to exactly the reserved CPU
+and memory. Recording the result (with a checksum of the work done) releases the capacity in the same
+transaction.
+
+On top of this pipeline, OrchestrOS scales the cluster automatically. A \textbf{reactive} autoscaler adds
+or retires workers based on the queue and reserved utilisation it measures now. An
+\textbf{ML-assisted} strategy fits a linear-regression model to recent measurements and forecasts the
+load 60 seconds ahead, so it can add capacity before the load arrives. Two built-in experiments compare
+the four scheduling policies, and Reactive versus ML-assisted autoscaling, on identical,
+checksum-verified workloads. They report waiting time, turnaround, makespan and extra capacity used.
+
+A React dashboard controls every stage and shows live cluster state, charts and a plain-language
+verdict for each experiment. The project is complete, and its comparison results feed the team's
+research write-up on ML-based autoscaling.}
+
+\vspace{0.70cm}
+
+% UPDATED APPROACH
+\sectiontitle{Updated Project Approach and Architecture (2 pts)}
+
+\vspace{0.05cm}
+\instruction{(Describe your current approach, including system design,
+communication protocols, libraries used, etc.\\ Max 300 words).}
+
+\vspace{0.25cm}
+\answerbox{4.75cm}{%
+OrchestrOS is a three-tier system that runs on one machine:
+\begin{itemize}
+    \item \textbf{Frontend:} a React 19 single-page dashboard built with Vite 8. It talks to the backend
+    only through REST/JSON over HTTP and polls for live state (every 2\,s while an experiment runs,
+    5\,s when idle). Charts are hand-built SVG; no chart library is used.
+    \item \textbf{Backend:} Node.js with Express 5 and Zod request validation, split into 13 modules
+    (jobs, workers, workloads, scheduler, placement, resources, executions, orchestrator, autoscaler,
+    monitoring, benchmarks, scaling-comparisons, health). Each module has routes, a service with the
+    logic, and a repository for data access.
+    \item \textbf{Database:} MySQL 8.4 (InnoDB) through the Prisma 6 ORM, with 5 versioned migrations.
+    Reservation, release, cancellation, requeue and scaling run as transactions that lock job and
+    worker rows (\texttt{SELECT \ldots{} FOR UPDATE}). Deadlock victims are retried automatically, and
+    \texttt{CHECK} constraints reject invalid execution records.
+    \item \textbf{Execution:} the backend calls the Docker Engine API directly over the local socket.
+    Each job runs in a purpose-built workload-runner image with no network, a read-only filesystem,
+    all capabilities dropped, and CPU/memory limits equal to its reservation.
+    \item \textbf{Autoscaling:} one autoscaler evaluates the cluster every 5\,s with one active
+    strategy. Reactive applies thresholds to the measured queue and utilisation; ML fits
+    least-squares linear regression over a sliding window of samples and acts on the 60\,s forecast.
+    Every decision is stored with its reason.
+    \item \textbf{Experiments:} a registry allows one benchmark or comparison at a time. Each run starts
+    from a reset cluster with the same seed; differences under 5\% are reported as ties.
+    \item \textbf{Deployment:} Docker Compose starts MySQL, a migration/seed step, the backend and
+    the frontend.
+\end{itemize}}
+
+\newpage
+
+% ============================================================
+% TASKS AND CHALLENGES
+% ============================================================
+\vspace*{0.20cm}
+
+% TASKS COMPLETED
+\sectiontitle{Tasks Completed (7 pts)}
+
+\vspace{0.05cm}
+\instruction{(Describe the main tasks that have been assigned and already completed. Max 250 words).}
+
+\vspace{0.20cm}
+\noindent
+\begin{tabularx}{\textwidth}{
+|>{\raggedright\arraybackslash}p{0.66\textwidth}
+|>{\raggedright\arraybackslash}X|
+}
+\hline
+\textbf{Task Completed} &
+\textbf{Team Member}
+\\
+\hline
+\cell{\textbf{Phase II:} MySQL 8 schema and Prisma migrations; ACID row-lock reservations that prevent
+over-allocation; monitoring queries; automated tests; move from TypeScript/PostgreSQL to
+JavaScript/MySQL.\\[2pt]
+\textbf{Phase III:} reactive autoscaler; MySQL deadlock retry; merging the ML forecaster into the
+autoscaler as a strategy; Reactive vs ML comparison module (3 new tables); integration test suite
+(241 backend tests).}
+& \cell{Chamoli, Pranjal\\(Team Lead, DB/Testing)}
+\\
+\hline
+\cell{\textbf{Phase II:} FCFS, SJF, Priority and Round Robin scheduling; worker placement engine
+(least-loaded, first-fit, resource-aware).\\[2pt]
+\textbf{Phase III:} Round Robin preemption with requeue; placement tie-breaking by assignment history;
+multi-policy scheduling benchmark.}
+& \cell{Rawat, Maitri\\(Developer)}
+\\
+\hline
+\cell{\textbf{Phase II:} core orchestrator pipeline; Express REST API; job execution over the Docker
+Engine socket; crash recovery.\\[2pt]
+\textbf{Phase III:} ML-assisted autoscaling (linear-regression load forecaster); per-job cancellation of
+running containers; automatic retries; first scheduling-comparison feature.}
+& \cell{Joshi, Nikhil\\(Developer)}
+\\
+\hline
+\cell{\textbf{Phase II:} React 19 operator UI; seeded workload generator v2; project documentation.\\[2pt]
+\textbf{Phase III:} autoscaling and comparison dashboard pages (charts, results tables); workload
+generator refinements; README and user documentation.}
+& \cell{Kunwar, Vansh\\(Developer, UI \& Workload Generator)}
+\\
+\hline
+\end{tabularx}
+
+\vspace{0.65cm}
+
+% CHALLENGES
+\sectiontitle{Challenges/Roadblocks (7 pts)}
+
+\vspace{0.05cm}
+\instruction{(Describe the challenges that you have faced or are facing so far
+and how you plan to solve them. Max 300 words).}
+
+\vspace{0.18cm}
+\answerbox{4.05cm}{%
+All of the following have been solved.
+\begin{itemize}
+    \item \textbf{Race conditions on worker capacity.} When many jobs start and finish at once, two
+    transactions could read the same free capacity and both reserve it. We lock the job and worker rows
+    inside one transaction, add database \texttt{CHECK} constraints as a second guard, and retry MySQL
+    deadlock victims (up to 4 attempts) so callers never see the error.
+    \item \textbf{Stack migration mid-project.} The first version used TypeScript and PostgreSQL. To match
+    the course stack we moved to JavaScript and MySQL, rewriting the locking queries for InnoDB and
+    re-running every test against MySQL.
+    \item \textbf{Merging two autoscalers.} The ML autoscaler was first built as a separate module that
+    deleted workers and competed with the reactive one, and a merge commit reverted earlier features.
+    We restored the lost files and folded ML into the existing autoscaler as a strategy, with only one
+    strategy active at a time.
+    \item \textbf{Fair comparisons.} Docker timing varies by a few percent between identical runs. Both
+    strategies (or all policies) run the same seeded workload on a reset cluster, results are only
+    called comparable when the work checksums match, and gaps under 5\% count as ties. A backend restart
+    mid-experiment once left orphaned jobs; on startup the backend now marks such runs as stopped and
+    cleans them up.
+    \item \textbf{Readable results.} Early result pages were hard to interpret, so the dashboard now
+    states a plain-language verdict with the measured numbers behind it, and shows N/A instead of
+    inventing values when data is missing.
+\end{itemize}}
+
+\newpage
+
+% ============================================================
+% OUTCOMES AND PROGRESS
+% ============================================================
+\vspace*{0.30cm}
+
+% OUTCOMES
+\sectiontitle{Project Outcome/Deliverables (2 pts)}
+
+\vspace{0.05cm}
+\instruction{(Describe what are the key outcomes / deliverables of the project. Max 200 words).}
+
+\vspace{0.35cm}
+\answerbox{3.35cm}{%
+\begin{itemize}
+    \item A working orchestrator: seeded workload generation, four scheduling policies, three placement
+    strategies, transaction-safe reservation and real Docker execution capped at each reservation.
+    \item Reactive and ML-assisted autoscaling of logical workers, with every scaling decision recorded.
+    \item Two reproducible experiments: a scheduling-policy benchmark and a Reactive vs ML autoscaling
+    comparison, each with charts, a results table, a verdict and JSON export.
+    \item A React dashboard that drives every pipeline stage and shows live monitoring, in light and
+    dark themes and on phone-sized screens.
+    \item Automated tests (241 backend, 66 frontend), Docker Compose setup and project documentation.
+    \item Measured findings for the research write-up. For example, on a 25-job burst, Reactive kept the
+    average wait 26\% shorter (7.4\,s vs 10.0\,s), while ML-assisted needed no extra workers
+    (0 vs 19 extra worker-seconds).
+\end{itemize}}
+
+\vspace{0.75cm}
+
+% PROGRESS
+\sectiontitle{Progress Overview (2 pts)}
+
+\vspace{0.05cm}
+\instruction{(Summarize how much of the project is done, what's behind schedule,
+what's ahead of schedule. Max 200 words.)}
+
+\vspace{0.25cm}
+\answerbox{4.45cm}{%
+\textbf{The project is 100\% complete.} Every planned phase is done, merged into the \texttt{main}
+branch and tested: persistent job and worker management, workload generation, policy scheduling,
+resource-aware placement, transactional reservation, Docker execution, monitoring and the dashboard.
+
+\vspace{4pt}
+\textbf{Ahead of schedule:} several features first planned as stretch goals were also delivered:
+Round Robin preemption with requeue, per-job cancellation of running containers, automatic retries,
+reactive autoscaling, the ML-assisted autoscaler, the Reactive vs ML comparison experiment, and a full
+redesign of the dashboard for readability.
+
+\vspace{4pt}
+\textbf{Behind schedule:} nothing. The one item recorded for future work, recovery from the failure of a
+whole worker, was outside the original scope.}
+
+\newpage
+
+% ============================================================
+% CODEBASE, TESTING, DELIVERABLES
+% ============================================================
+\vspace*{0.20cm}
+
+% CODEBASE
+\sectiontitle{Codebase Information (2 pts)}
+
+\vspace{0.05cm}
+\instruction{(Repository link, branch, and information about important commits.)}
+
+\vspace{0.20cm}
+\answerbox{3.70cm}{%
+\textbf{Repository:} \texttt{https://github.com/Pranjalgit1/OrchestrOS}\\
+\textbf{Branch:} \texttt{main} (feature branches merged through pull requests); 52 commits.\\[3pt]
+\textbf{Important commits:}
+\begin{itemize}
+    \item \texttt{29b56ac}, \texttt{c8ac87b} (21 Sep): persistent job/worker management; deterministic
+    workload batches.
+    \item \texttt{f51e899}, \texttt{725937c}, \texttt{58381f8} (21--22 Sep): policy scheduling with safe
+    claiming; resource-aware placement; transactions that prevent over-allocation.
+    \item \texttt{6e1a54c} (23 Sep): React dashboard becomes the main control interface.
+    \item \texttt{64ad1f6} (5 Oct): migration from TypeScript/PostgreSQL to JavaScript/MySQL.
+    \item \texttt{3161357}, \texttt{1dfa173}, \texttt{2ad0f34} (21 Oct): Round Robin preemption,
+    cancellation and requeue; reactive autoscaling; MySQL deadlock retry.
+    \item \texttt{13ce8e7}, \texttt{8b619f5} (23 Oct): ML-based autoscaling; scheduling comparison.
+    \item \texttt{287f464} (28 Oct): ML-predictive strategy merged into the autoscaler.
+    \item \texttt{2b2c86e} (29 Oct): Reactive vs ML autoscaling comparison (new module and migration).
+    \item \texttt{ec92e7a} (11 Nov): dashboard redesign (31 files).
+\end{itemize}}
+
+\vspace{0.65cm}
+
+% TESTING
+\sectiontitle{Testing and Validation Status (2 pts)}
+
+\vspace{0.05cm}
+\instruction{(Provide information about any tests conducted)}
+
+\vspace{0.30cm}
+\noindent
+\begin{tabularx}{\textwidth}{
+|>{\raggedright\arraybackslash}p{0.27\textwidth}
+|>{\raggedright\arraybackslash}p{0.16\textwidth}
+|>{\raggedright\arraybackslash}X|
+}
+\hline
+\textbf{Test Type} &
+\textbf{Status (Pass/Fail)} &
+\textbf{Notes}
+\\
+\hline
+\cell{Backend unit tests} & \cell{Pass (184/184)} &
+\cell{Scheduling order, placement, autoscaler decisions, comparison metrics, input validation.}
+\\
+\hline
+\cell{Database integration tests (MySQL)} & \cell{Pass} &
+\cell{Real transactions: concurrent cancellation, exclusive execution claims, capacity release,
+requeue and \texttt{CHECK} constraints.}
+\\
+\hline
+\cell{Docker integration tests} & \cell{Pass} &
+\cell{Real containers capped at their reservation, Round Robin eviction, cancellation, kill-all and
+memory exhaustion. All 241 backend tests pass, 0 skipped.}
+\\
+\hline
+\cell{Frontend view and unit tests} & \cell{Pass (66/66)} &
+\cell{Rendered views, chart geometry, number formatting, N/A for missing data.}
+\\
+\hline
+\cell{Static check and production build} & \cell{Pass} &
+\cell{Backend syntax check and Vite production build.}
+\\
+\hline
+\cell{End-to-end system test} & \cell{Pass} &
+\cell{25-job Reactive vs ML comparison and 2- and 4-policy benchmarks on a fresh database; work
+checksums matched across runs.}
+\\
+\hline
+\cell{UI and responsive check} & \cell{Pass} &
+\cell{Headless browser at desktop (1440\,px) and phone (390\,px) widths, light and dark themes.}
+\\
+\hline
+\end{tabularx}
+
+\vspace{0.65cm}
+
+% DELIVERABLES
+\sectiontitle{Deliverables Progress (2 pts)}
+
+\vspace{0.05cm}
+\instruction{(Summarize the current status of all key project deliverables
+mentioned earlier. Indicate whether each deliverable is completed,
+in progress, or pending.)}
+
+\vspace{0.25cm}
+\answerbox{3.20cm}{%
+\begin{itemize}
+    \item Orchestration pipeline (generation, scheduling, placement, reservation, execution):
+    \textbf{Completed}
+    \item Reactive and ML-assisted autoscaling: \textbf{Completed}
+    \item Scheduling-policy benchmark: \textbf{Completed}
+    \item Reactive vs ML autoscaling comparison: \textbf{Completed}
+    \item React dashboard and live monitoring: \textbf{Completed}
+    \item Automated tests, Docker Compose setup and documentation: \textbf{Completed}
+    \item Findings for the research write-up: \textbf{Completed} (measured results available and exportable)
+\end{itemize}}
+
+\end{document}
