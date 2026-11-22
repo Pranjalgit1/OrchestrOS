@@ -258,9 +258,16 @@ function ResultsCard({ suite }) {
                 <small>{metric.better === "lower" ? "Lower is better" : "Higher is better"}</small>
               </th>
             );
+            // Several policies sharing the best value read as one tie, not a stack of winners.
             const better = (rows) => (
               <td rowSpan={rows} className="bench-better">
-                {metric.best.length ? metric.best.map((policy) => <PolicyName key={policy} policy={policy} />) : "Tie"}
+                {metric.best.length === 1 ? <PolicyName policy={metric.best[0]} />
+                  : metric.best.length > 1 ? (
+                    <span className="bench-tie">
+                      Tie
+                      <small>{metric.best.map((policy) => POLICY_LABELS[policy] ?? policy).join(", ")}</small>
+                    </span>
+                  ) : "Tie"}
               </td>
             );
             if (allEqual(metric.values)) {
@@ -284,11 +291,14 @@ function ResultsCard({ suite }) {
                   <tr key={entry.policy} className={`${policyClass(entry.policy)}${best.has(entry.policy) ? " is-best" : ""}`}>
                     {index === 0 ? heading(metric.values.length) : null}
                     <td className="bench-bar-cell">
-                      <span className="bench-track" aria-hidden="true">
-                        {entry.value !== null && entry.value !== undefined
-                          ? <span style={{ width: `${Math.max(widths[index], entry.value > 0 ? 1 : 0)}%` }} /> : null}
-                      </span>
-                      <span className="sr-only">{POLICY_LABELS[entry.policy]}</span>
+                      {/* Only the better policy's bar carries its colour; the name says which bar is which. */}
+                      <div className="bench-bar">
+                        <span className="bench-bar-label">{POLICY_LABELS[entry.policy]}</span>
+                        <span className="bench-track" aria-hidden="true">
+                          {entry.value !== null && entry.value !== undefined
+                            ? <span style={{ width: `${Math.max(widths[index], entry.value > 0 ? 1 : 0)}%` }} /> : null}
+                        </span>
+                      </div>
                     </td>
                     <td className="num mono bench-value">{formatMetric(entry.value, metric.unit)}</td>
                     <td className="num mono bench-diff">
@@ -304,8 +314,8 @@ function ResultsCard({ suite }) {
       </div>
       <footer className="card-foot bench-results-foot">
         <span>
-          Difference is relative to {POLICY_LABELS[baseline]}. The better value in each row is bold; values within a
-          millisecond count as a tie.
+          Difference is relative to {POLICY_LABELS[baseline]}. The better policy&apos;s bar is in colour and its value
+          is bold; values within a millisecond count as a tie.
         </span>
         <details>
           <summary>How these are measured</summary>

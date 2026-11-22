@@ -1,4 +1,5 @@
 import { Icon } from "./Icon.jsx";
+import { stageTag } from "./PipelineView.jsx";
 
 const CANCELLABLE = new Set(["CREATED", "QUEUED", "WAITING", "SCHEDULED", "RUNNING", "INTERRUPTED"]);
 const REQUEUEABLE = new Set(["FAILED", "INTERRUPTED"]);
@@ -90,7 +91,9 @@ export function JobDetail(props) {
           </div>
           <div>
             <dt>Pipeline stage</dt>
-            <dd>{job.stage}</dd>
+            <dd>{stageTag(job.stage)
+              ? <><span className="stage-tag mono">{stageTag(job.stage).number}</span> {stageTag(job.stage).label}</>
+              : job.stage === "TERMINATED" ? "Ended early" : job.stage}</dd>
           </div>
           <div>
             <dt>Rounds / preempted / retries</dt>

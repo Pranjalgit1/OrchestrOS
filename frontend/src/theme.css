@@ -52,9 +52,12 @@
   --go-hover: var(--accent-hover);
   --stop: #a53a28;
   --stop-hover: #8c2f20;
-  /* Resources, the same in every bar, ring, and line. */
-  --cpu: #d97757;
-  --memory: #8b7fd6;
+  /* Resources, the same in every bar, ring, and line. Two neutral steps, so
+     coral and lavender only ever mean a strategy or a policy. */
+  --cpu: #5e5d58;
+  --memory: #b4b1a6;
+  /* Bars that are shown but do not lead, like the policies that did not win. */
+  --chart-quiet: #d9d6cc;
   --shadow: 0 1px 2px rgb(20 20 19 / 4%);
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --motion-fast: 160ms;
@@ -101,7 +104,8 @@
   --ml-tint: #2c2a3a;
   --stop: #ee8a74;
   --stop-hover: #f2a291;
-  --cpu: #e08a6a;
-  --memory: #a99cf0;
+  --cpu: #d4d1c6;
+  --memory: #7a786f;
+  --chart-quiet: #4d4b46;
   --shadow: none;
 }

@@ -318,7 +318,6 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
       {view === "run" ? (
         <>
           <PageHeader
-            crumbs={["workloads", "run"]}
             title="Run workload"
             status={autoRunning ? { tone: "live", label: "Running" } : { tone: "idle", label: "Idle" }}
             subtitle={runSubtitle(state, lastTickAt)}
@@ -391,7 +390,6 @@ export function OrchestratorConsole({ view = "run", onStatusChange }) {
       {view === "autoscaling" ? (
         <>
           <PageHeader
-            crumbs={["cluster", "autoscaling"]}
             title="Autoscaling"
             subtitle="Adds and retires logical workers as load changes. One strategy is active at a time."
           />

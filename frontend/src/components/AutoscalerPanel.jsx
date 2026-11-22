@@ -15,9 +15,9 @@ const ACTION_TEXT = { SCALE_UP: "Scaled up", SCALE_DOWN: "Scaled down", NONE: "N
 
 /** One strategy runs at a time so the two can be compared on the same workload. */
 export const STRATEGIES = [
-  { value: "REACTIVE", label: "Reactive", eyebrow: "Reactive autoscaling",
+  { value: "REACTIVE", label: "Reactive", title: "Reactive autoscaling",
     hint: "Scales on the load measured now." },
-  { value: "ML", label: "ML predictive", eyebrow: "ML-assisted autoscaling",
+  { value: "ML", label: "ML-assisted", title: "ML-assisted autoscaling",
     hint: "Scales on the load a linear regression predicts ahead." },
 ];
 const STRATEGY_DEFAULTS = { strategy: "REACTIVE", mlWindowPoints: 20, mlLookAheadSeconds: 60 };
@@ -113,8 +113,7 @@ export function AutoscalerView({ status, error, busy = false, onToggle, onSave }
     <section className="panel autoscaler-panel" aria-label="Autoscaler">
       <header className="panel-head">
         <div>
-          <p className="eyebrow">{strategy.eyebrow}</p>
-          <h2>Autoscaler</h2>
+          <h2>{strategy.title}</h2>
         </div>
         <div className="autoscaler-head-actions">
           <fieldset className="strategy-toggle" disabled={busy}>
@@ -345,7 +344,7 @@ function AutoscalerSettings({ config, loop, busy, onSave }) {
         {config.scaleUpQueueThreshold} jobs wait and the cluster is {percent(config.scaleUpUtilization)}{" "}
         reserved, up to {config.maxWorkers} extra workers. Retires an idle extra worker after{" "}
         {config.idleSeconds}s once the cluster would stay below {percent(config.scaleDownUtilization)}.
-        Waits {config.cooldownSeconds}s between changes. ML predictive applies the same rule to the load
+        Waits {config.cooldownSeconds}s between changes. ML-assisted applies the same rule to the load
         predicted {config.mlLookAheadSeconds}s ahead from the last {config.mlWindowPoints} checks, and keeps
         an idle worker while load is predicted to return.
         {loop.enabled

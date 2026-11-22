@@ -50,10 +50,10 @@ test("number keys switch views, but never while typing or with a modifier", () =
   assert.equal(key("2", { ctrlKey: true }), null);
 });
 
-test("the page header shows the breadcrumb, title, status, and actions", () => {
-  const html = render(PageHeader, { crumbs: ["workloads", "run"], title: "Run workload",
+test("the page header shows the title, status, and actions, with no breadcrumb", () => {
+  const html = render(PageHeader, { title: "Run workload",
     status: { tone: "live", label: "Running" }, subtitle: "3 jobs in history", actions: createElement("button", null, "Go") });
-  assert.match(html, /<p class="page-crumbs" aria-label="Location">workloads \/ run<\/p>/);
+  assert.doesNotMatch(html, /page-crumbs/);
   assert.match(html, /<h1>Run workload<\/h1>/);
   assert.match(html, /class="page-status is-live"/);
   assert.match(html, /<div class="page-actions"><button>Go<\/button><\/div>/);
@@ -93,6 +93,12 @@ test("the workload panel keeps generation and cleanup together", () => {
   assert.match(html, /Generate workload/);
   assert.match(html, /Try a demo/);
   assert.match(html, /Clear finished jobs/);
+});
+
+test("a job's stage reads as the same number the pipeline shows", () => {
+  assert.deepEqual(pipeline.stageTag("EXECUTION"), { number: "05", label: "Docker execution" });
+  assert.deepEqual(pipeline.stageTag("QUEUE"), { number: "01", label: "Job queue" });
+  assert.equal(pipeline.stageTag("TERMINATED"), null, "a job that ended early has left the pipeline");
 });
 
 test("the pipeline numbers its stages, underlines stages with jobs, and explains early endings", () => {

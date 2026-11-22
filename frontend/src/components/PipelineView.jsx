@@ -9,6 +9,16 @@ const STAGES = [
   { stage: "COMPLETED", label: "Completed", note: "Result stored, capacity freed" },
 ];
 
+/**
+ * A job's stage as its pipeline number and name, like { number: "05", label: "Docker execution" },
+ * so the queue and the job drawer say where a job is the same way the pipeline does.
+ * A job that ended early has left the pipeline and has no number.
+ */
+export function stageTag(stage) {
+  const index = STAGES.findIndex((entry) => entry.stage === stage);
+  return index < 0 ? null : { number: String(index + 1).padStart(2, "0"), label: STAGES[index].label };
+}
+
 /** "1 failed, 1 interrupted, 20 cancelled" from the backend's status counts. */
 export function endedEarlyText(statusCounts = {}) {
   return ["FAILED", "INTERRUPTED", "CANCELLED"]

@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { JOB_STATUSES, jobStatusLabel, selectQueueJobs, jobAge } from "../job-queue.view.js";
 import { Icon } from "./Icon.jsx";
+import { stageTag } from "./PipelineView.jsx";
+
+/** The job's pipeline stage number beside its status; jobs that ended early have none. */
+function StageTag({ stage }) {
+  const tag = stageTag(stage);
+  if (!tag) return null;
+  return <span className="stage-tag mono" title={`Pipeline stage ${tag.number}: ${tag.label}`}>{tag.number}</span>;
+}
 
 const COLUMNS = [
   ["name", "Job"], ["worker", "Worker"], ["status", "Status"], ["age", "Age"],
@@ -134,6 +142,7 @@ export function JobQueue({ jobs, totalJobs = jobs.length, workers = [], captured
                   <td>
                     <span className="job-status">
                       <span className={`state-dot state-${job.status.toLowerCase()}`} aria-hidden="true" />{jobStatusLabel(job.status)}
+                      <StageTag stage={job.stage} />
                     </span>
                   </td>
                   <td className="mono">{job.createdAt ? <time dateTime={job.createdAt} title={`Created ${new Date(job.createdAt).toLocaleString()}`}>{jobAge(job.createdAt, now)}</time> : "—"}</td>

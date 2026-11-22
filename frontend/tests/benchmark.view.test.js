@@ -150,6 +150,16 @@ test("results show a bar per policy, the change against the first, bold winners,
   assert.match(html, /Both 0, no policy preempted a job/);
   assert.match(html, /Difference is relative to FCFS/);
   assert.match(html, /How these are measured/);
+  assert.match(html, /<div class="bench-bar"><span class="bench-bar-label">SJF<\/span>/, "each bar names its policy");
+});
+
+test("several policies sharing the best value read as one tie, not a stack of winners", () => {
+  const preempt = metric("preemptions", "Preemptions", "", "lower",
+    values(0, 0, [{ policy: "ROUND_ROBIN", value: 2 }]), ["FCFS", "SJF"]);
+  const html = view({ data: { activeSuiteId: null, suites: [{ ...suite, status: "COMPLETED", failureReason: null,
+    runs: [run("FCFS", 0), run("SJF", 1), run("ROUND_ROBIN", 2)],
+    comparison: { ...suite.comparison, comparable: true, notes: [], metrics: [preempt] } }] } });
+  assert.match(html, /<span class="bench-tie">Tie<small>FCFS, SJF<\/small><\/span>/);
 });
 
 test("a running suite locks the form, shows progress, and offers stop instead of start", () => {

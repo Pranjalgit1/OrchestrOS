@@ -198,11 +198,11 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
               <dl className="capacity-legend">
                 <div>
                   <dt title="Millicores: 1000m = 1 CPU core"><span className="metric-dot cpu-dot" />CPU (m)</dt>
-                  <dd>{overview.cluster.cpuAllocatedMillicores.toLocaleString()} / {overview.cluster.cpuCapacityMillicores.toLocaleString()} m</dd>
+                  <dd>{overview.cluster.cpuAllocatedMillicores} / {overview.cluster.cpuCapacityMillicores}m</dd>
                 </div>
                 <div>
                   <dt><span className="metric-dot memory-dot" />Memory</dt>
-                  <dd>{overview.cluster.memoryAllocatedMiB.toLocaleString()} / {overview.cluster.memoryCapacityMiB.toLocaleString()} MiB</dd>
+                  <dd>{overview.cluster.memoryAllocatedMiB} / {overview.cluster.memoryCapacityMiB} MiB</dd>
                 </div>
               </dl>
             </article>
@@ -232,7 +232,8 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
                   (status) => overview.queue.byStatus[status],
                 ).map((status) => (
                   <span className={`chip status-${status.toLowerCase()}`} key={status}>
-                    {status} {overview.queue.byStatus[status]}
+                    {status.charAt(0) + status.slice(1).toLowerCase()}{" "}
+                    <span className="mono">{overview.queue.byStatus[status]}</span>
                   </span>
                 ))}
                 {overview.queue.total === 0 ? (
@@ -264,11 +265,11 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
               <p className="hint" role="status">
                 {readStatus.jobs?.error
                   ? jobs
-                    ? "Job metrics refresh failed. Showing the last successful read; use Refresh now to retry."
-                    : "Job metrics unavailable. Use Refresh now in Monitoring tools to retry."
-                  : !jobs ? "Loading job metrics…" : null}
+                    ? "Job metrics refresh failed. Showing the last successful read; use Refresh now to retry. "
+                    : "Job metrics unavailable. Use Refresh now in Monitoring tools to retry. "
+                  : !jobs ? "Loading job metrics… " : null}
                 {readStatus.jobs?.lastSuccessAt
-                  ? ` Last read ${new Date(readStatus.jobs.lastSuccessAt).toLocaleTimeString()}.`
+                  ? `Last read ${new Date(readStatus.jobs.lastSuccessAt).toLocaleTimeString()}`
                   : ""}
               </p>
             </article>
@@ -279,7 +280,7 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
                 {overview.executions.running.length === 0 ? (
                   <div className="empty-state running-empty">
                     <Icon name="box" />
-                    <p>No containers running.</p>
+                    <p>No containers running</p>
                   </div>
                 ) : (
                   <ul className="runlist">
@@ -315,25 +316,25 @@ export function MonitoringView({ overview, jobs, history, error, readStatus = {}
           <article className="tile timings-tile">
               <h3>Lifecycle timings</h3>
               <div className="table-scroll">
-                <table className="grid">
+                <table className="data-table timings-table">
                   <thead>
                     <tr>
                       <th scope="col">Stage</th>
-                      <th scope="col">n</th>
-                      <th scope="col">avg</th>
-                      <th scope="col">p95</th>
-                      <th scope="col">max</th>
+                      <th scope="col" className="num">Jobs</th>
+                      <th scope="col" className="num">Average</th>
+                      <th scope="col" className="num">p95</th>
+                      <th scope="col" className="num">Max</th>
                     </tr>
                   </thead>
                   <tbody>
                     {Object.entries(jobs?.timings ?? {}).map(
                       ([metric, stats]) => (
                         <tr key={metric}>
-                          <td>{TIMING_LABELS[metric] ?? metric}</td>
-                          <td>{stats.count}</td>
-                          <td>{seconds(stats.averageSeconds)}</td>
-                          <td>{seconds(stats.p95Seconds)}</td>
-                          <td>{seconds(stats.maximumSeconds)}</td>
+                          <th scope="row">{TIMING_LABELS[metric] ?? metric}</th>
+                          <td className="num mono">{stats.count}</td>
+                          <td className="num mono">{seconds(stats.averageSeconds)}</td>
+                          <td className="num mono">{seconds(stats.p95Seconds)}</td>
+                          <td className="num mono">{seconds(stats.maximumSeconds)}</td>
                         </tr>
                       ),
                     )}

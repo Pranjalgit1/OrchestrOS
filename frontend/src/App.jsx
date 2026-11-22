@@ -6,29 +6,6 @@ import { OrchestratorConsole } from "./OrchestratorConsole.jsx";
 import { Icon } from "./components/Icon.jsx";
 import { PageHeader } from "./components/PageHeader.jsx";
 import { createMonitoringPoller } from "./monitoring.poller.js";
-const currentCapabilities = [
-  "MySQL-backed job records",
-  "Controlled job lifecycle",
-  "Logical worker registry",
-  "Deterministic workload batches",
-  "FCFS, SJF, Priority, Round Robin scheduling",
-  "Resource-aware worker placement",
-  "Transaction-safe CPU and memory reservation",
-  "Controlled Docker workload execution",
-  "Reproducible result checksums",
-  "Live operational metrics and utilization history",
-  "Browser-driven orchestration with per-stage controls",
-  "Restart recovery and workload cleanup",
-  "Round Robin preemption with requeue",
-  "Per-job cancellation, including running containers",
-  "Automatic and manual retry of failed jobs",
-  "Reactive and ML-predictive worker autoscaling with recorded decisions",
-  "Multi-policy benchmark with comparison charts",
-  "Reactive vs ML autoscaling comparison with timelines and a plain-language verdict",
-];
-const futureCapabilities = [
-  "Worker-level failure recovery",
-];
 /** One view per tab, so each feature fits on roughly one screen. Number keys 1–4 switch views. */
 export const TABS = [
   ["run", "Run workload"],
@@ -248,46 +225,13 @@ export function App() {
             <OrchestratorConsole view={tab} onStatusChange={setOrchestrator} />
             {tab === "monitoring" ? (
               <>
-                <PageHeader crumbs={["cluster", "monitoring"]} title="Monitoring"
+                <PageHeader title="Monitoring"
                   subtitle="Reserved capacity, queue, throughput, and lifecycle timings, read from MySQL." />
                 <MonitoringPanel />
               </>
             ) : null}
           </div>
 
-          <details className="foundation-details">
-            <summary>Architecture and supported capabilities</summary>
-            <section className="foundation-panel">
-              <div>
-                <p className="eyebrow">Implemented now</p>
-                <h2>Scheduled, reserved, executed, and measured</h2>
-                <p>
-                  Seeded workloads become queued jobs, the scheduler picks the next
-                  job by policy, and placement chooses a logical worker. Reservation
-                  commits capacity inside a MySQL transaction that locks the worker
-                  row, so concurrent jobs can never over-allocate it. The job then
-                  runs as one locked-down container limited to exactly that
-                  reservation, and recording its result releases the capacity in a
-                  single transaction. The dashboard reads job and resource records
-                  from MySQL. Panels refresh independently, and the job table shows
-                  recent updates.
-                </p>
-                <ul>
-                  {currentCapabilities.map((capability) => (
-                    <li key={capability}>{capability}</li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <p className="eyebrow">Planned increments</p>
-                <ul>
-                  {futureCapabilities.map((capability) => (
-                    <li key={capability}>{capability}</li>
-                  ))}
-                </ul>
-              </div>
-            </section>
-          </details>
           <footer className="workspace-footer">
             <span>OrchestrOS · local compute, persistent state</span>
             <span className={`footer-status is-${backendState}`}>

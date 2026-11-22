@@ -71,7 +71,7 @@ const mlStatus = (overrides = {}) => status({
   ...overrides,
 });
 
-test("the strategy control selects exactly one of Reactive or ML predictive", () => {
+test("the strategy control selects exactly one of Reactive or ML-assisted", () => {
   const reactive = render({ status: status() });
   assert.match(reactive, /<legend class="sr-only">Scaling strategy<\/legend>/);
   assert.match(reactive, /checked="" value="REACTIVE"/);
@@ -82,7 +82,8 @@ test("the strategy control selects exactly one of Reactive or ML predictive", ()
   assert.doesNotMatch(reactive, /Forecast/, "the forecast only shows for the ML strategy");
   const ml = render({ status: mlStatus() });
   assert.match(ml, /checked="" value="ML"/);
-  assert.match(ml, /ML-assisted autoscaling/);
+  assert.match(ml, /<h2>ML-assisted autoscaling<\/h2>/, "one header naming the active strategy");
+  assert.doesNotMatch(ml, /ML predictive|<h2>Autoscaler<\/h2>/);
 });
 
 test("the ML strategy shows its forecast, or that it is still collecting history", () => {
