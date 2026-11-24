@@ -1,6 +1,6 @@
 # Why the project works this way
 
-This is a plain-language summary of the current design choices. It includes the early project decisions, the JavaScript/MySQL update completed on 5 October 2026, and the scheduling, autoscaling, benchmark, and dashboard work from 21-23 October 2026.
+This is a plain-language summary of the current design choices. It includes the early project decisions, the JavaScript/MySQL update completed on 5 October 2026, and the later scheduling, autoscaling, comparison, and dashboard work.
 
 ## 1. Keep the app in one repository
 
@@ -16,11 +16,11 @@ MySQL is the only application database. Jobs and reservations live there, so a r
 
 See [the change record](changes.md) for the conversion, cleanup, and checks carried out on 5 October 2026.
 
-## 3. Pin package versions
+## 3. Lock the installed dependency tree
 
-The package files use exact versions, and `package-lock.json` records the full dependency tree. `npm ci` installs those recorded versions.
+Most application and development dependencies use exact versions in the workspace package files. The two Fontsource packages use compatible caret ranges, and the Node and npm engine fields specify minimum versions. `package-lock.json` records the exact resolved dependency tree, so `npm ci` installs the locked versions.
 
-This makes the project easier to reproduce on another computer. Dependency updates should be deliberate and followed by checks. The migration kept the established React, Vite, Express, and Prisma versions while removing packages no longer needed.
+This makes the project easier to reproduce on another computer. Dependency updates should be deliberate and followed by checks. The migration kept the established React, Vite, Express, and Prisma packages while removing packages no longer needed.
 
 ## 4. Support both local development and Compose
 
@@ -94,6 +94,8 @@ The allocation and worker-counter updates belong to one transaction. A failure u
 
 Transactions allow up to 15 seconds to obtain a connection and 20 seconds to finish. This gives real lock waits time to complete. `lockWaitMs` shows how long the row-lock step took.
 
+MySQL can resolve a deadlock by rolling one transaction back and reporting Prisma error `P2034`. Reservation and release transactions retry only that error, with four total attempts. The waits before the three retries are `20 × attempt + random(0..30)` milliseconds, which adds jitter so concurrent transactions are less likely to collide again. Other errors, and a fourth `P2034`, are returned to the caller.
+
 A MySQL functional unique index permits only one reserved allocation per job while keeping older allocations as history. Capacity check constraints provide another database-level safeguard.
 
 Reservation keeps the job scheduled. Execution is the step that changes it to running.
@@ -106,7 +108,7 @@ The runner limits work size and accounts for its memory budget. It reports the a
 
 The backend uses Docker's HTTP API directly instead of adding a separate Docker client package. It handles API-version negotiation and separates captured standard output from error output.
 
-In Compose, the backend needs the host Docker socket to start containers. That gives it control over Docker on the development machine. The browser does not receive this access. Workload containers themselves have resource limits, no network, and restricted filesystem and process permissions.
+In Compose, the backend bind-mounts the host Docker socket so it can start workload containers. Access to that socket gives the backend container full control of the host Docker daemon and is root-equivalent privilege on the host. This is an accepted trade-off for the local, single-machine prototype. The frontend and browser never receive the socket. Workload-container limits, network isolation, and restricted filesystem and process permissions do not reduce the backend container's Docker-daemon authority.
 
 ## 13. Return from a start request before the workload finishes
 
@@ -144,17 +146,34 @@ The Immediate demo uses a valid custom batch with all arrival offsets set to zer
 
 Clear finished jobs is a backend transaction that removes finished job records and their related history in the required order. It leaves queued and running jobs out of the selection.
 
-## 17. Scale logical workers reactively, and retire instead of delete
+## 17. Share one autoscaler between two explainable strategies
 
-Scaling reacts to observed signals: waiting jobs and reserved capacity. It does not use forecasts, which keeps every decision explainable from one database snapshot and recorded with its reason. Requiring both a queue and high utilization avoids adding workers when jobs are only waiting for the next orchestrator pass. Separate scale-up and scale-down thresholds plus a cooldown prevent flapping.
+There is one autoscaler service, one timer, one configuration, one worker lifecycle, and one scaling-event history. Exactly one strategy is active at a time:
 
-Workers are retired rather than deleted because jobs, allocations, and executions keep foreign keys to the worker that ran them. Retirement keeps that history intact, and scale-up reuses retired workers so rows do not accumulate. A host-memory ceiling keeps the combined logical budgets within what the computer can plausibly back.
+- **Reactive** applies the scaling thresholds to the current eligible queue length and current peak reserved utilization.
+- **ML-assisted** applies the same thresholds to short-term forecasts of those values. It is not an external or opaque trained model. It performs two ordinary least-squares straight-line fits over recent timestamped observations: one for eligible queued jobs and one for peak reserved CPU-or-memory utilization. It evaluates both lines at the configured look-ahead time. Predictions are bounded to valid queue and utilization ranges.
 
-Runtime settings are held in memory. They are an operator's experiment knobs, while the environment holds the defaults and the event history in MySQL is the durable record.
+Every evaluation records the current point, regardless of strategy. The default in-memory history is the latest 20 points, the default look-ahead is 60 seconds, and ML-assisted waits for at least three points before acting. Normal strategy changes can therefore reuse compatible observations. The history is operational state, not durable monitoring history, and is lost on backend restart.
 
-## 18. Benchmark policies on the real pipeline, one at a time
+Both strategies share scale-up and scale-down thresholds, cooldown, worker limits, host-memory limits, and worker create/retire code. ML-assisted additionally requires a low forecast before scale-down, so current quiet load alone cannot retire a worker when demand is predicted to return. Workers are retired rather than deleted because jobs, allocations, and executions retain foreign keys to the worker that ran them. Scale-up can reuse retired workers without accumulating rows.
 
-A comparison is only fair if every policy does the same work on the same capacity, so the benchmark controls both instead of trusting the operator to.
+Runtime settings are an operator's experiment controls held in memory. Environment values provide defaults, while completed scaling events and comparison results are stored in MySQL.
+
+## 18. Compare Reactive and ML-assisted on controlled real runs
+
+The scaling comparison runs one seeded workload twice through the real orchestrator: Reactive first, then ML-assisted. Only the active autoscaling strategy changes. Scheduling policy, placement, workload specifications, jobs per tick, base capacity, worker size and limit, thresholds, cooldown, idle period, forecast window, and look-ahead stay fixed.
+
+A comparison needs an idle cluster, a running autoscaler timer, permission to add at least one worker, and the fixed workload image. It refuses to overlap another scaling comparison or policy benchmark. The second run copies the first run's saved batch instead of regenerating it, and checksums plus recorded base capacity determine whether the results are comparable.
+
+Before each strategy runs, the service pauses autoscaling, retires empty autoscaled workers, waits out any remaining cooldown, selects the strategy, and clears the autoscaler's load history and last decision. Each controlled run therefore starts with a fresh history. In particular, ML-assisted must collect its own three points and cannot learn from the preceding Reactive run.
+
+The real pipeline drives jobs to completion while a timeline samples queue length, workers in service, extra and idle-extra workers, utilization, and ML forecasts. Saved results include job timing, reaction and backlog duration, extra-worker and idle-extra-worker time, peak workers, scaling actions, flaps, and forecast mean absolute error. Forecast accuracy matches a prediction to the measured queue nearest its look-ahead target, within the allowed sampling tolerance.
+
+`POST /api/scaling-comparisons` starts the asynchronous comparison; list, detail, and abort routes expose saved and live state. The `scaling_comparisons`, `scaling_comparison_runs`, and `scaling_comparison_samples` tables preserve settings, outcomes, and timelines. Startup marks comparisons left running by an interrupted backend as aborted and cancels their unfinished jobs. The service restores the operator's prior enabled state and strategy when it finishes.
+
+## 19. Benchmark scheduling policies on the real pipeline, one at a time
+
+A policy comparison is only fair if every policy does the same work on the same capacity, so the benchmark controls both instead of trusting the operator to.
 
 - **Isolation by refusal, not filtering.** The scheduler, the resume lookup, and Round Robin preemption all look at every job. Scoping them to one batch would change how the console behaves. Instead, a suite needs an idle cluster to start, and while it runs, routes that change the pipeline return 409. Kill all workloads is still allowed, because an emergency stop should never be blocked.
 - **Reuse, don't regenerate.** Later runs copy the first run's batch through the existing reuse path. Equal result checksums then prove the work was identical, rather than assuming it.
@@ -162,19 +181,18 @@ A comparison is only fair if every policy does the same work on the same capacit
 - **Store results as columns.** Metrics are copied onto the run row when it ends, and the batch link is `ON DELETE SET NULL`. Clearing finished jobs therefore keeps the results. CHECK constraints keep counts and timings non-negative.
 - **Waiting excludes run time.** Waiting subtracts the time spent running across all attempts, so a preempted Round Robin job's second queue stay counts as waiting.
 
-## 19. Organise the dashboard by task, and use colour only for meaning
+## 20. Organise the dashboard as a top-bar and sidebar workspace
 
-The single long page needed a lot of scrolling and showed some information two or three times. It is now four tabs, each roughly one screen: Run, Autoscaling, Policy comparison, and Monitoring.
+The current desktop shell has a 52-pixel sticky top bar and a 216-pixel sticky sidebar. The top bar contains OrchestrOS branding, the “Workload orchestrator” label, a measured API/MySQL/Docker status summary, and the Light/Dark selector. The sidebar groups four views under Workloads: **Run workload**, **Autoscaling**, **Comparison**, and **Monitoring**. URL hashes preserve the current view, and number keys 1-4 switch views when the user is not typing. The orchestrator component stays mounted, so polling and automatic runs continue after navigation.
 
-- **Tabs, not a longer page.** The current tab lives in the URL hash, so reloads and links keep the view. The orchestrator component stays mounted on every tab, so leaving the Run tab never stops a run.
-- **Controls always in reach.** Policy, placement, jobs per tick, Run / Pause, and Kill all sit in one sticky run bar. Generating work is a separate Workload panel that starts open on an empty cluster and folds away afterwards.
-- **One place per fact.** Worker cards carry each worker's finished attempts, which replaced the second workers table in Monitoring. Job details open in a drawer instead of keeping a mostly empty column on screen.
-- **Colour is a signal.** Surfaces stay white and monochrome. Green buttons start actions and red buttons stop them, both with white text. CPU is always blue and memory always green. Each policy keeps one colour across the comparison. Labels, icons, ★, and BEST text still carry the meaning for anyone who cannot rely on colour.
+The Comparison view contains both **Autoscaling: Reactive vs ML** and scheduling-policy comparisons. Run controls remain close to the workload, job details open in a drawer, and the capabilities panel from the first redesign has been removed. Pipeline stages use a repeated zero-padded `01`-`06` number beside the shared stage label in the pipeline, queue, and drawer. That stage-number treatment is the current visual signature.
 
-## 20. Use both small tests and real-system tests
+The warm Claude-style theme uses cream and white surfaces in light mode and charcoal surfaces in dark mode. Terracotta marks primary actions and live activity. Reactive is coral and ML-assisted is lavender; scheduling policies have their own stable colors. CPU and memory use neutral tones so they cannot be mistaken for a strategy or policy. Stop controls are neutral outlines until a red warning hover. Status colors keep operational meaning: green for completed or active, red for failed, amber for interrupted or stopping, and terracotta for running, busy, or starting. Text, icons, and labels repeat every color-coded meaning.
 
-Services can receive simple in-memory replacements for database or Docker operations. This lets small tests check their rules quickly. Frontend views are rendered on the server in tests, so their states can be checked without a browser or backend.
+## 21. Use small tests, rendered-view tests, and real-system tests
 
-Separate integration tests use real MySQL and Docker to check constraints, concurrent requests, rollback, resource release, and actual container results. Test files run one at a time because some operations work across the whole test database.
+Both workspaces use Node's built-in `node:test` runner. Backend tests run serially because database and container integrations share global resources. Pure policy and service tests inject repository, runtime, clock, and wait replacements. Separate integration tests enable real MySQL with `RUN_DATABASE_TESTS=true` and real workload containers with `RUN_DOCKER_TESTS=true`; they cover SQL constraints, concurrency, rollback, resource release, recovery, and container outcomes.
 
-The migration's full verification passed 130 tests. The latest full backend run with MySQL and Docker enabled passed 210 tests (23 October 2026), and the frontend suite has 33 tests. See [the change record](changes.md) for details and [the run guide](running.md) for the commands.
+Frontend tests load JSX through Vite in middleware/SSR mode and render views with `react-dom/server`. This checks components and states without requiring a browser or running backend. The production build remains a separate validation of the browser bundle.
+
+The current verified state is **241/241 backend tests passed with MySQL and Docker enabled**, **68/68 frontend tests passed**, and the JavaScript syntax check and frontend production build passed. Historical totals remain in [the change record](changes.md) with their dates; they describe those earlier revisions, not the current suite. See [the run guide](running.md) for the commands.

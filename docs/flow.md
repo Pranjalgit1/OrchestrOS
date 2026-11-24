@@ -6,19 +6,22 @@ For a side-by-side code walkthrough, start with these files:
 
 | Change | Where to read |
 | --- | --- |
-| Sticky header and the Run / Autoscaling / Policy comparison / Monitoring tabs (kept in the URL hash) | [App.jsx](../frontend/src/App.jsx) |
-| Reference palette, responsive layout, and locally hosted Inter / Roboto Mono fonts | [theme.css](../frontend/src/theme.css), [styles.css](../frontend/src/styles.css), [main.jsx](../frontend/src/main.jsx) |
-| Sticky run bar, and the Workload panel with seed and cleanup | [ControlPanel.jsx](../frontend/src/components/ControlPanel.jsx) |
-| Run/Pause timer, Demo Mode, and the job details drawer; stays mounted so auto-run continues on every tab | [OrchestratorConsole.jsx](../frontend/src/OrchestratorConsole.jsx) |
-| Autoscaling On/Off switch, signals, thresholds, and history | [AutoscalerPanel.jsx](../frontend/src/components/AutoscalerPanel.jsx) |
-| Policy comparison form, results table, and per-policy coloured charts | [BenchmarkPanel.jsx](../frontend/src/components/BenchmarkPanel.jsx), [benchmark.chart.js](../frontend/src/benchmark.chart.js) |
-| Worker cards with reservations, running containers, and finished attempts | [WorkerGrid.jsx](../frontend/src/components/WorkerGrid.jsx) |
+| Application shell: sticky top bar, fixed desktop sidebar, exact Run workload / Autoscaling / Comparison / Monitoring views, URL hashes, keys 1–4, service status, and theme | [App.jsx](../frontend/src/App.jsx), [ui.css](../frontend/src/ui.css) |
+| Theme tokens, responsive layout, and locally hosted Inter / Roboto Mono fonts | [theme.css](../frontend/src/theme.css), [styles.css](../frontend/src/styles.css), [ui.css](../frontend/src/ui.css), [main.jsx](../frontend/src/main.jsx) |
+| Non-sticky Run actions/settings and Workload generation/cleanup panel | [ControlPanel.jsx](../frontend/src/components/ControlPanel.jsx) |
+| Run/Pause browser timer, demo generation, unfinished-job actions, state polling, and job drawer | [OrchestratorConsole.jsx](../frontend/src/OrchestratorConsole.jsx) |
+| Numbered pipeline and matching job-stage tags | [PipelineView.jsx](../frontend/src/components/PipelineView.jsx), [JobQueue.jsx](../frontend/src/components/JobQueue.jsx), [JobDetail.jsx](../frontend/src/components/JobDetail.jsx) |
+| Reactive/ML-assisted strategy control, On/Off switch, thresholds, forecast, and scaling history | [AutoscalerPanel.jsx](../frontend/src/components/AutoscalerPanel.jsx) |
+| Comparison mode switch | [ComparisonTab.jsx](../frontend/src/components/ComparisonTab.jsx) |
+| Reactive-vs-ML setup, polling, timelines, results, history, rerun, stop, and export | [ScalingComparisonPanel.jsx](../frontend/src/components/ScalingComparisonPanel.jsx), [ScalingSetup.jsx](../frontend/src/components/ScalingSetup.jsx), [ScalingInsights.jsx](../frontend/src/components/ScalingInsights.jsx), [ScalingChart.jsx](../frontend/src/components/ScalingChart.jsx), [scaling.chart.js](../frontend/src/scaling.chart.js) |
+| Scheduling-policy form and table-based results with inline bars | [BenchmarkPanel.jsx](../frontend/src/components/BenchmarkPanel.jsx), [benchmark.chart.js](../frontend/src/benchmark.chart.js) |
+| Worker table/cards with reservations, running containers, and finished attempts | [WorkerGrid.jsx](../frontend/src/components/WorkerGrid.jsx) |
 | Browser API requests | [api.js](../frontend/src/api.js) |
 | Built-in worker capacities and safe setup | [worker.defaults.js](../backend/src/modules/workers/worker.defaults.js) |
 | Small resource profiles and type-specific work sizes | [workload.generator.js](../backend/src/modules/workloads/workload.generator.js) |
 | Limits on custom generation requests | [workload.schemas.js](../backend/src/modules/workloads/workload.schemas.js) |
-| Outer CPU (blue) / inner memory (green) reservation rings used by workers and monitoring | [CapacityGauge.jsx](../frontend/src/components/CapacityGauge.jsx) |
-| Live metrics in a 2 × 2 block, utilization history, and lifecycle timings | [MonitoringPanel.jsx](../frontend/src/MonitoringPanel.jsx) |
+| Neutral CPU / memory reservation rings used by workers and monitoring | [CapacityGauge.jsx](../frontend/src/components/CapacityGauge.jsx), [theme.css](../frontend/src/theme.css) |
+| Live metrics, utilization history, and lifecycle timings | [MonitoringPanel.jsx](../frontend/src/MonitoringPanel.jsx) |
 
 ## 1. Start the app
 
@@ -35,7 +38,9 @@ The backend also starts the usage-history timer unless it has been disabled. The
 
 ## 2. Generate jobs
 
-On the **Run** tab, open **Workload** (it starts open on an empty cluster), choose a job count, arrival pattern, workload type, and seed, then click Generate Workload. The panel folds away afterwards so the run bar and pipeline are in view. Clicking a job opens its details in a drawer on the right; Escape closes it. Resource sizes are automatic and small by default.
+The top bar stays visible and shows the OrchestrOS brand, “Workload orchestrator”, combined API/MySQL/Docker status, and the Light/Dark selector. The desktop sidebar is headed **Workloads** and has four exact view names: **Run workload** (`#run`), **Autoscaling** (`#autoscaling`), **Comparison** (`#comparison`), and **Monitoring** (`#monitoring`). On narrow screens it becomes a horizontal navigation strip. Keys 1–4 select those views unless focus is in a form field. Legacy `#console`, `#pipeline`, and `#job-queue` links open **Run workload**; `#benchmark` opens **Comparison**.
+
+On **Run workload**, click **Add workload** (the panel starts open on an empty cluster), choose a job count, arrival pattern, workload type, and seed, then click **Generate workload**. The panel closes afterwards. Clicking a job opens its details in a drawer on the right; Escape closes it. Resource sizes are automatic and small by default.
 
 1. The browser sends `POST /api/workloads/generate`.
 2. The backend rejects missing, unknown, or out-of-range inputs.
@@ -59,7 +64,9 @@ It copies stored specifications rather than calling the generator again. That pr
 
 ## 4. Ask the orchestrator to run work
 
-The run bar at the top of the **Run** tab stays in view while you scroll. **Run orchestrator** (green) calls `POST /api/orchestrator/run` every two seconds with the chosen policy and placement strategy. **Jobs started per tick** sets `maxJobs` for each call: 1 for a step-by-step demo, 5 for a steady load, or 25 to fill the cluster and trigger autoscaling. The Round Robin quantum field appears only when that policy is chosen. **Try a demo · 10 jobs** in the Workload panel generates ten small sleep jobs and starts the same orchestrator. There are no separate single-job or batch-run buttons.
+The **Run workload** controls are part of the normal page flow; they do not stay fixed while you scroll. The page header has **Add workload**, **Kill all**, and **Run orchestrator** (which changes to **Pause** while browser auto-run is active). The settings row chooses FCFS, SJF, Priority, or Round Robin; First fit, Least loaded, or Resource-aware placement; and 1, 5, or 25 **Jobs started per tick**. The Round Robin quantum appears only for that policy.
+
+**Run orchestrator** calls `POST /api/orchestrator/run` every two seconds with the chosen settings. **Try a demo · 10 jobs** generates ten small sleep jobs and starts that same timer. There are no separate single-job or batch-run buttons.
 
 For each job, the backend:
 
@@ -72,7 +79,9 @@ For each job, the backend:
 
 A call can advance up to 25 jobs. It does not wait for every container to finish. If there is no eligible work or the next job cannot fit, it reports that outcome instead of pretending a container started.
 
-Auto mode is a browser timer that repeats run requests. It keeps going when you switch tabs, and a green dot on the **Run** tab shows that it is active. Pausing it or closing the page stops those requests. It does not cancel containers already running. Auto mode stops by itself once the queue has drained and no container is left running.
+The pipeline and every job stage use matching two-digit tags: **01** Job queue, **02** Scheduler, **03** Placement, **04** Reservation, **05** Docker execution, and **06** Completed. Failed, interrupted, and cancelled jobs are grouped as **Ended early** without a seventh tag.
+
+Auto mode is a browser timer that repeats run requests. `OrchestratorConsole` stays mounted when you change views, and a live dot beside **Run workload** shows that it is active elsewhere. Pausing it or closing the page stops requests but does not cancel containers already running. Auto mode stops once no unfinished job remains and the orchestrator reports nothing eligible.
 
 ## 5. Scheduling chooses the job
 
@@ -146,9 +155,9 @@ The dashboard regularly calls `GET /api/orchestrator/state` to display jobs, wor
 
 The live job queue shows the most recently updated jobs first, including jobs that just started, finished, or were cancelled. This display order does not change the scheduler's policy. The response limit applies after sorting, so new changes remain visible even with a large job history. Pipeline counts, reservation totals, and worker running-job lists cover the whole database. Running-job details remain available from worker cards even when a job is outside the recent table. The orchestration endpoint reads these values from one repeatable database snapshot.
 
-Worker cards on the **Run** and **Autoscaling** tabs also show each worker's finished attempts (completed and failed), using the same counts as monitoring.
+Worker cards on the **Run workload** and **Autoscaling** views also show each worker's finished attempts (completed and failed), using the same counts as monitoring.
 
-The **Monitoring** tab reads resource use and job timing summaries. It shows reserved capacity, the queue, throughput, and running containers in a 2 × 2 block, then the history chart and lifecycle timings. It does not make scheduling decisions.
+The **Monitoring** view reads resource use and job timing summaries. It shows reserved capacity, the queue, throughput, and running containers in a 2 × 2 block, then the history chart and lifecycle timings. It does not make scheduling decisions.
 
 Panels refresh independently. Job metrics show a loading or unavailable state until a successful read arrives; a returned zero is a measured zero. Failed refreshes retain the last successful values and their read time. API/database health is rechecked ten seconds after each completed check, with a ten-second request timeout; a recovered check clears the earlier error.
 
@@ -161,18 +170,18 @@ The history chart shows CPU and memory reservations as percentages of worker cap
 ## 11. Manage individual records
 
 - Create one job with `POST /api/jobs`; it starts queued.
-- Cancel a queued job with `POST /api/jobs/:id/cancel`.
+- Cancel any unfinished job in `CREATED`, `QUEUED`, `WAITING`, `SCHEDULED`, `RUNNING`, or `INTERRUPTED` from its drawer with **Cancel job** (`POST /api/jobs/:id/cancel`). For running work, the backend waits out an in-progress launch if needed, stops the managed container, lets its tracker settle, and records cancellation plus resource release transactionally. If completion or preemption wins the race, that outcome remains authoritative.
 - Create a logical worker with `POST /api/workers`; it starts idle with no resources reserved.
 - Read job, worker, allocation, and execution records through their GET endpoints.
 - Click a job in the queue or a worker card to open its details drawer. It shows the job's resources, policy, worker, reservation, container, and recorded result. **Cancel job** (red) and **Requeue job** are at the top; **Advance one stage at a time** places, reserves, starts, or releases it one step at a time for demonstrations. Escape or the close button hides the drawer.
 
-**Kill all** (red, in the run bar) pauses browser auto-run, waits for in-flight launches, stops and removes only Docker containers labeled `orchestros.managed=true`, and cancels queued/scheduled jobs. Active executions become `CANCELLED` and reservations are released transactionally. Failed stops are reported and their active execution reservations remain held. MySQL and unrelated Docker containers are kept.
+**Kill all** in the **Run workload** page header pauses browser auto-run, waits for in-flight launches, stops and removes only Docker containers labeled `orchestros.managed=true`, and cancels non-executing unfinished jobs. Active executions become `CANCELLED` and reservations are released transactionally. Failed stops are reported and their active execution reservations remain held. MySQL and unrelated Docker containers are kept.
 
 The three default worker budgets are built in: 512/1024/1536 MiB and 500/1000/1500m CPU. Setup and backend startup configure idle workers automatically. Generated jobs use 64-256 MiB, 100-1000m CPU, and 2-10 second duration estimates. There is no lightweight toggle or preset button.
 
 ## 12. Clear finished jobs
 
-On the **Run** tab, open **Workload** and expand **Cleanup** for **Clear generated workload** and **Clear finished jobs**. Pause the orchestrator, then clear generated work to call `POST /api/workloads/clear-generated`. This removes queued jobs linked to workload batches that have never been scheduled, including jobs whose arrival time is still in the future. The activity log reports the number removed and the dashboard refreshes the queue.
+On **Run workload**, open **Add workload**. The cleanup buttons are always visible at the bottom of that open panel; there is no separate expandable Cleanup section. Pause the orchestrator, then use **Clear generated workload** to call `POST /api/workloads/clear-generated`. This removes queued jobs linked to workload batches that have never been scheduled, including jobs whose arrival time is still in the future. The activity log reports the number removed and the dashboard refreshes the queue.
 
 The delete checks job state in the database, so a job claimed by the scheduler is protected. Jobs with placement, allocations, or execution history are kept, including Round Robin jobs that returned to the queue. Manually created jobs are kept. Empty batches are removed only when no reused batch references them.
 
@@ -184,30 +193,67 @@ Queued, scheduled, and running jobs are not selected for this cleanup. Workers a
 
 ## 13. Compare scheduling policies
 
-Open the **Policy comparison** tab, choose the policies and workload, and press **Run**. The browser calls `POST /api/benchmarks` and then polls `GET /api/benchmarks` every 2 seconds while it runs.
+Open **Comparison**, choose **Scheduling policies**, select the policies and workload, and click **Run _n_ policies**. The form includes job count, arrival pattern, workload type, placement, seed, Round Robin quantum, and jobs started per tick. It displays the current unfinished-job count; every unfinished job must finish or be cancelled first. Use **Kill all** on **Run workload** or **Cancel job** in a job drawer when needed.
 
-1. The backend checks that no job is unfinished and that the workload image exists, records the suite with one pending run per policy, and returns 202.
-2. It pauses the autoscaler.
-3. For each policy in order (FCFS, SJF, Priority, Round Robin), it creates the batch (generated the first time, reused after that) and records the current capacity. It then calls the orchestrator every second with that policy until every job in the batch has finished. Round Robin uses the chosen quantum.
-4. It reads the batch's jobs and execution attempts, calculates the metrics, and saves them on the run.
-5. After the last run, or after a failure or stop, it resumes the autoscaler and records the suite's outcome. Runs that never started are marked aborted.
+The browser calls `POST /api/benchmarks` and polls the benchmark list every 2 seconds while a suite runs.
 
-**Stop benchmark** calls `POST /api/benchmarks/:id/abort`. The runner stops all workloads, records the current run with what it measured so far, and skips the rest. A run whose jobs were cancelled from elsewhere, or that hits a stage error that will not clear by waiting (for example Docker being unavailable), ends the suite in the same way.
+1. The backend requires an idle cluster and the workload image, records one pending run per selected policy, and returns HTTP 202.
+2. It pauses the autoscaler so every policy sees fixed capacity.
+3. In FCFS, SJF, Priority, Round Robin order, it generates the first seeded batch and reuses its stored specifications thereafter. It records starting capacity and calls the normal orchestrator every second until the batch finishes. Round Robin uses the selected quantum.
+4. It reads jobs and execution attempts, calculates metrics, and stores them on the run.
+5. After completion, failure, or stop, it resumes the autoscaler, records the suite outcome, and marks runs that never started aborted.
 
-The results panel shows each run's status and capacity, a metrics table, and one bar chart per metric. Each policy keeps one colour everywhere (FCFS blue, SJF green, Priority amber, Round Robin purple), with a legend above the charts. The best value is outlined and marked ★ in the chart and labelled BEST in the table. If capacity or checksums differed, a note says the numbers are not directly comparable. Earlier comparisons stay listed under **Earlier benchmarks**.
+**Stop benchmark** calls `POST /api/benchmarks/:id/abort`. The cooperative runner notices the request, calls Kill all, stores the partial current run as stopped, and skips the rest. The button reads **Stopping…** until that completes. Cancellation from elsewhere or a non-recoverable stage error stops the suite similarly.
 
-## 14. Turn autoscaling on
+The current result UI is table-based. A run table shows status, completed/failed counts, capacity, checksum/capacity comparability, progress, and early-stop details. One metrics table then gives each policy an inline horizontal bar, formatted value, difference from the first completed policy, and a **Better** result. Only the winning bar uses its policy colour and its value is bold. Equal values read **Both**, **All**, or **Tie**; values within one millisecond count as tied. Current policy colours are coral for FCFS, lavender for SJF, charcoal for Priority, and gray for Round Robin, with theme-adjusted dark values. Earlier suites remain available below the result.
 
-Open the **Autoscaling** tab and press **Autoscaling: Off** (red); it turns green and reads **Autoscaling: On**. The browser sends `PATCH /api/autoscaler` with `{ "enabled": true }`.
+## 14. Compare Reactive and ML-assisted autoscaling
 
-From then on the backend checks the cluster every `AUTOSCALE_INTERVAL_SECONDS` (default 5) by itself. The four cards show the signals of the latest check: waiting jobs, CPU reserved, memory reserved, and workers in service. The line below them gives the decision and its reason. To see it scale up, generate 50 or 100 jobs and run with 25 jobs per tick; new `auto-worker-N` cards appear, and they are retired again once the cluster stays idle.
+Open **Comparison** and leave the default **Autoscaling: Reactive vs ML** mode selected. Click **New experiment**, then choose jobs, arrival pattern, workload type, scheduling policy, placement, seed, and Round Robin quantum where applicable. The experiment requires the autoscaler timer to be enabled, at least one allowed extra worker, an available workload image, and an idle cluster. Finish or cancel unfinished jobs before starting.
 
-**Rules and thresholds** explains the current rule and lets you change the thresholds, use a quick demo preset, or restore defaults. **Scaling history** lists every change with its reason. While a policy comparison runs, a note says autoscaling is on hold.
+The browser calls `POST /api/scaling-comparisons`, then polls the list and active detail about every 2 seconds. The backend runs a controlled pair in a fixed order:
 
-## 15. Errors and shutdown
+1. It saves the current autoscaler enabled state and strategy and records the shared thresholds, limits, cooldown, idle period, ML window, and look-ahead.
+2. Before Reactive, it pauses autoscaling, retires every empty autoscaled worker, refuses to continue if an extra worker still holds work, and waits out cooldown from the latest saved scaling event.
+3. It generates the seeded batch, clears the autoscaler's in-memory load history and last decision, enables Reactive, and drives jobs through the normal scheduler, placement, reservation, and Docker pipeline.
+4. During the run it samples waiting jobs, workers, extra/idle workers, peak reservation, and forecast when applicable. Sampling targets 2-second intervals but slow work can delay it; missed intervals are not backfilled.
+5. It pauses autoscaling at run close and stores job metrics, scaling actions, and the full timeline.
+6. It resets the cluster and history again, reuses the first batch's saved job specifications, enables ML-assisted, and repeats the pipeline. The ML run therefore starts without inherited observations and must collect at least three autoscaler checks before forecasting.
+7. Finally, it restores the prior enabled state and strategy, resumes autoscaling, and records the comparison outcome.
+
+Reactive uses measured eligible queue length and peak reserved CPU/memory. ML-assisted fits independent linear trends to the rolling queue and peak-reservation observations and predicts them for the configured look-ahead. Both use the same thresholds, worker sizing, worker limit, host-memory ceiling, cooldown, lifecycle, and one-action-per-check rule. ML can add capacity before measured pressure crosses the line. It retires capacity only when both current and predicted load remain quiet.
+
+The comparison page shows live progress; a shared timeline switch for utilization, queue, or workers; a takeaway; fairness warnings; the main result table; earlier comparisons; and detailed metrics, run records, scaling actions, and ML forecast accuracy. **Re-run** repeats the stored workload request with current autoscaler thresholds, and **Export** downloads the detailed result and timelines as JSON. Results are considered directly comparable only when both runs complete on the same base capacity with matching non-empty checksum digests.
+
+**Stop comparison** calls `POST /api/scaling-comparisons/:id/abort`. The request returns before cancellation completes. The runner sees the flag on its next loop, calls Kill all, closes the current run as stopped, skips the remaining run, restores autoscaler state, and finalizes the comparison; the UI reads **Stopping…** meanwhile.
+
+### ML data and clean controlled runs
+
+There is no persistent training dataset. The autoscaler's ML input is an in-memory, oldest-first rolling window of measured `{ time, eligible queue, peak reserved utilization }` points. It is populated under either strategy, trimmed to the configured history-point count, and lost on backend restart. Normal manual switching from Reactive to ML can therefore reuse recent observations. Saved `scaling_events` are an audit history and monitoring `worker_samples` feed the monitoring chart; neither is loaded as ML input.
+
+The supported clean-run reset is built into **Autoscaling: Reactive vs ML**: cluster reset and `resetHistory()` happen before each strategy. There is no UI/API button to erase ML history, scaling events, monitoring samples, or stored experiment history. **Clear generated workload** and **Clear finished jobs** affect job records only; clearing the browser Activity log affects only that list. Restarting the backend clears the ML window and runtime settings but leaves persisted actions and experiment records.
+
+## 15. Control autoscaling
+
+Open **Autoscaling**. Choose exactly one strategy with the **Reactive** or **ML-assisted** selector, then independently turn **Autoscaling** On or Off. Strategy selection PATCHes `strategy`; the switch PATCHes `enabled`.
+
+The backend evaluates every `AUTOSCALE_INTERVAL_SECONDS` (default 5) when the loop is enabled. Reactive tests the current queue and reservations. ML-assisted predicts ahead from recent checks; until three points exist, its decision says it is collecting history. When ML is selected, the page shows predicted waiting jobs, predicted peak reservation, queue trend, recent points, look-ahead, and the forecast window. The signal cards show waiting jobs, CPU reserved, memory reserved, and workers in service, followed by the latest decision and reason.
+
+**Rules and thresholds** changes queue/utilization thresholds, idle/cooldown timing, worker limits and size, and the ML history/look-ahead controls; it also provides a demo preset and defaults. **Scaling history** lists persisted scale changes and reasons. While either experiment owns the cluster, controls that would change its pipeline or autoscaler configuration are locked. Turning autoscaling off prevents additions but still lets eligible idle autoscaled workers retire; an experiment pause freezes all evaluation.
+
+CPU and memory are intentionally neutral gray tones in gauges, bars, and chart lines. Coral/lavender identify policies or Reactive/ML-assisted rather than hardware resources.
+
+## 16. Errors, shutdown, and recovery
 
 Input errors return a readable error code and message. Invalid JSON returns HTTP 400; a request body over 16 KB returns HTTP 413. Unknown URLs return HTTP 404. The [API guide](api.md) explains the normal request format.
 
-On a normal shutdown signal, the server stops its sampler and autoscaler timer, stops a running benchmark and waits for it to record itself, closes its listener, waits for pending execution-result work, and disconnects from MySQL.
+On SIGINT or SIGTERM, the server stops the recovery, monitoring, and autoscaler timers; requests cooperative abort of both an active scheduling-policy benchmark and an active Reactive-vs-ML comparison; closes its HTTP listener; awaits both experiment runners and pending execution settlements; disconnects Prisma; and exits. Either experiment's runner calls Kill all when it observes the abort, records the current run stopped, aborts runs that never started, and restores/resumes autoscaling. Ordinary workloads outside an experiment are not proactively cancelled, and shutdown has no hard deadline, so live work or an open operation can delay exit.
 
-A forced stop or crash can leave a job marked running. On startup and every 30 seconds, the backend reconciles untracked open executions: it settles exited/missing containers and resumes tracking live containers using their original deadline. Missing outcomes are recorded as failures. Manual recovery remains available through `POST /api/executions/:executionId/settle`; it refuses a live container.
+After a crash, startup recovery runs before the listener opens:
+
+1. It reconciles open executions. A missing saved container ID is repaired from managed labels where possible. Exited containers settle; missing containers become infrastructure failures eligible for retry; live containers resume tracking for `current execution timeout - elapsed since saved start/create time`. The original deadline itself is not persisted.
+2. It repairs the three study-worker definitions when safe.
+3. It marks a persisted running scheduling-policy suite aborted. This recovery does not separately cancel that suite's queued/scheduled leftovers, so use **Kill all** or individual cancellation if they block the next experiment.
+4. It marks persisted running Reactive-vs-ML comparisons and unfinished runs aborted and individually cancels unfinished jobs from their batches, releasing reservations.
+
+Execution reconciliation and study-worker repair repeat every 30 seconds. Active experiment runners and ML history cannot resume because they lived in the old process. Completed experiment aggregates stay in MySQL; an active scaling run's timeline is lost if it had not yet been committed. Manual execution recovery remains available through `POST /api/executions/:executionId/settle`; it refuses a live container.

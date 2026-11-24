@@ -5,22 +5,28 @@ OrchestrOS runs computing jobs on one development computer. It combines a browse
 The browser asks for work to happen. The backend makes the decisions. MySQL stores what happened. Docker runs each workload.
 
 ```text
-Browser: React dashboard
-          |
-          | API requests
-          v
-Backend: Express application
-          |                 |
-          v                 v
-       MySQL          Docker containers
-   saved records       actual workloads
+React 19 dashboard (top bar + Workloads sidebar)
+                     |
+                     | REST/JSON under /api
+                     v
+Express 5 application
+  |-- orchestrator --> scheduler --> placement --> reservation
+  |                                           \-> Docker execution
+  |-- autoscaler (Reactive or ML-assisted) --> logical workers
+  |-- policy benchmark + Reactive/ML comparison
+  |-- monitoring + recovery
+  |
+  +--> MySQL 8 / Prisma 6      durable jobs, workers, allocations,
+  |                            executions, samples, events, experiments
+  |
+  +--> Docker Engine API       fixed, resource-limited workload containers
 ```
 
 ## 1. Main parts
 
 | Part | Main job | Where to look |
 | --- | --- | --- |
-| Dashboard | Show controls, jobs, workers, results, and graphs in four views, chosen from a sidebar (keys 1–4) that also reports API, MySQL, and Docker status and switches the light and dark theme | `frontend/src/` |
+| Dashboard | Show controls, jobs, workers, results, and graphs in four hash-based views; the top bar reports API/MySQL/Docker status and switches theme, and the sidebar selects views with links or keys 1–4 | `frontend/src/` |
 | API setup | Connect routes, validate request bodies, and report errors | `backend/src/app.js` |
 | Server | Listen for requests, start monitoring and the autoscaler, recover after restarts, and handle shutdown | `backend/src/server.js` |
 | Orchestrator | Call scheduling, placement, reservation, and execution in order | `backend/src/modules/orchestrator/` |
@@ -31,8 +37,9 @@ Backend: Express application
 | Resources | Reserve and release CPU and memory | `backend/src/modules/resources/` |
 | Executions | Start Docker containers and record results | `backend/src/modules/executions/` |
 | Monitoring | Read current values and save usage history | `backend/src/modules/monitoring/` |
-| Autoscaler | Add and retire extra logical workers from waiting jobs and reserved capacity | `backend/src/modules/autoscaler/` |
-| Benchmarks | Run one workload under several policies and compare the measured results | `backend/src/modules/benchmarks/` |
+| Autoscaler | Add and retire extra logical workers using Reactive or ML-assisted decisions | `backend/src/modules/autoscaler/` |
+| Benchmarks | Run one workload under several scheduling policies and compare measured results | `backend/src/modules/benchmarks/` |
+| Scaling comparisons | Run the same seeded workload under Reactive and ML-assisted autoscaling and compare timelines and costs | `backend/src/modules/scaling-comparisons/` |
 | Workload program | Do the actual calculation inside a container | `workload-runner/run.js` |
 | Tests | Check backend and frontend behavior separately from application source | `backend/tests/`, `frontend/tests/` |
 
@@ -51,20 +58,30 @@ Some features also have calculation-only files, such as `scheduler.policies.js`,
 
 ### The dashboard
 
-The React app shows one tab at a time. `App.jsx` owns the tabs and keeps the current one in the URL hash. `OrchestratorConsole.jsx` holds the orchestrator state and the auto-run timer; it stays mounted on every tab, so a run keeps going while you look at Monitoring or the policy comparison.
+The current shell has a sticky top bar with the OrchestrOS brand, the “Workload orchestrator” label, combined API/MySQL/Docker status, and a Light/Dark selector. The desktop sidebar is fixed below it, is headed **Workloads**, and links to the four hash-based views below; at narrow widths it becomes a non-sticky horizontal navigation strip. Number keys 1–4 switch views when focus is not in a form field. `OrchestratorConsole.jsx` owns orchestrator state and the browser auto-run timer and remains mounted across views, so a run continues while another view is open.
 
-| Tab | Main components |
+| View | Main components |
 | --- | --- |
-| Run | `PageHeader` with `RunActions`, `RunSettings` and `WorkloadPanel` (`ControlPanel.jsx`), `PipelineView`, `WorkerGrid` (a worker table) beside `ActivityLog`, `JobQueue`, and `JobDetail` in a side drawer. Shared styles are in `ui.css` |
-| Autoscaling | `AutoscalerPanel` and `WorkerGrid` |
-| Comparison | `ComparisonTab` switches between `ScalingComparisonPanel` (Reactive vs ML, the default) and `BenchmarkPanel` (scheduling policies, chart geometry in `benchmark.chart.js`). The autoscaling view is built from `ScalingSetup`, `StrategyCard`, `ScalingChart` (interactive SVG drawn at its real width), and `ScalingInsights`; wording, summary rows, and chart geometry are in `scaling.chart.js`, styles in `scaling.css` |
-| Monitoring | `MonitoringPanel`, with chart geometry in `reservation.chart.js` |
+| Run workload (`#run`) | `PageHeader` with `RunActions`, `RunSettings` and `WorkloadPanel` (`ControlPanel.jsx`), `PipelineView`, `WorkerGrid` beside `ActivityLog`, `JobQueue`, and `JobDetail` in a side drawer |
+| Autoscaling (`#autoscaling`) | `PageHeader`, `AutoscalerPanel`, and `WorkerGrid` |
+| Comparison (`#comparison`) | `ComparisonTab` switches between `ScalingComparisonPanel` (the default **Autoscaling: Reactive vs ML** mode) and `BenchmarkPanel` (**Scheduling policies**). Supporting components are `ScalingSetup`, `ScalingChart`, and `ScalingInsights`; chart calculations are in `scaling.chart.js` and `benchmark.chart.js` |
+| Monitoring (`#monitoring`) | `PageHeader` and `MonitoringPanel`, with chart geometry in `reservation.chart.js` |
 
-Each worker card shows its reserved CPU and memory (outer blue ring and inner green ring), its running containers, and its finished attempts, so there is one place to read a worker. Charts are plain SVG drawn from small pure functions; there is no chart library. Panels with a pure `...View` component (`AutoscalerView`, `BenchmarkView`, `MonitoringView`) can be rendered in tests without a backend.
+Shared UI pieces live in `frontend/src/components/`: `PageHeader`, `Icon`, `CapacityGauge`, `PipelineView`, `WorkerGrid`, `ActivityLog`, `JobQueue`, `JobDetail`, `ControlPanel`, the autoscaling and comparison panels, and their chart/setup/insight components. The six pipeline stages carry the same two-digit tags everywhere they appear: **01** Job queue, **02** Scheduler, **03** Placement, **04** Reservation, **05** Docker execution, and **06** Completed. Failed, interrupted, and cancelled jobs are shown as ended early and do not receive a seventh stage.
+
+CPU and memory use two neutral tones in bars, rings, and charts so coral and lavender remain available for scheduling-policy and autoscaling-strategy identity. In light mode they are `#5e5d58` and `#b4b1a6`; in dark mode they are `#d4d1c6` and `#7a786f`. Charts are plain SVG drawn from small pure functions; there is no chart library. Panels with a pure `...View` component can be rendered in tests without a backend.
 
 ## 2. What MySQL stores
 
-The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). The initial SQL is in [the MySQL migration](../backend/prisma/migrations/20261005000000_mysql_initial/migration.sql). [A follow-up migration](../backend/prisma/migrations/20261021000000_preemption_and_requeue/migration.sql) adds the `PREEMPTED` execution status and the job preemption and retry counters. [The autoscaling migration](../backend/prisma/migrations/20261021120000_reactive_autoscaling/migration.sql) adds the `RETIRED` worker status, the `autoscaled` flag, and `scaling_events`. [The benchmark migration](../backend/prisma/migrations/20261023000000_policy_benchmarks/migration.sql) adds `benchmark_suites` and `benchmark_runs`.
+The table definitions are in [schema.prisma](../backend/prisma/schema.prisma). The repository has five additive migrations:
+
+1. [Initial MySQL schema](../backend/prisma/migrations/20261005000000_mysql_initial/migration.sql): workload batches, jobs, workers, samples, allocations, executions, constraints, and the functional index that permits one live reservation per job.
+2. [Preemption and requeue](../backend/prisma/migrations/20261021000000_preemption_and_requeue/migration.sql): `PREEMPTED` executions plus job preemption and retry counters.
+3. [Reactive autoscaling](../backend/prisma/migrations/20261021120000_reactive_autoscaling/migration.sql): retired/autoscaled workers and `scaling_events`.
+4. [Policy benchmarks](../backend/prisma/migrations/20261023000000_policy_benchmarks/migration.sql): benchmark suites, runs, metrics, and capacity records.
+5. [Scaling comparisons](../backend/prisma/migrations/20261101000000_scaling_comparisons/migration.sql): Reactive-vs-ML comparisons, per-strategy runs, timelines, autoscaler settings, scaling actions, and fairness/forecast metrics.
+
+The files show the intended schema history; whether a particular database has applied them is determined by that database's migration state.
 
 | Table | What one row means |
 | --- | --- |
@@ -171,13 +188,13 @@ There are two strategies, and exactly one is active (`strategy`, default `REACTI
 | Reactive | The waiting jobs and reserved utilization measured now |
 | ML | The waiting jobs and reserved utilization predicted `mlLookAheadSeconds` (default 60) ahead |
 
-The ML forecast is an ordinary least-squares linear regression over the last `mlWindowPoints` checks (default 20, so about 100 seconds at the 5-second interval). Each series, waiting jobs and peak reserved utilization, is fitted against time and extrapolated. Predictions are clamped to at least 0 jobs and 0–100% utilization. Every check records the measured load whichever strategy is active, so switching to ML can forecast at once; the forecast needs at least 3 points, and until then ML makes no change.
+The implementation is deliberately small and local. The autoscaler stores measured points as `{ at, queuedJobs, peak }` in an oldest-first in-memory `loadHistory`, trims it to `mlWindowPoints`, and fits two independent ordinary least-squares lines against elapsed seconds: one for eligible queue length and one for peak CPU/memory reservation. It extrapolates both to the newest point plus `mlLookAheadSeconds`, clamps jobs to zero or more and utilization to 0–1, and reports queue slope per minute. Zero or one point, or equal timestamps, produce a flat mean; the strategy requires at least three points before it can act.
 
-ML scales up when the forecast crosses the scale-up line, which can happen before the measured load does. It retires an idle worker only when the measured load allows it **and** the forecast stays below the scale-down line, so it keeps capacity while load is predicted to return. Its reasons start with `[ML]`, which is also how the scaling history tells the strategies apart.
+Every autoscaler evaluation records measured load whichever strategy is active, so an ordinary switch from Reactive to ML can reuse recent observations. Shrinking the configured window trims history immediately. `resetHistory()` clears both the window and last decision; the controlled Reactive-vs-ML experiment invokes it before each strategy run. Runtime configuration and history disappear on backend restart. Persisted `scaling_events` are an audit trail, not model input, and comparison forecasts become durable only when a run's samples are committed. There is no separate training dataset, feature store, serialized model, validation split, retraining process, or model version.
 
-The load history and forecast live in memory and reset when the backend restarts, like the runtime settings. The ML strategy was first written by a teammate as a separate `autoscaling` module; it was folded into this autoscaler so both strategies use the same worker lifecycle and recorded history.
+ML scales up when the forecast crosses the scale-up line, which can happen before measured load does. It retires an idle worker only when current queue/capacity are quiet **and** the forecast remains below both thresholds. Reactive uses current measured queue and utilization for scale-up and current quietness for scale-down. Both strategies otherwise share the same limits, cooldown, host-memory ceiling, worker lifecycle, transactional actions, and one-change-per-evaluation rule.
 
-Autoscaling starts off (`AUTOSCALE_ENABLED=false`) and is switched on with the **Autoscaling: On/Off** button on the Autoscaling tab. The **Reactive / ML predictive** control next to it picks the strategy. Decisions are fully automatic; there is no manual evaluate button in the dashboard. While it is off, nothing is added, but idle autoscaled workers are still retired so the cluster drains back to its base size. A policy comparison pauses it entirely (scale-down included) until the comparison ends.
+Autoscaling starts off (`AUTOSCALE_ENABLED=false`) and is switched on with the separate **Autoscaling** On/Off control on the **Autoscaling** view. The **Reactive / ML-assisted** strategy selector chooses the strategy. Decisions are fully automatic; there is no manual evaluate button in the dashboard. While autoscaling is off, nothing is added, but idle autoscaled workers are still retired so the cluster drains back to its base size. Either controlled experiment pauses evaluation entirely until it ends.
 
 ## 5. Repeatable workload generation
 
@@ -254,6 +271,10 @@ Suppose a worker has 1000 millicores free and two jobs each ask for 700. Both jo
 
 The reservation code starts a **transaction**, locks the worker's row, checks for an existing reservation, and reads its current free capacity. It then saves the allocation and updates the worker counters together. A competing request for that worker waits, then checks the updated values.
 
+Reservation, release, idle-job cancellation, manual requeue, and execution claim/finalization use the shared `withDeadlockRetry` wrapper. It retries only Prisma `P2034`, which represents a transaction conflict/deadlock. `DEADLOCK_ATTEMPTS = 4` means four total executions: the initial transaction plus at most three retries. After failed attempts 1–3, the exact delay is `20 * attempt + Math.random() * 30` milliseconds: `[20, 50)`, `[40, 70)`, then `[60, 90)`. A non-`P2034` error, or the fourth `P2034`, is thrown immediately. Every retry invokes the callback again and therefore starts a fresh transaction after MySQL has rolled back the victim.
+
+These interactive transactions use `maxWait: 15_000` ms to wait for a connection/transaction slot and `timeout: 20_000` ms for the transaction itself, including row-lock waits and writes. Autoscaler transactions use the same limits but do not use this retry wrapper; a failed autoscaler pass is logged and a later timer pass evaluates fresh state.
+
 If anything fails, the transaction undoes its changes. The worker cannot be left with only half of the reservation saved.
 
 MySQL also checks these rules:
@@ -285,7 +306,9 @@ The backend supplies four inputs: `ORCHESTROS_WORKLOAD_TYPE`, `ORCHESTROS_WORKLO
 
 Each container gets the job's reserved CPU and memory limits. It has no network, no host-folder mounts, a read-only root filesystem, restricted permissions, and a process-count limit.
 
-The backend talks directly to Docker's API. In Compose, only the backend receives the Docker socket. This gives it control over the host Docker engine, so this setup is intended for a local development machine.
+The backend talks directly to Docker's API. In Compose, only the backend receives `/var/run/docker.sock`; the backend container itself is not declared `privileged`. Socket access nevertheless gives the backend root-equivalent control of the host Docker daemon. The API is bound to host loopback by default, but it has no authentication, so this is an explicit high-impact trust boundary suitable only for the local single-machine prototype. The browser never receives socket access.
+
+Workload containers have a narrower privilege set: fixed image and environment, no network or bind mounts, exact CPU/memory and swap limits, read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, PID limit 64, restart disabled, and `Privileged: false`. Runtime stop/remove operations target only OrchestrOS-managed labels.
 
 When a run finishes, the backend saves the outcome and frees its resources in one database transaction. It then removes the container. A zero exit code counts as success only if the expected result is present. Errors are `FAILED`; a time limit is `INTERRUPTED`; a Round Robin eviction is `PREEMPTED`; an operator stop is `CANCELLED`. Monitoring counts `FAILED` and `INTERRUPTED` executions as failures. Preemptions are not counted as failures.
 
@@ -338,7 +361,7 @@ The scaling-comparisons module (`backend/src/modules/scaling-comparisons`) answe
 
 - **Same everything else.** The second run reuses the first run's batch, so the work and result checksums match. Scheduling policy, placement, thresholds, limits, and cooldown are identical; the autoscaler settings are stored with the comparison.
 - **Equal starts.** Before each run the autoscaler is paused, every extra worker is retired so the run starts on the base workers, any cooldown left from earlier scaling is waited out, and the ML load history is cleared. The ML run therefore needs about three checks before it can forecast, which is part of how it behaves.
-- **A timeline.** Every 2 seconds the runner records waiting jobs, workers in service, extra and idle extra workers, peak reserved utilization, and (for ML) the forecast. Scaling actions during the run are copied from `scaling_events`.
+- **A sampled timeline.** About every 2 seconds, subject to the time spent in database/orchestrator work, the runner records waiting jobs, workers in service, extra and idle extra workers, peak reserved utilization, and the ML forecast. It does not backfill missed intervals. Scaling actions during the run are copied from `scaling_events`. Live samples are process memory until the run closes; `finishRun` stores the aggregate, actions, and complete timeline transactionally.
 - **Exclusive.** A policy benchmark and an autoscaling comparison refuse to start while the other runs, and the same routes are locked during either (`experiment.registry.js`). The autoscaler's on/off state and strategy are restored afterwards.
 
 | Metric | Definition |
@@ -353,12 +376,22 @@ The scaling-comparisons module (`backend/src/modules/scaling-comparisons`) answe
 
 Time-weighted metrics treat each sample as holding until the next. Differences under 5% (or under 0.5 s, 5 worker-seconds, or half a change) count as a tie, because Docker timing varies a little between identical runs. The headline verdict combines waiting time and extra worker time: better on one without losing on the other is a win, better on one and worse on the other is a trade-off.
 
-The tables are added by [the scaling comparison migration](../backend/prisma/migrations/20261101000000_scaling_comparisons/migration.sql) and only add to the schema. A live check ran 25 BURST sleep jobs with both strategies: both completed with identical checksums on the same 3-worker base. ML added its first worker before any backlog formed and cut average waiting time from 2.5 s to 1.9 s, at the cost of 32 extra worker-seconds and one flap, so the dashboard reported a trade-off.
+The fifth migration above adds the comparison tables. No single recorded experiment is an architectural guarantee; results depend on workload, thresholds, host load, Docker timing, and the accumulated samples in that controlled run.
 
-## 12. What is unfinished
+## 12. Current limitations
 
-Worker-level failure detection (heartbeats) is still planned. Autoscaled workers are logical capacity on the same computer, like the study workers; scaling does not add physical hardware. Round Robin preemption does not pause and resume a container; a preempted job restarts from the beginning. Closing the browser stops its auto-run requests, but already started work continues while the backend runs. Kill all workloads explicitly stops the app's workload containers and cancels pending jobs.
+- Workers, including autoscaled workers, are logical budgets on one host. Scaling does not provision physical machines.
+- Worker heartbeat fields exist, but worker-failure detection is not implemented.
+- The HTTP API has no authentication or authorization, while the backend holds root-equivalent Docker-socket access. Host-loopback binding limits default exposure but does not remove that trust boundary.
+- Experiment ownership, route exclusion, active samples, and ML load history are process-local. Multiple backend replicas could each believe they own the cluster. A crash aborts experiments rather than resuming them and loses an active comparison run's uncommitted timeline.
+- The ML strategy is two linear trends over queue length and peak reserved utilization. It has no persistent model, richer feature set, confidence estimate, anomaly handling, or training/model-version lifecycle.
+- Autoscaling adds or retires at most one logical worker per evaluation, so its reaction speed is bounded by the timer and cooldown.
+- Round Robin preemption discards the container and restarts deterministic work from the beginning; it cannot checkpoint or resume.
+- Recovery cannot reconstruct output after a container disappears. It records an infrastructure failure and may requeue the job. Execution deadlines are not persisted; after restart, remaining time is recomputed from the current `EXECUTION_TIMEOUT_SECONDS` and the saved start/create time.
+- A normal shutdown stops the recovery, monitoring, and autoscaler timers; cooperatively aborts and awaits both policy benchmarks and autoscaling comparisons; closes the listener; awaits tracked settlements; and disconnects Prisma. It does not proactively stop unrelated ordinary workloads and has no hard shutdown deadline, so open connections, Docker calls, or long settlements can delay exit.
+- On startup, open executions are reconciled, study workers repaired, interrupted benchmark suites marked aborted, and interrupted autoscaling comparisons marked aborted with their unfinished jobs cancelled. Every 30 seconds, execution reconciliation and worker repair repeat. Policy-benchmark recovery marks the suite aborted but does not separately cancel its queued or scheduled leftovers, so they may need **Kill all** or individual cancellation before a new experiment.
+- The Docker adapter intentionally supports a narrow API surface and caps its API version.
 
-After a backend crash, startup recovery and a 30-second reconciliation pass settle untracked exited/missing containers and resume tracking live executions against their original deadline. The manual settle endpoint remains available. Completion uses the Docker finish timestamp when available, so stale recovery does not inflate execution duration.
+Closing the browser stops browser auto-run requests, but already started work continues while the backend runs. **Kill all** explicitly stops managed workload containers and cancels unfinished jobs. Manual execution recovery remains available through `POST /api/executions/:executionId/settle` and refuses a live container.
 
 Read [the job flow](flow.md) for the steps in order, or [the design choices](decision.md) for why these decisions were made.

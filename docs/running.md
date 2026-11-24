@@ -1,16 +1,16 @@
-# Running and testing OrchestrOS
+# Running OrchestrOS
 
-Run the commands in this guide from the project folder. On your current computer, that is:
+Run commands from the project folder. On the current computer:
 
 ```powershell
-cd C:\Users\pranj\Desktop\OSDBMS\OrchestrOS
+Set-Location C:\Users\pranj\Desktop\OSDBMS\OrchestrOS
 ```
 
 ## 1. Everyday startup on your current computer
 
-The local database and `.env` were configured on 5 October 2026. Keep that file; you do not need to copy the example over it.
+The local database and `.env` were configured on 5 October 2026. Keep that file; do not overwrite it with the example.
 
-Start Docker Desktop and make sure the local MySQL service is running. Docker must use Linux containers.
+Start Docker Desktop with Linux containers and make sure the local MySQL service is running.
 
 In the first PowerShell terminal:
 
@@ -25,17 +25,36 @@ In a second terminal, from the same project folder:
 npm run dev:frontend
 ```
 
-Open **http://localhost:5173**. Keep the two terminals open. Press `Ctrl+C` in each to stop the app.
+Open **http://localhost:5173**. Keep both terminals open; press `Ctrl+C` in each to stop the app.
 
-The dashboard opens on the **Run** tab. Open **Workload**, generate jobs (or press **Try a demo · 10 jobs**), then press **Run orchestrator** in the run bar. The other tabs are **Autoscaling**, **Policy comparison**, and **Monitoring**; see [the job flow](flow.md) for what each one does.
+The interface opens on **Run workload**. Generate work with **Add workload** or **Try a demo · 10 jobs**, then select **Run orchestrator**. The **Workloads** sidebar also contains **Autoscaling**, **Comparison**, and **Monitoring**. Comparison has **Autoscaling: Reactive vs ML** and **Scheduling policies** modes. See [the job flow](flow.md) for pipeline details.
 
-After pulling changes that add a migration, stop the backend first, then run `npm run db:deploy` and `npm run prisma:generate`. A running backend locks Prisma's engine file on Windows, and an unapplied migration shows up as "column does not exist" errors.
+`docker:images` builds the fixed program used by workload containers. Rebuild it only when the workload runner changes or the image has been removed.
 
-`docker:images` builds the fixed program used by workload containers. You can skip rebuilding it on later runs unless the workload-runner code changed or the image was removed.
+### After pulling database changes
+
+The committed migrations currently end with policy benchmarks and scaling comparisons. After pulling migration or Prisma schema changes:
+
+```powershell
+# Stop the backend first on Windows, then run:
+npm run db:deploy
+npm run prisma:generate
+```
+
+A running backend can lock Prisma's generated engine on Windows. An unapplied migration or stale generated client can appear as an unknown column, a missing table, or a missing Prisma model/property.
+
+If deployment fails:
+
+1. Confirm `DATABASE_URL` points to the intended host database, not the Compose or test database.
+2. Stop every backend process using that database/client.
+3. Run `npm run db:deploy`, read the first migration error, and then run `npm run prisma:generate` only after deployment succeeds.
+4. Do not edit `_prisma_migrations` or mark a failed migration as applied without diagnosing what SQL succeeded. Repair failed production migrations case by case.
+
+`npm run db:setup` runs deployment and the idempotent starting-worker seed. It is appropriate for a new empty database and safe to repeat, but it does not reset existing workers.
 
 ## 2. First-time setup on another computer
 
-Install Node.js 22.12 or newer, npm 10 or newer, Docker Desktop, and MySQL. Compose uses MySQL 8.4; a directly installed MySQL server must be 8.0.16 or newer. The migration was tested on MySQL 8.0.46 and on the MySQL 8.4 container.
+Install Node.js 22.12 or newer, npm 10 or newer, Docker Desktop, and MySQL. Compose uses MySQL 8.4; a directly installed server must be MySQL 8.0.16 or newer. Migrations have been tested on MySQL 8.0.46 and the MySQL 8.4 container.
 
 Create `.env` only if it does not exist:
 
@@ -45,32 +64,28 @@ npm ci
 npm run prisma:generate
 ```
 
-For a directly installed MySQL server, create an empty database called `orchestr_os` and set `DATABASE_URL` in `.env` to its connection URL. Use your own username and password:
+For a directly installed MySQL server, create an empty `orchestr_os` database and set `DATABASE_URL` in `.env` with your own credentials:
 
 ```text
 mysql://YOUR_USER:YOUR_PASSWORD@localhost:3306/orchestr_os
 ```
 
-You can create the database in MySQL Workbench or a MySQL client:
-
 ```sql
 CREATE DATABASE orchestr_os CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-Then create the tables and starting workers:
+Create the tables, starting workers, and workload image:
 
 ```powershell
 npm run db:setup
 npm run docker:images
 ```
 
-Continue with the two-terminal startup above. Setup uses the committed migration and then creates any missing starting workers. Running setup again does not reset existing workers.
+Continue with the two-terminal startup above.
 
-## 3. Alternative: run the whole app with Docker Compose
+## 3. Alternative: Docker Compose
 
-This option runs a separate MySQL container, the backend, and the frontend. It does not use your directly installed MySQL database.
-
-With Docker Desktop running and `.env` available:
+Compose runs a separate MySQL container, backend, and frontend. It does not use a directly installed MySQL database.
 
 ```powershell
 npm run docker:up
@@ -82,62 +97,78 @@ Open **http://localhost:5173** after startup finishes. Stop the stack with:
 npm run docker:down
 ```
 
-The database data stays in a Docker volume, so a normal stop does not erase it. Avoid running the two-terminal setup and the full Compose stack on the same app ports at the same time.
+Database data remains in a Docker volume. Do not run the host app and full Compose stack on the same app ports simultaneously.
 
-On your current computer, the local MySQL service uses port **3306**. The ignored `.env` sets `MYSQL_PORT=3307` for the optional Compose database, so the two database servers can coexist. They contain separate data.
+On the current computer, local MySQL uses port **3306** and the ignored `.env` sets `MYSQL_PORT=3307` for Compose. These servers contain separate data. On another computer where 3306 is occupied, set `MYSQL_PORT` to a free port before starting Compose.
 
-The example environment uses port 3306 for Compose. On another computer that already uses this port, set `MYSQL_PORT=3307` or another free port before starting Compose.
-
-If you run only the Compose database with a host backend, use:
+To run only the Compose database with a host backend:
 
 ```powershell
 docker compose up -d --wait mysql
 ```
 
-In that case, the host `DATABASE_URL` must use the published `MYSQL_PORT` and the container's application username/password.
+The host `DATABASE_URL` must then use the published `MYSQL_PORT` and the container's application credentials.
 
-## 4. Environment settings
+## 4. Environment and runtime settings
 
-Actual credentials belong in the ignored `.env` file. The example file shows the setting names and sample values.
+Credentials belong in the ignored `.env`. Encode special characters in URL passwords, for example `@` as `%40`.
+
+### Startup environment
+
+These values are read when the backend starts. Changing `.env` requires a restart.
 
 | Setting | Meaning |
 | --- | --- |
-| `DATABASE_URL` | Database connection for the backend running directly on your computer |
-| `DATABASE_URL_DOCKER` | Database connection inside Compose; its hostname is `mysql` and its internal port is 3306 |
-| `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE` | Application account and database created by the MySQL container |
-| `MYSQL_ROOT_PASSWORD` | Administrator password used when initializing the MySQL container |
-| `MYSQL_PORT` | Port used to reach the Compose database from your computer |
-| `HOST`, `PORT` | Address and port for a directly running backend; normally `127.0.0.1:4000` |
+| `DATABASE_URL` | Database connection for a host backend |
+| `DATABASE_URL_DOCKER` | Compose backend connection; hostname `mysql`, internal port 3306 |
+| `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE` | Application account and database created by Compose MySQL |
+| `MYSQL_ROOT_PASSWORD` | MySQL container initialization password |
+| `MYSQL_PORT` | Host port for the Compose database |
+| `HOST`, `PORT` | Host backend address; normally `127.0.0.1:4000` |
 | `CORS_ORIGIN` | Browser origin allowed to call the backend; normally `http://localhost:5173` |
 | `FRONTEND_PORT` | Frontend port published by Compose; normally 5173 |
-| `EXECUTION_TIMEOUT_SECONDS` | Longest allowed run time for a workload; default 300 seconds |
-| `EXECUTION_LOG_LIMIT_BYTES` | Maximum captured output per stream; default 8192 bytes |
-| `ROUND_ROBIN_MAX_PREEMPTIONS` | Round Robin evictions allowed per job before it runs to completion; default 3, 0 disables preemption |
-| `AUTOSCALE_ENABLED` | Whether reactive autoscaling starts switched on; default `false` (toggle it in the dashboard) |
-| `AUTOSCALE_INTERVAL_SECONDS` | Time between autoscaler evaluations; default 5 seconds, 0 turns the timer off |
-| `AUTOSCALE_MAX_WORKERS` | Most autoscaled workers in service at once; default 3 |
-| `AUTOSCALE_WORKER_CPU_MILLICORES` / `AUTOSCALE_WORKER_MEMORY_MIB` | Capacity of each autoscaled worker; default 1000m / 512 MiB |
-| `EXECUTION_MAX_RETRIES` | Automatic requeues per job after an infrastructure fault (container could not start or vanished); default 2, 0 disables |
-| `MONITORING_SAMPLE_INTERVAL_SECONDS` | Time between saved usage samples; default 15 seconds, 0 disables the timer |
-| `MONITORING_SAMPLE_RETENTION_HOURS` | How long to keep samples; default 24 hours, 0 keeps them indefinitely |
-| `DOCKER_SOCKET_PATH` | Connection to Docker; normally leave it unset so the app chooses the platform default |
+| `EXECUTION_TIMEOUT_SECONDS` | Workload timeout; default 300 seconds |
+| `EXECUTION_LOG_LIMIT_BYTES` | Captured output limit per stream; default 8192 bytes |
+| `EXECUTION_MAX_RETRIES` | Requeues after infrastructure faults; default 2, 0 disables |
+| `ROUND_ROBIN_MAX_PREEMPTIONS` | Evictions per job before it runs to completion; default 3, 0 disables |
+| `AUTOSCALE_ENABLED` | Initial autoscaling state; default `false` |
+| `AUTOSCALE_INTERVAL_SECONDS` | Evaluation interval; default 5 seconds, 0 disables the loop |
+| `AUTOSCALE_MAX_WORKERS` | Initial maximum extra workers; default 3 |
+| `AUTOSCALE_WORKER_CPU_MILLICORES` | Initial CPU per extra worker; default 1000m |
+| `AUTOSCALE_WORKER_MEMORY_MIB` | Initial memory per extra worker; default 512 MiB |
+| `MONITORING_SAMPLE_INTERVAL_SECONDS` | Saved-sample interval; default 15 seconds, 0 disables periodic sampling |
+| `MONITORING_SAMPLE_RETENTION_HOURS` | Saved-sample retention; default 24 hours, 0 keeps samples indefinitely |
+| `DOCKER_SOCKET_PATH` | Docker connection; normally unset so the platform default is used |
 
-For a host backend, monitoring settings can be added to `.env`. For a backend in Compose, add them to that service's `environment` block if you want to override its defaults.
+Compose passes only settings listed in the backend service's `environment` block. Add the monitoring variables there to override defaults in Compose; putting them only in `.env` does not automatically pass them through.
 
-Compose uses its application account for the database connection. Keep `DATABASE_URL_DOCKER` consistent with the `MYSQL_*` application settings. The native host connection can use a different account. Encode special characters in URL passwords, for example `@` as `%40`.
+The monitoring UI reads cluster overview every 2 seconds and 60-minute job/sample history every 5 seconds. Service health is checked every 10 seconds and Docker every 15 seconds. **Refresh now** requests fresh data; **Save snapshot** records a sample manually. Periodic sampling and retention remain backend settings.
+
+### Autoscaling settings changed at runtime
+
+The **Autoscaling** view updates in-memory settings through the API. Changes take effect without restarting, but revert on backend restart:
+
+- enabled state and one active strategy: **Reactive** or **ML-assisted**
+- maximum extra workers and each worker's CPU/memory capacity
+- queue, scale-up utilization, and scale-down utilization thresholds
+- idle and cooldown durations
+- ML sliding-window size (3–100 points) and look-ahead (5–300 seconds)
+
+Defaults not provided by startup environment are Reactive, queue threshold 2, scale-up 75%, scale-down 40%, idle 30 seconds, cooldown 15 seconds, 20 ML history points, and a 60-second look-ahead. `AUTOSCALE_INTERVAL_SECONDS` is startup-only. Runtime settings and the in-memory ML history reset on restart; scaling events remain in MySQL. Settings cannot be changed while either comparison experiment is active.
 
 ## 5. Useful URLs
 
 | URL | What it shows |
 | --- | --- |
-| `http://localhost:5173` | Dashboard |
+| `http://localhost:5173` | Interface |
 | `http://localhost:4000/api` | Basic API information |
-| `http://localhost:4000/api/health` | Whether the application can read its main database tables |
-| `http://localhost:4000/api/executions/runtime` | Docker connection and workload-image status |
+| `http://localhost:4000/api/health` | API and main-table database health |
+| `http://localhost:4000/api/executions/runtime` | Docker and workload-image status |
+| `http://localhost:4000/api/monitoring/config` | Effective monitoring sample interval and retention |
 
-A healthy database does not prove Docker is running. The two checks are separate.
+Database health does not prove Docker is available; check both.
 
-## 6. Checks that do not need a test database
+## 6. Checks and tests
 
 ```powershell
 npm run prisma:validate
@@ -150,22 +181,24 @@ docker compose config --quiet
 
 | Command | What it checks |
 | --- | --- |
-| `prisma:validate` | The database schema is written correctly |
-| `check` | Backend JavaScript files have valid syntax |
-| `build` | Backend syntax, then the frontend production build |
-| `test` | Logic and request-handling tests; database/container tests are skipped unless enabled |
-| `npm audit` | Known dependency problems reported by npm |
-| `docker compose config --quiet` | Whether the Compose configuration is valid, without printing credentials |
+| `prisma:validate` | Prisma schema validity |
+| `check` | Backend JavaScript syntax |
+| `build` | Backend check and frontend production build |
+| `test` | Backend and frontend suites; database/container tests need flags |
+| `npm audit` | Dependency advisories |
+| `docker compose config --quiet` | Compose configuration without printing credentials |
 
-The backend runs JavaScript directly, so it does not need a compiled output folder. The frontend build goes into `frontend/dist/`.
+The backend runs JavaScript directly. The frontend build goes to `frontend/dist/`. Run one suite with `npm test --workspace backend` or `npm test --workspace frontend`.
 
-Test files are kept separately in `backend/tests/` and `frontend/tests/`. Run both suites with `npm test`, or one suite with `npm test --workspace backend` or `npm test --workspace frontend`.
+Current session results:
 
-## 7. Run the database and Docker tests
+- Backend: **241 passed, 0 skipped**, with MySQL and Docker tests enabled.
+- Frontend: **68 passed**.
+- `npm run check` and `npm run build`: **passed**.
 
-Use a separate test database. Some tests deliberately choose jobs across the entire database or clear finished jobs, so do not point them at demo records you want to keep.
+## 7. Database and Docker tests
 
-Create an empty MySQL database named `orchestr_os_test`. In PowerShell, replace the username/password placeholders before running:
+Use a separate database. Some tests select jobs across the database or clear finished jobs.
 
 ```powershell
 $env:DATABASE_URL = 'mysql://YOUR_USER:YOUR_PASSWORD@localhost:3306/orchestr_os_test'
@@ -174,7 +207,7 @@ $env:RUN_DATABASE_TESTS = 'true'
 npm test
 ```
 
-To also run real workload containers, start Docker Desktop and run:
+To include real workload containers:
 
 ```powershell
 npm run docker:images
@@ -182,9 +215,9 @@ $env:RUN_DOCKER_TESTS = 'true'
 npm test
 ```
 
-Both flags must be set for the container tests. Test files run one at a time because they share the test database.
+Both flags are required for container tests. Backend test files run one at a time because they share the database. Use `orchestr_os_test`, not everyday `orchestr_os`; comparison tests also require an idle cluster.
 
-When finished, close this terminal or remove these temporary overrides before starting normal development:
+Remove temporary overrides afterward:
 
 ```powershell
 Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue
@@ -192,28 +225,37 @@ Remove-Item Env:RUN_DATABASE_TESTS -ErrorAction SilentlyContinue
 Remove-Item Env:RUN_DOCKER_TESTS -ErrorAction SilentlyContinue
 ```
 
-The latest recorded run, on 23 October 2026, passed all 210 backend tests with both flags enabled and none skipped. Without the flags, 158 run and 52 are skipped. The frontend suite has 33 tests and needs neither flag. See [the change record](changes.md).
-
-Run the database tests against `orchestr_os_test`, not your everyday `orchestr_os` database: one test clears all finished jobs, and the benchmark tests need an idle cluster.
-
 ## 8. Common problems
 
 | Problem | What to check |
 | --- | --- |
-| Dashboard will not open | Is the frontend terminal still running? Open port 5173 |
-| Dashboard cannot reach the API | Is the backend running on port 4000? Check its terminal output |
-| Database access denied | Check the username, password, host, port, and database in `DATABASE_URL` |
-| Tables are missing | Run `npm run db:setup` against the intended database |
-| Prisma client is missing or out of date | Run `npm ci`, then `npm run prisma:generate` |
-| Docker unavailable | Open Docker Desktop and wait for the Linux engine to start |
+| Interface will not open | Keep the frontend running and check port 5173 |
+| Interface cannot reach the API | Check the backend on port 4000 and its terminal output |
+| Database access denied | Check credentials, host, port, and database in `DATABASE_URL` |
+| Tables, comparison models, or fields are missing | Stop the backend; run `npm run db:deploy`, then `npm run prisma:generate`, against the intended database |
+| Migration deployment fails | Read the first database error and inspect what was applied; do not blindly edit migration history |
+| Prisma client is missing or locked | Stop backend processes, run `npm ci`, then `npm run prisma:generate` |
+| Docker unavailable | Start Docker Desktop and wait for the Linux engine |
 | Workload image missing | Run `npm run docker:images` |
-| Job stays queued | Check its planned arrival time, then use Run Orchestrator |
-| Job cannot get a worker | Its CPU/memory request may not fit; wait for capacity to return or use a smaller workload |
-| Paused auto mode but jobs still run | Pause stops new start requests; existing containers continue |
-| Job stays running after a backend crash | Restart the backend for automatic reconciliation, or use Kill all workloads to stop work and release reservations |
-| Worker rings show full capacity | Rings show CPU/memory reservations, not measured physical RAM; use Kill all workloads to stop jobs and release capacity. Small worker budgets are automatic |
-| Windows RAM remains high with no workloads | Check other applications and Docker/WSL memory separately; stopped workload reservations do not represent live RAM use |
-| Port already in use | Stop the other instance or choose a free published port and update the related connection settings |
-| Benchmark says the cluster is not idle | Let queued and running jobs finish, or use Kill all workloads, then start it again |
-| Buttons return "A policy benchmark is running" | A suite is in progress; wait for it or press Stop benchmark |
-| Benchmark models missing after pulling | Stop the backend, then run `npm run db:deploy --workspace backend` and `npm run prisma:generate` |
+| Job stays queued | Check planned arrival, then use **Run orchestrator** |
+| Job cannot get a worker | Its CPU/memory request may not fit; wait for capacity or use a smaller workload |
+| Paused orchestration but jobs still run | **Pause** stops new starts; existing containers continue |
+| Job remains running after a backend crash | Restart for reconciliation, or use **Kill all** to stop work and release reservations |
+| Worker rings appear full | They show reservations, not measured host RAM; stop workloads to release reservations |
+| Windows RAM stays high with no workloads | Check other applications and Docker/WSL memory separately |
+| Port already in use | Stop the other instance or update the related port and connection settings |
+
+### Comparison problems
+
+| Problem | What to check |
+| --- | --- |
+| Comparison says the cluster is not idle | Let all queued/running jobs finish or use **Kill all**, then retry |
+| A policy benchmark or autoscaling comparison is already running | The two experiment types are mutually exclusive; wait, use **Stop benchmark**/**Stop comparison**, or use **Kill all** for an emergency abort |
+| Pipeline or autoscaler settings are locked | Adding/clearing jobs, manual pipeline actions, and autoscaler changes are blocked during an experiment |
+| Autoscaling comparison says its timer is off | Set `AUTOSCALE_INTERVAL_SECONDS` above 0 and restart the backend |
+| Autoscaling comparison says no extra capacity is allowed | Set **Most extra workers** above 0 before starting it |
+| Cluster reset says extra workers still hold work | Stop remaining workloads and wait for reservations to release before retrying |
+| Comparison workload image is missing | Run `npm run docker:images` |
+| Comparison was abandoned after restart | Experiments run in the backend process; startup marks interrupted runs aborted. Start a new comparison |
+| Reactive and ML look identical | Confirm extra-worker capacity is above 0 and choose a workload that crosses the shared queue/utilization thresholds |
+| Comparison tables or Prisma models are missing after pulling | Apply the latest migrations with `npm run db:deploy`, then regenerate with `npm run prisma:generate` |

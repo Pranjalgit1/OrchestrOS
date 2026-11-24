@@ -2,7 +2,7 @@
 
 The dashboard normally calls these URLs for you. Use this guide when testing the backend directly or learning how each stage works.
 
-For local development, the base URL is **http://localhost:4000/api**. All paths below start after `/api`.
+The base URL is **http://localhost:4000/api** in the default local setup. Every path below is relative to `/api`, so the `GET /` entry at the end means `GET /api`.
 
 Send JSON with `Content-Type: application/json` for requests that have a body. Replace sample ID placeholders with IDs returned by the app. Requests reject unknown fields and values outside the allowed ranges.
 
@@ -197,7 +197,7 @@ Reserve, release, and start each take a real job ID:
 { "jobId": "JOB_ID" }
 ```
 
-The backend takes the worker and resource amounts from the job. You cannot override them in these requests. You also cannot supply a Docker image, command, arbitrary environment, or per-request timeout.
+The backend takes the worker and resource amounts from the job. You cannot override them in these requests. You also cannot supply a Docker image, command, arbitrary environment, or per-request timeout. Workload containers are deliberately restricted, but a deployment that gives the backend the Docker socket also gives that backend host-level authority over the Docker daemon; never expose these local-development endpoints to untrusted clients.
 
 Allocation lists accept optional `jobId`, `workerId`, and `status`. Execution lists use the same filter names for execution records. Both accept `limit` from 1-100, default 50.
 
@@ -211,7 +211,7 @@ A successful start returns HTTP 202: the run has started, but it has not necessa
 | PATCH | `/autoscaler` | Change runtime settings, for example `{ "enabled": true }` |
 | POST | `/autoscaler/evaluate` | Run one scaling evaluation now and return its decision. The dashboard does not call this; the backend timer evaluates automatically |
 
-`pausedReason` is `null` normally and holds a short reason while a policy comparison has autoscaling on hold. During that time every evaluation returns `NONE`.
+`pausedReason` is `null` normally and holds a short reason while either comparison mode has exclusive control of the pipeline. During that time every evaluation returns `NONE`.
 
 PATCH accepts any subset of the following fields:
 
@@ -230,9 +230,9 @@ PATCH accepts any subset of the following fields:
 | `mlWindowPoints` | 3-100: how many recent checks the ML forecast fits (default 20) |
 | `mlLookAheadSeconds` | 5-300: how far ahead the ML forecast predicts (default 60) |
 
-`scaleDownUtilization` must stay below `scaleUpUtilization`; otherwise the request returns 400 `INVALID_AUTOSCALER_CONFIG`. Settings last until the backend restarts.
+`scaleDownUtilization` must stay below `scaleUpUtilization`; otherwise the request returns 400 `INVALID_AUTOSCALER_CONFIG`. Settings last until the backend restarts. `AUTOSCALE_INTERVAL_SECONDS` is startup-only: changing runtime settings cannot start a timer configured as `0`, so changing that environment value requires a restart. Environment-backed startup defaults cover enabled state, interval, worker limit, and autoscaled-worker capacity; strategy, thresholds, idle/cooldown, ML window, and look-ahead use the code defaults shown by `GET /autoscaler` and can be changed with PATCH.
 
-GET also returns `forecast` (`null` until three checks are recorded, otherwise the predicted `queuedJobs`, `peak` utilization, `queueSlopePerMinute`, `lookAheadSeconds`, and `points`) and `loadHistory`, the measured points it is fitted to. Both are kept whichever strategy is active.
+GET also returns `forecast` (`null` until three checks are recorded, otherwise the predicted `queuedJobs`, `peak` utilization, `queueSlopePerMinute`, `lookAheadSeconds`, and `points`) and `loadHistory`, the measured points it is fitted to. The active history and forecast are process memory and reset on backend restart. Successful worker changes are stored in `scaling_events`; controlled-comparison settings, timelines, and results are stored separately in the scaling-comparison tables.
 
 A decision's `action` is `SCALE_UP`, `SCALE_DOWN`, or `NONE`, with a plain-language `reason`, the `strategy` that made it, and `applied` telling whether the change committed. Reasons from the ML strategy start with `[ML]`, including the ones stored in scaling events. `GET /workers` also lists retired autoscaled workers with status `RETIRED`. A reservation on a worker that is no longer schedulable returns 409 `WORKER_NOT_SCHEDULABLE` and withdraws the job's placement.
 

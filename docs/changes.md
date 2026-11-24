@@ -1,8 +1,46 @@
 # Change record
 
-Newest work first. Each section records what was verified at the time; later edits are not automatically covered by an earlier check.
+Newest work first. The first section describes the current implementation and verification. Every later section is an explicitly historical record of what was verified at that time; later edits are not covered by an earlier check.
 
-# Work completed on 21-23 October 2026
+# Current implementation and verification
+
+## A. One autoscaler with Reactive and ML-assisted strategies
+
+- One shared autoscaler now exposes two mutually exclusive strategies. **Reactive** evaluates the current eligible queue and peak reserved utilization. **ML-assisted** uses ordinary least-squares forecasts over recent timestamped queue and peak-utilization observations. Both strategies share thresholds, cooldown, limits, worker creation and retirement, and scaling-event persistence.
+- ML-assisted fits independent queue and utilization lines, projects them to the configured look-ahead, and waits for at least three history points. Its history is a bounded in-memory window; normal evaluations collect compatible points regardless of the selected strategy.
+- Controlled comparisons clear both history and the last decision before each run. Reactive and ML-assisted therefore receive fresh histories, and ML-assisted never inherits the preceding Reactive observations.
+
+## B. Reactive-vs-ML scaling comparisons
+
+- The `scaling-comparisons` module runs one seeded workload twice through the real pipeline, Reactive first and ML-assisted second. It fixes scheduling, placement, generated job specifications, jobs per tick, base capacity, thresholds, worker limits, cooldown, idle period, forecast window, and look-ahead.
+- Each run resets the cluster to base workers and waits out the preceding cooldown. The second run reuses the saved first batch rather than regenerating it. Recorded capacity and result checksums determine comparability.
+- The service samples queue, utilization, workers, extra and idle-extra workers, and ML predictions. It stores job timings, pressure and reaction time, backlog duration, extra-worker time, idle-extra-worker time, peak workers, scaling actions, flaps, and forecast mean absolute error.
+- Migration [20261101000000_scaling_comparisons](../backend/prisma/migrations/20261101000000_scaling_comparisons/migration.sql) adds `scaling_comparisons`, `scaling_comparison_runs`, and `scaling_comparison_samples`, with constraints and durable results whose batch links survive job cleanup.
+- `GET` and `POST /api/scaling-comparisons`, `GET /api/scaling-comparisons/:id`, and `POST /api/scaling-comparisons/:id/abort` provide list, asynchronous start, detail, and stop operations. Startup recovery marks interrupted comparisons aborted and cancels their unfinished jobs.
+- The Comparison workspace now includes **Autoscaling: Reactive vs ML** with experiment setup, live progress, stop/re-run/export actions, selectable timelines, a measured takeaway and results table, fairness notes, saved comparisons, raw run records, and predicted-versus-measured ML queue charts.
+
+## C. Claude-style redesign and later unslop polish
+
+- The dashboard moved to a warm Claude-style workspace with a sticky top bar, measured API/MySQL/Docker status, Light/Dark selector, and a Workloads sidebar for **Run workload**, **Autoscaling**, **Comparison**, and **Monitoring**.
+- The later unslop polish standardized sentence case, spacing, weights, and card alignment; removed breadcrumbs and the capabilities panel; and made **ML-assisted** the consistent strategy name.
+- Terracotta now marks primary actions and live state. Reactive is coral and ML-assisted is lavender. CPU and memory changed to neutral tones so they do not compete with strategy and policy colors. Stop controls are neutral outlines with a red warning hover.
+- Zero-padded stage numbers `01`-`06`, paired with the same stage labels across the pipeline, queue, and job drawer, are the current visual signature.
+
+## D. Concurrency and privilege details
+
+- Reservation and release transactions retry only Prisma `P2034` deadlock-victim errors. They make four total attempts, with `20 × attempt + random(0..30)` milliseconds of jitter before each of the three retries.
+- Compose bind-mounts `/var/run/docker.sock` into the backend. This grants the backend container full control of the host Docker daemon and root-equivalent host privilege. The frontend does not receive the socket.
+
+## E. Current verification
+
+| Check | Current result |
+| --- | --- |
+| Backend suite with MySQL and Docker enabled | **241 passed out of 241** |
+| Frontend suite | **68 passed out of 68** |
+| JavaScript syntax check | Passed |
+| Frontend production build | Passed |
+
+# Historical record: work completed on 21-23 October 2026
 
 ## A. Scheduling and job control
 
@@ -13,11 +51,11 @@ Newest work first. Each section records what was verified at the time; later edi
 - **Deadlock retries.** Reservation and execution transactions retry when MySQL picks them as a deadlock victim.
 - Migration [20261021000000_preemption_and_requeue](../backend/prisma/migrations/20261021000000_preemption_and_requeue/migration.sql) adds the `PREEMPTED` status and the `preemptionCount` and `retryCount` columns.
 
-## B. Reactive autoscaling
+## B. Reactive autoscaling at that time
 
-- The new autoscaler module adds `auto-worker-N` workers when jobs wait on a busy cluster and retires idle ones, with a cooldown and a host-memory ceiling. Every change is recorded in `scaling_events`.
-- Thresholds can be changed at runtime from the dashboard or `PATCH /api/autoscaler`.
-- Migration [20261021120000_reactive_autoscaling](../backend/prisma/migrations/20261021120000_reactive_autoscaling/migration.sql) adds the `RETIRED` worker status, the `autoscaled` flag, and `scaling_events`.
+- This release introduced the reactive strategy. The autoscaler added `auto-worker-N` workers when jobs waited on a busy cluster and retired idle ones, with a cooldown and a host-memory ceiling. Every change was recorded in `scaling_events`. A later release added the mutually exclusive ML-assisted strategy to the same autoscaler.
+- Thresholds could be changed at runtime from the dashboard or `PATCH /api/autoscaler`; those controls remain available.
+- Migration [20261021120000_reactive_autoscaling](../backend/prisma/migrations/20261021120000_reactive_autoscaling/migration.sql) added the `RETIRED` worker status, the `autoscaled` flag, and `scaling_events`.
 
 ## C. Multi-policy benchmark
 
@@ -26,16 +64,20 @@ Newest work first. Each section records what was verified at the time; later edi
 - Migration [20261023000000_policy_benchmarks](../backend/prisma/migrations/20261023000000_policy_benchmarks/migration.sql) adds `benchmark_suites` and `benchmark_runs`.
 - A live check on 23 October ran FCFS, SJF, and Round Robin on 10 sleep jobs each: all runs completed with identical checksums and equal capacity, and the stop button left nothing unfinished.
 
-## D. Dashboard redesign
+## D. First dashboard redesign, later superseded
 
-- Four tabs replace the single long page: **Run**, **Autoscaling**, **Policy comparison**, and **Monitoring**, under a sticky header that shows the connection state.
-- A sticky run bar holds policy, placement, jobs per tick, Run / Pause, and Kill all. Generating and cleaning up work moved into a collapsible Workload panel.
-- Job details open in a side drawer. Worker cards show finished attempts (`jobsCompleted` and `jobsFailed` were added to `GET /api/orchestrator/state`), and the duplicate workers table in Monitoring was removed.
-- The autoscaler panel was simplified to an **Autoscaling: On/Off** switch, four signal cards, and one decision line, with the rules and history collapsed. The manual **Evaluate now** button was removed; scaling is automatic.
-- Monitoring shows reserved capacity, queue, throughput, and running containers as a 2 × 2 block.
-- Colour is used for meaning only: green start and red stop buttons with white text, blue CPU and green memory everywhere, and one colour per policy in the comparison charts.
+These bullets describe the first dashboard redesign as it looked in October. The current shell and color system are recorded above.
 
-## E. Verification
+- Four tabs replaced the single long page: **Run**, **Autoscaling**, **Policy comparison**, and **Monitoring**, under a sticky header that showed the connection state.
+- A sticky run bar held policy, placement, jobs per tick, Run / Pause, and Kill all. Generating and cleaning up work moved into a collapsible Workload panel.
+- Job details opened in a side drawer. Worker cards showed finished attempts (`jobsCompleted` and `jobsFailed` were added to `GET /api/orchestrator/state`), and the duplicate workers table in Monitoring was removed.
+- The autoscaler panel was simplified to an **Autoscaling: On/Off** switch, four signal cards, and one decision line, with the rules and history collapsed. The manual **Evaluate now** button was removed; scaling became automatic.
+- Monitoring showed reserved capacity, queue, throughput, and running containers as a 2 × 2 block.
+- At that stage, green and red marked start and stop, CPU was blue, memory was green, and each policy had one comparison-chart color. The later polish replaced these semantics as described in the current section.
+
+## E. Historical verification for that release
+
+These checks describe the 21-23 October state and are superseded by the current verification section above.
 
 | Check | Recorded result |
 | --- | --- |
@@ -48,7 +90,7 @@ Newest work first. Each section records what was verified at the time; later edi
 
 The per-worker finished-attempt counts added during the redesign were checked against live data and matched `/api/monitoring/overview`; the database-enabled suite was not rerun after that change.
 
-# Work completed on 5 October 2026
+# Historical record: work completed on 5 October 2026
 
 This records the JavaScript/MySQL migration and the documentation update. The scheduling, placement, workload, execution, and monitoring features already existed; the migration converted and verified them rather than claiming they were all newly built that day.
 

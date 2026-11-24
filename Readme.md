@@ -15,8 +15,8 @@ OrchestrOS schedules computing jobs, places them on logical workers, reserves CP
 - **Real execution.** Every job runs in a locked-down container limited to exactly its reservation: no network, read-only filesystem, and capped processes.
 - **Job control.** Cancel a job at any stage, including a running container. Failed jobs can be requeued, and infrastructure faults are retried automatically.
 - **Reactive and ML autoscaling.** Extra logical workers are added when jobs wait on a busy cluster and retired when it is idle. A reactive strategy scales on the load measured now; an ML strategy scales on the load a linear regression predicts ahead. One runs at a time so they can be compared, and every decision is recorded with its reason.
-- **Policy comparison.** Run the same workload under several policies through the real pipeline and compare waiting, turnaround, response, makespan, and throughput in colour-coded charts.
-- **Reactive vs ML comparison.** Run the same workload with each autoscaling strategy and get a plain-language verdict, four "which was better?" answers, side-by-side timelines of waiting jobs and workers, and a check of how accurate the ML forecast was.
+- **Policy comparison.** Run the same workload under several policies through the real pipeline and compare waiting, turnaround, response, makespan, throughput, and preemptions. Only the winning bar carries policy colour; every bar is labelled.
+- **Reactive vs ML comparison.** Run the same workload with each autoscaling strategy and get a plain-language takeaway, an interactive utilization / jobs-waiting / workers timeline, a complete results table, fairness checks, and ML forecast error.
 - **Live monitoring.** Reserved capacity, queue state, throughput, a reservation history chart, and lifecycle timings with p95.
 - **Restart recovery.** After a crash, the backend reconciles containers and executions it was tracking.
 
@@ -36,7 +36,8 @@ OrchestrOS schedules computing jobs, places them on logical workers, reserves CP
 OrchestrOS/
 ├── backend/            Express API, Prisma schema and migrations, tests
 │   └── src/modules/    jobs, workers, workloads, scheduler, placement, resources,
-│                       executions, orchestrator, monitoring, autoscaler, benchmarks
+│                       executions, orchestrator, monitoring, autoscaler, benchmarks,
+│                       scaling-comparisons
 ├── frontend/           React dashboard and its tests
 ├── workload-runner/    Program that runs inside each workload container
 ├── docs/               Project documentation
@@ -71,8 +72,8 @@ Open **http://localhost:5173**. To run everything in containers instead, use `np
 | Tab | What you do there |
 | --- | --- |
 | **Run Workload** | Generate a workload, choose a policy and placement strategy, and press **Run orchestrator**. Watch jobs move through the pipeline, onto workers, and through the job queue. Click a job for its details |
-| **Autoscaling** | Pick the Reactive or ML predictive strategy, switch autoscaling on, and watch workers being added and retired as load changes |
-| **Comparison** | Opens on **Autoscaling: Reactive vs ML**: run the same workload with each autoscaling strategy, then read the strategy cards, the utilization / jobs-waiting / workers chart, the key takeaway, and the performance summary. Re-run, export the full result as JSON, or start a new experiment. **Scheduling policies** compares FCFS, SJF, Priority, and Round Robin |
+| **Autoscaling** | Pick the Reactive or ML-assisted strategy, switch autoscaling on, and watch workers being added and retired as load changes |
+| **Comparison** | Opens on **Autoscaling: Reactive vs ML**: run the same workload with each strategy, then inspect the setup, interactive timeline, measured takeaway, results table, earlier comparisons, and detailed analysis. Re-run, export JSON, or start another experiment. **Scheduling policies** compares FCFS, SJF, Priority, and Round Robin |
 | **Monitoring** | Read cluster capacity, throughput, history, and timings |
 
 ## Testing
@@ -101,8 +102,11 @@ Start at [docs/README.md](docs/README.md). It links to:
 - Workers are logical capacity budgets on one computer, not separate machines.
 - A preempted Round Robin job restarts from the beginning; containers are not paused and resumed.
 - Worker-level failure detection (heartbeats) is planned but not implemented.
-- The ML autoscaling forecast is a linear trend over recent checks. It is kept in memory, so it restarts empty with the backend.
-- The API has no authentication. It is meant for a local development machine, and the backend controls the host's Docker engine.
+- Normal orchestration ticks are browser-driven; closing the dashboard stops new run requests, but already-running containers continue.
+- Autoscaler runtime settings and its ML history are in memory and reset with the backend. Scaling events and completed comparison records are persisted.
+- Policy benchmarks and scaling comparisons run inside the backend process. After a restart, startup marks interrupted experiments as aborted instead of resuming them.
+- The API has no authentication. It is meant for a local development machine.
+- Workload containers are restricted, but the backend's Docker socket gives the backend host-level control over Docker.
 
 ## License
 
